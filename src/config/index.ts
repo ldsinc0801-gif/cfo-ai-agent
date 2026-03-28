@@ -19,6 +19,10 @@ export const config = {
     geminiApiKey: process.env.GEMINI_API_KEY || '',
     geminiModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
   },
+  supabase: {
+    url: process.env.SUPABASE_URL || '',
+    anonKey: process.env.SUPABASE_ANON_KEY || '',
+  },
   output: {
     dir: process.env.OUTPUT_DIR || './output',
     format: (process.env.OUTPUT_FORMAT || 'both') as 'json' | 'markdown' | 'both',

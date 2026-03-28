@@ -29,6 +29,9 @@ import { analysisStore } from '../services/analysis-store.js';
 import { renderHistoryHTML } from './history-page.js';
 import { googleTasksClient } from '../clients/google-tasks.js';
 import { logger } from '../utils/logger.js';
+import { isSupabaseAvailable } from '../clients/supabase.js';
+import * as repo from '../repositories/supabase-repository.js';
+import { learningService } from '../services/learning-service.js';
 
 const anthropicService = new AnthropicAnalysisService();
 
@@ -204,6 +207,14 @@ async function buildTrendData(endYear?: number, endMonth?: number, monthCount: n
 
       const trend = await freeeService.fetchTrendData(companyId, targetYear, targetMonth, monthCount);
       setCache(cacheKey, trend);
+
+      // freeeデータをSupabaseに自動蓄積
+      if (isSupabaseAvailable()) {
+        for (const month of trend.months) {
+          repo.upsertMonthlyActual(month).catch(e => logger.warn('Supabase蓄積失敗:', e));
+        }
+      }
+
       return trend;
     } catch (error) {
       logger.warn('freeeトレンドデータ取得に失敗。モックデータで代替します:', error instanceof Error ? error.message : error);
@@ -579,6 +590,27 @@ app.post('/api/plan/apply', express.json(), (req, res) => {
 // 分析履歴
 app.get('/api/plan/history', (_req, res) => {
   res.json(planAnalysisService.getHistory());
+});
+
+// === 学習ループAPI ===
+
+// 学習実行
+app.post('/api/learn', async (_req, res) => {
+  try {
+    if (!learningService.isAvailable()) {
+      res.status(400).json({ error: 'ANTHROPIC_API_KEYが未設定です' });
+      return;
+    }
+    const result = await learningService.runLearningCycle();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : '学習に失敗しました' });
+  }
+});
+
+app.get('/api/learn/insights', async (_req, res) => {
+  const insights = await learningService.getInsights();
+  res.json(insights);
 });
 
 // 財務分析AIエージェント
@@ -1087,9 +1119,9 @@ app.post('/settings/company', express.urlencoded({ extended: true }), (req, res)
 });
 
 // === チャット ===
-app.get('/chat', (_req, res) => {
-  const history = chatService.getHistory();
-  const memory = chatService.getMemory();
+app.get('/chat', async (_req, res) => {
+  const history = await chatService.getHistory();
+  const memory = await chatService.getMemory();
   res.send(renderChatHTML(history, memory, chatService.isAvailable()));
 });
 
@@ -1197,19 +1229,19 @@ async function loadFreeeContextForChat(): Promise<void> {
   }
 }
 
-app.post('/chat/memory', express.urlencoded({ extended: true }), (req, res) => {
-  const memory = chatService.getMemory();
+app.post('/chat/memory', express.urlencoded({ extended: true }), async (req, res) => {
+  const memory = await chatService.getMemory();
   memory.companyName = req.body.companyName || '';
   memory.industry = req.body.industry || '';
   memory.employeeCount = req.body.employeeCount || '';
   memory.fiscalYearEnd = req.body.fiscalYearEnd || '';
   memory.notes = (req.body.notes || '').split('\n').filter((n: string) => n.trim());
-  chatService.saveMemory(memory);
+  await chatService.saveMemory(memory);
   res.redirect('/chat');
 });
 
-app.post('/chat/clear', (_req, res) => {
-  chatService.clearHistory();
+app.post('/chat/clear', async (_req, res) => {
+  await chatService.clearHistory();
   res.json({ ok: true });
 });
 
@@ -1404,8 +1436,8 @@ app.patch('/api/tasks/:id', express.json(), (req, res) => {
 });
 
 // 会社情報（秘書AIが参照）
-app.get('/api/company', (_req, res) => {
-  const memory = chatService.getMemory();
+app.get('/api/company', async (_req, res) => {
+  const memory = await chatService.getMemory();
   const analyses = analysisStore.list();
   res.json({ company: memory, latestAnalyses: analyses.slice(0, 5) });
 });

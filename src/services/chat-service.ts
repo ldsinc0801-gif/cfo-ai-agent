@@ -1,11 +1,14 @@
 import OpenAI from 'openai';
-import fs from 'fs';
-import path from 'path';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { usageTracker } from './usage-tracker.js';
 import { analysisStore } from './analysis-store.js';
 import { buildOSContext } from './enterprise-os.js';
+import { isSupabaseAvailable } from '../clients/supabase.js';
+import * as repo from '../repositories/supabase-repository.js';
+import { learningService } from './learning-service.js';
+import fs from 'fs';
+import path from 'path';
 
 const CHAT_DIR = path.resolve('data/chat');
 const MEMORY_FILE = path.join(CHAT_DIR, 'company-memory.json');
@@ -17,14 +20,12 @@ export interface ChatMessage {
   timestamp: string;
 }
 
-/** 企業AI OSへの保存提案 */
 export interface OSSaveProposal {
   category: string;
   fileName: string;
   content: string;
 }
 
-/** チャット応答 */
 export interface ChatResponse {
   reply: string;
   proposals: OSSaveProposal[];
@@ -39,7 +40,6 @@ export interface CompanyMemory {
   lastUpdated: string;
 }
 
-/** freeeから取得したサマリデータ（チャットコンテキスト用） */
 export interface FreeeContextData {
   companyName: string;
   currentMonth: { year: number; month: number };
@@ -64,12 +64,12 @@ export interface FreeeContextData {
 /**
  * AI CFOチャットサービス（OpenAI GPT）
  *
- * ユーザーの会社情報を記憶し、過去の分析結果をコンテキストに持ちながら
- * 経営に関する質問に回答する。
+ * データ保存はSupabase優先、未設定時はJSONファイルにフォールバック。
  */
 export class ChatService {
   private client: OpenAI | null = null;
   private freeeContext: FreeeContextData | null = null;
+  private useSupabase: boolean;
 
   constructor() {
     const apiKey = config.ai.openaiApiKey;
@@ -77,73 +77,92 @@ export class ChatService {
       this.client = new OpenAI({ apiKey });
       logger.info('OpenAI APIクライアントを初期化しました');
     }
-    if (!fs.existsSync(CHAT_DIR)) fs.mkdirSync(CHAT_DIR, { recursive: true });
+    this.useSupabase = isSupabaseAvailable();
+    if (this.useSupabase) {
+      logger.info('チャット: Supabaseモードで動作');
+    } else {
+      if (!fs.existsSync(CHAT_DIR)) fs.mkdirSync(CHAT_DIR, { recursive: true });
+      logger.info('チャット: JSONファイルモードで動作');
+    }
   }
 
   isAvailable(): boolean {
     return this.client !== null;
   }
 
-  /** freeeのコンテキストデータを設定 */
   setFreeeContext(data: FreeeContextData | null): void {
     this.freeeContext = data;
   }
 
-  /** 会社情報メモリを取得 */
-  getMemory(): CompanyMemory {
+  // ========== メモリ ==========
+
+  async getMemory(): Promise<CompanyMemory> {
+    if (this.useSupabase) {
+      try { return await repo.getCompanyMemory(); } catch (e) { logger.warn('Supabaseメモリ取得失敗、ファイルにフォールバック'); }
+    }
     if (fs.existsSync(MEMORY_FILE)) {
       return JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf-8'));
     }
-    return {
-      companyName: '',
-      industry: '',
-      employeeCount: '',
-      fiscalYearEnd: '',
-      notes: [],
-      lastUpdated: '',
-    };
+    return { companyName: '', industry: '', employeeCount: '', fiscalYearEnd: '', notes: [], lastUpdated: '' };
   }
 
-  /** 会社情報メモリを保存 */
-  saveMemory(memory: CompanyMemory): void {
+  async saveMemory(memory: CompanyMemory): Promise<void> {
     memory.lastUpdated = new Date().toISOString();
+    if (this.useSupabase) {
+      try { await repo.saveCompanyMemory(memory); return; } catch (e) { logger.warn('Supabaseメモリ保存失敗、ファイルにフォールバック'); }
+    }
+    if (!fs.existsSync(CHAT_DIR)) fs.mkdirSync(CHAT_DIR, { recursive: true });
     fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2), 'utf-8');
   }
 
-  /** 会話履歴を取得 */
-  getHistory(): ChatMessage[] {
+  // ========== 履歴 ==========
+
+  async getHistory(): Promise<ChatMessage[]> {
+    if (this.useSupabase) {
+      try { return await repo.getChatHistory(50); } catch (e) { logger.warn('Supabase履歴取得失敗、ファイルにフォールバック'); }
+    }
     if (fs.existsSync(HISTORY_FILE)) {
       return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8'));
     }
     return [];
   }
 
-  /** 会話履歴を保存 */
-  private saveHistory(history: ChatMessage[]): void {
+  private async saveHistory(history: ChatMessage[]): Promise<void> {
+    if (this.useSupabase) {
+      // Supabaseは個別にinsertするので、最新の2件（user + assistant）を保存
+      const latest = history.slice(-2);
+      try {
+        for (const m of latest) {
+          await repo.saveChatMessage(m.role, m.content);
+        }
+        return;
+      } catch (e) { logger.warn('Supabase履歴保存失敗、ファイルにフォールバック'); }
+    }
+    if (!fs.existsSync(CHAT_DIR)) fs.mkdirSync(CHAT_DIR, { recursive: true });
     const trimmed = history.slice(-50);
     fs.writeFileSync(HISTORY_FILE, JSON.stringify(trimmed, null, 2), 'utf-8');
   }
 
-  /** 会話履歴をクリア */
-  clearHistory(): void {
+  async clearHistory(): Promise<void> {
+    if (this.useSupabase) {
+      try { await repo.clearChatHistory(); return; } catch (e) { logger.warn('Supabase履歴削除失敗'); }
+    }
     if (fs.existsSync(HISTORY_FILE)) fs.unlinkSync(HISTORY_FILE);
   }
 
-  /** チャット送信（OpenAI GPT） */
+  // ========== チャット送信 ==========
+
   async sendMessage(userMessage: string): Promise<ChatResponse> {
     if (!this.client) throw new Error('OPENAI_API_KEYが未設定です');
 
-    const memory = this.getMemory();
-    const history = this.getHistory();
+    const memory = await this.getMemory();
+    const history = await this.getHistory();
 
-    // 直近の分析結果を取得
     const analyses = analysisStore.list();
     const latestAnalysis = analyses.length > 0 ? analysisStore.get(analyses[0].id) : null;
 
-    // システムプロンプト構築
-    const systemPrompt = this.buildSystemPrompt(memory, latestAnalysis);
+    const systemPrompt = await this.buildSystemPrompt(memory, latestAnalysis);
 
-    // API用のメッセージ履歴（直近20件）
     const apiMessages: OpenAI.ChatCompletionMessageParam[] = [
       { role: 'system', content: systemPrompt },
       ...history.slice(-20).map(m => ({
@@ -168,20 +187,18 @@ export class ChatService {
 
     const assistantMessage = response.choices[0]?.message?.content || '';
 
-    // 履歴に追加
     history.push(
       { role: 'user', content: userMessage, timestamp: new Date().toISOString() },
       { role: 'assistant', content: assistantMessage, timestamp: new Date().toISOString() },
     );
-    this.saveHistory(history);
+    await this.saveHistory(history);
 
-    // 会社情報の自動更新を試みる
-    this.tryUpdateMemory(userMessage, assistantMessage, memory);
+    await this.tryUpdateMemory(userMessage, assistantMessage, memory);
 
     return { reply: assistantMessage, proposals: [] };
   }
 
-  private buildSystemPrompt(memory: CompanyMemory, latestAnalysis: any): string {
+  private async buildSystemPrompt(memory: CompanyMemory, latestAnalysis: any): Promise<string> {
     let osContext = '';
     try { osContext = buildOSContext(); } catch { /* ignore */ }
 
@@ -217,11 +234,8 @@ export class ChatService {
       }
     }
 
-    if (osContext) {
-      prompt += `\n${osContext}\n`;
-    }
+    if (osContext) prompt += `\n${osContext}\n`;
 
-    // freeeリアルタイムデータ
     if (this.freeeContext) {
       const ctx = this.freeeContext;
       const fmt = (n: number) => new Intl.NumberFormat('ja-JP').format(n);
@@ -245,13 +259,15 @@ export class ChatService {
         prompt += `- 流動負債: ${fmt(ctx.bs.currentLiabilities)}円\n`;
         prompt += `- 総資産: ${fmt(ctx.bs.totalAssets)}円\n`;
         prompt += `- 純資産: ${fmt(ctx.bs.netAssets)}円\n`;
-        if (ctx.bs.totalAssets > 0) {
-          prompt += `- 自己資本比率: ${(ctx.bs.netAssets / ctx.bs.totalAssets * 100).toFixed(1)}%\n`;
-        }
-        if (ctx.bs.currentLiabilities > 0) {
-          prompt += `- 流動比率: ${(ctx.bs.currentAssets / ctx.bs.currentLiabilities * 100).toFixed(1)}%\n`;
-        }
+        if (ctx.bs.totalAssets > 0) prompt += `- 自己資本比率: ${(ctx.bs.netAssets / ctx.bs.totalAssets * 100).toFixed(1)}%\n`;
+        if (ctx.bs.currentLiabilities > 0) prompt += `- 流動比率: ${(ctx.bs.currentAssets / ctx.bs.currentLiabilities * 100).toFixed(1)}%\n`;
       }
+    }
+
+    // 学習済み知見
+    const insights = await learningService.getInsightsText();
+    if (insights) {
+      prompt += `\n【過去の分析から学習した知見】\n${insights}\n`;
     }
 
     if (latestAnalysis) {
@@ -264,9 +280,7 @@ export class ChatService {
       prompt += `- 自己資本比率: ${r.metrics.find((m: any) => m.id === 'equity_ratio')?.value?.toFixed(1) ?? '不明'}%\n`;
       prompt += `- 流動比率: ${r.metrics.find((m: any) => m.id === 'current_ratio')?.value?.toFixed(1) ?? '不明'}%\n`;
       prompt += `- 債務償還年数: ${r.metrics.find((m: any) => m.id === 'debt_repayment_years')?.value?.toFixed(1) ?? '不明'}年\n`;
-      if (a.simpleCashFlow !== null) {
-        prompt += `- 簡易CF: ${new Intl.NumberFormat('ja-JP').format(a.simpleCashFlow)}円\n`;
-      }
+      if (a.simpleCashFlow !== null) prompt += `- 簡易CF: ${new Intl.NumberFormat('ja-JP').format(a.simpleCashFlow)}円\n`;
       prompt += `- 強み: ${r.positives.slice(0, 3).map((p: string) => p.split('：')[0]).join('、')}\n`;
       prompt += `- 課題: ${r.negatives.slice(0, 3).map((n: string) => n.split('：')[0]).join('、') || 'なし'}\n`;
     }
@@ -274,36 +288,23 @@ export class ChatService {
     return prompt;
   }
 
-  /** 会話から会社情報を自動抽出して記憶 */
-  private tryUpdateMemory(userMsg: string, _assistantMsg: string, memory: CompanyMemory): void {
+  private async tryUpdateMemory(userMsg: string, _assistantMsg: string, memory: CompanyMemory): Promise<void> {
     let updated = false;
 
     const companyMatch = userMsg.match(/(?:うちの会社は|弊社は|当社は|会社名は)(.+?)(?:です|だ|。|$)/);
-    if (companyMatch && !memory.companyName) {
-      memory.companyName = companyMatch[1].trim();
-      updated = true;
-    }
+    if (companyMatch && !memory.companyName) { memory.companyName = companyMatch[1].trim(); updated = true; }
 
     const industryMatch = userMsg.match(/(?:業種は|業界は|事業は)(.+?)(?:です|だ|。|$)/);
-    if (industryMatch && !memory.industry) {
-      memory.industry = industryMatch[1].trim();
-      updated = true;
-    }
+    if (industryMatch && !memory.industry) { memory.industry = industryMatch[1].trim(); updated = true; }
 
     const empMatch = userMsg.match(/(?:従業員|社員|スタッフ).*?(\d+).*?(?:人|名)/);
-    if (empMatch && !memory.employeeCount) {
-      memory.employeeCount = empMatch[1] + '人';
-      updated = true;
-    }
+    if (empMatch && !memory.employeeCount) { memory.employeeCount = empMatch[1] + '人'; updated = true; }
 
     const fyMatch = userMsg.match(/(?:決算|決算期|決算月).*?(\d{1,2})月/);
-    if (fyMatch && !memory.fiscalYearEnd) {
-      memory.fiscalYearEnd = fyMatch[1] + '月';
-      updated = true;
-    }
+    if (fyMatch && !memory.fiscalYearEnd) { memory.fiscalYearEnd = fyMatch[1] + '月'; updated = true; }
 
     if (updated) {
-      this.saveMemory(memory);
+      await this.saveMemory(memory);
       logger.info('会社情報メモリを更新しました');
     }
   }
