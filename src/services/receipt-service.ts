@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { usageTracker } from './usage-tracker.js';
@@ -26,48 +26,43 @@ export interface ReceiptAnalysis {
 }
 
 /**
- * 領収書・レシートをAIで解析し、仕訳データを生成するサービス
+ * 領収書・レシートをGemini AIで解析し、仕訳データを生成するサービス
+ *
+ * 画像・PDF・動画に対応。Geminiのマルチモーダル機能を活用。
  */
 export class ReceiptService {
-  private client: Anthropic | null = null;
+  private genAI: GoogleGenerativeAI | null = null;
 
   constructor() {
-    const apiKey = config.ai.anthropicApiKey;
+    const apiKey = config.ai.geminiApiKey;
     if (apiKey) {
-      this.client = new Anthropic({ apiKey });
+      this.genAI = new GoogleGenerativeAI(apiKey);
+      logger.info('Gemini APIクライアントを初期化しました');
     }
   }
 
   isAvailable(): boolean {
-    return this.client !== null;
+    return this.genAI !== null;
   }
 
   /**
    * 画像（領収書・レシート）から仕訳データを生成
    */
   async analyzeReceiptImage(imageBuffer: Buffer, mimeType: string, fileName: string): Promise<ReceiptAnalysis> {
-    if (!this.client) throw new Error('APIキーが未設定です');
+    if (!this.genAI) throw new Error('GEMINI_API_KEYが未設定です');
 
+    logger.info(`領収書画像を解析中（Gemini）: ${fileName}`);
+
+    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
     const base64 = imageBuffer.toString('base64');
-    logger.info(`領収書画像を解析中: ${fileName}`);
 
-    const response = await this.client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2048,
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'image',
-            source: { type: 'base64', media_type: mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp', data: base64 },
-          },
-          { type: 'text', text: RECEIPT_PROMPT },
-        ],
-      }],
-    });
+    const result = await model.generateContent([
+      { inlineData: { mimeType, data: base64 } },
+      { text: RECEIPT_PROMPT },
+    ]);
 
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
-    usageTracker.record(response.model, response.usage.input_tokens, response.usage.output_tokens, '領収書解析');
+    const text = result.response.text();
+    this.recordUsage(result, '領収書解析(Gemini)');
     return this.parseResponse(text);
   }
 
@@ -75,62 +70,74 @@ export class ReceiptService {
    * PDFの領収書・請求書から仕訳データを生成
    */
   async analyzeReceiptPDF(pdfBuffer: Buffer, fileName: string): Promise<ReceiptAnalysis> {
-    if (!this.client) throw new Error('APIキーが未設定です');
+    if (!this.genAI) throw new Error('GEMINI_API_KEYが未設定です');
 
+    logger.info(`領収書PDFを解析中（Gemini）: ${fileName}`);
+
+    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
     const base64 = pdfBuffer.toString('base64');
-    logger.info(`領収書PDFを解析中: ${fileName}`);
 
-    const response = await this.client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2048,
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'document',
-            source: { type: 'base64', media_type: 'application/pdf', data: base64 },
-          },
-          { type: 'text', text: RECEIPT_PROMPT },
-        ],
-      }],
-    });
+    const result = await model.generateContent([
+      { inlineData: { mimeType: 'application/pdf', data: base64 } },
+      { text: RECEIPT_PROMPT },
+    ]);
 
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
-    usageTracker.record(response.model, response.usage.input_tokens, response.usage.output_tokens, '領収書PDF解析');
+    const text = result.response.text();
+    this.recordUsage(result, '領収書PDF解析(Gemini)');
     return this.parseResponse(text);
   }
 
   /**
-   * 動画のフレームから領収書を解析
-   * 動画は直接解析できないため、静止画フレームとして処理する想定
-   * フロントで動画からキャプチャした画像を送る
+   * 動画から領収書を直接解析
+   *
+   * Geminiは動画を直接入力できるため、フレーム抽出不要。
+   * 動画内の領収書・レシートを自動認識して仕訳データを生成する。
+   */
+  async analyzeVideo(videoBuffer: Buffer, mimeType: string, fileName: string): Promise<ReceiptAnalysis> {
+    if (!this.genAI) throw new Error('GEMINI_API_KEYが未設定です');
+
+    logger.info(`動画を解析中（Gemini）: ${fileName}`);
+
+    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
+    const base64 = videoBuffer.toString('base64');
+
+    const result = await model.generateContent([
+      { inlineData: { mimeType, data: base64 } },
+      { text: `この動画に映っている領収書・レシート・請求書を全て読み取り、仕訳データを生成してください。
+同じ書類が複数回映っている場合は1件にまとめてください。
+
+${RECEIPT_PROMPT}` },
+    ]);
+
+    const text = result.response.text();
+    this.recordUsage(result, '動画解析(Gemini)');
+    return this.parseResponse(text);
+  }
+
+  /**
+   * 複数画像を一括解析（動画フレーム互換）
    */
   async analyzeVideoFrames(frames: { buffer: Buffer; mimeType: string }[]): Promise<ReceiptAnalysis> {
-    if (!this.client) throw new Error('APIキーが未設定です');
+    if (!this.genAI) throw new Error('GEMINI_API_KEYが未設定です');
 
-    logger.info(`動画フレーム${frames.length}枚を解析中...`);
+    logger.info(`画像${frames.length}枚を一括解析中（Gemini）...`);
 
-    const imageContents = frames.map(f => ({
-      type: 'image' as const,
-      source: { type: 'base64' as const, media_type: f.mimeType as 'image/jpeg', data: f.buffer.toString('base64') },
-    }));
+    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
 
-    const response = await this.client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
-      messages: [{
-        role: 'user',
-        content: [
-          ...imageContents,
-          { type: 'text', text: `これらは領収書・レシートを撮影した動画から抽出したフレームです。
-各フレームに写っている領収書・レシートを全て読み取り、仕訳データを生成してください。
-同じ領収書が複数フレームに写っている場合は1件にまとめてください。\n\n${RECEIPT_PROMPT}` },
-        ],
-      }],
-    });
+    const parts = [
+      ...frames.map(f => ({
+        inlineData: { mimeType: f.mimeType, data: f.buffer.toString('base64') },
+      })),
+      { text: `これらは領収書・レシートを撮影した画像です。
+各画像に写っている領収書・レシートを全て読み取り、仕訳データを生成してください。
+同じ領収書が複数画像に写っている場合は1件にまとめてください。
 
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
-    usageTracker.record(response.model, response.usage.input_tokens, response.usage.output_tokens, '動画フレーム解析');
+${RECEIPT_PROMPT}` },
+    ];
+
+    const result = await model.generateContent(parts);
+    const text = result.response.text();
+    this.recordUsage(result, '複数画像解析(Gemini)');
     return this.parseResponse(text);
   }
 
@@ -152,16 +159,32 @@ export class ReceiptService {
       details: [{
         account_item_name: entry.debitAccount,
         amount: entry.amount,
-        tax_code: entry.taxRate === 10 ? 21 : entry.taxRate === 8 ? 23 : 0, // TODO: 正確なtax_code対応
+        tax_code: entry.taxRate === 10 ? 21 : entry.taxRate === 8 ? 23 : 0,
         description: `${entry.description} (${entry.partnerName})`,
       }],
-      // TODO: partner_id の解決（取引先名→IDマッピング）
     };
+  }
+
+  private recordUsage(result: any, purpose: string): void {
+    try {
+      const usage = result.response.usageMetadata;
+      if (usage) {
+        usageTracker.record(
+          config.ai.geminiModel,
+          usage.promptTokenCount || 0,
+          usage.candidatesTokenCount || 0,
+          purpose,
+        );
+      }
+    } catch { /* ignore */ }
   }
 
   private parseResponse(text: string): ReceiptAnalysis {
     try {
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      // ```json ... ``` ブロックまたは生JSONを抽出
+      const jsonBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+      const jsonStr = jsonBlockMatch ? jsonBlockMatch[1] : text;
+      const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error('JSON not found');
       const parsed = JSON.parse(jsonMatch[0]);
       return {
@@ -186,7 +209,6 @@ export class ReceiptService {
   }
 }
 
-// プロンプトはルール一覧から動的に生成
 function getReceiptPrompt(): string {
   const rules = accountRulesToPrompt();
   return `この領収書・レシートの内容を読み取り、以下のJSON形式で仕訳データを生成してください。

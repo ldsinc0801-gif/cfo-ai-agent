@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import fs from 'fs';
 import path from 'path';
 import { config } from '../config/index.js';
@@ -62,20 +62,20 @@ export interface FreeeContextData {
 }
 
 /**
- * AI CFOチャットサービス
+ * AI CFOチャットサービス（OpenAI GPT）
  *
  * ユーザーの会社情報を記憶し、過去の分析結果をコンテキストに持ちながら
  * 経営に関する質問に回答する。
- * 会話で得た企業情報を企業AI OSに自動保存する。
  */
 export class ChatService {
-  private client: Anthropic | null = null;
+  private client: OpenAI | null = null;
   private freeeContext: FreeeContextData | null = null;
 
   constructor() {
-    const apiKey = config.ai.anthropicApiKey;
+    const apiKey = config.ai.openaiApiKey;
     if (apiKey) {
-      this.client = new Anthropic({ apiKey });
+      this.client = new OpenAI({ apiKey });
+      logger.info('OpenAI APIクライアントを初期化しました');
     }
     if (!fs.existsSync(CHAT_DIR)) fs.mkdirSync(CHAT_DIR, { recursive: true });
   }
@@ -120,7 +120,6 @@ export class ChatService {
 
   /** 会話履歴を保存 */
   private saveHistory(history: ChatMessage[]): void {
-    // 直近50件のみ保持
     const trimmed = history.slice(-50);
     fs.writeFileSync(HISTORY_FILE, JSON.stringify(trimmed, null, 2), 'utf-8');
   }
@@ -130,9 +129,9 @@ export class ChatService {
     if (fs.existsSync(HISTORY_FILE)) fs.unlinkSync(HISTORY_FILE);
   }
 
-  /** チャット送信（tool use対応・保存は提案のみ） */
+  /** チャット送信（OpenAI GPT） */
   async sendMessage(userMessage: string): Promise<ChatResponse> {
-    if (!this.client) throw new Error('APIキーが未設定です');
+    if (!this.client) throw new Error('OPENAI_API_KEYが未設定です');
 
     const memory = this.getMemory();
     const history = this.getHistory();
@@ -145,24 +144,29 @@ export class ChatService {
     const systemPrompt = this.buildSystemPrompt(memory, latestAnalysis);
 
     // API用のメッセージ履歴（直近20件）
-    const apiMessages: Anthropic.MessageParam[] = history.slice(-20).map(m => ({
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-    }));
-    apiMessages.push({ role: 'user', content: userMessage });
+    const apiMessages: OpenAI.ChatCompletionMessageParam[] = [
+      { role: 'system', content: systemPrompt },
+      ...history.slice(-20).map(m => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      })),
+      { role: 'user' as const, content: userMessage },
+    ];
 
-    logger.info('チャットメッセージを送信中...');
+    logger.info('チャットメッセージを送信中（GPT）...');
 
-    const response = await this.client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+    const response = await this.client.chat.completions.create({
+      model: config.ai.chatModel,
       max_tokens: 2048,
-      system: systemPrompt,
       messages: apiMessages,
     });
 
-    usageTracker.record(response.model, response.usage.input_tokens, response.usage.output_tokens, 'チャット');
+    const usage = response.usage;
+    if (usage) {
+      usageTracker.record(response.model, usage.prompt_tokens, usage.completion_tokens, 'チャット(GPT)');
+    }
 
-    const assistantMessage = response.content[0].type === 'text' ? response.content[0].text : '';
+    const assistantMessage = response.choices[0]?.message?.content || '';
 
     // 履歴に追加
     history.push(
@@ -178,7 +182,6 @@ export class ChatService {
   }
 
   private buildSystemPrompt(memory: CompanyMemory, latestAnalysis: any): string {
-    // 企業AI OSからコンテキストを読み込み
     let osContext = '';
     try { osContext = buildOSContext(); } catch { /* ignore */ }
 
@@ -275,28 +278,24 @@ export class ChatService {
   private tryUpdateMemory(userMsg: string, _assistantMsg: string, memory: CompanyMemory): void {
     let updated = false;
 
-    // 会社名の検出
     const companyMatch = userMsg.match(/(?:うちの会社は|弊社は|当社は|会社名は)(.+?)(?:です|だ|。|$)/);
     if (companyMatch && !memory.companyName) {
       memory.companyName = companyMatch[1].trim();
       updated = true;
     }
 
-    // 業種の検出
     const industryMatch = userMsg.match(/(?:業種は|業界は|事業は)(.+?)(?:です|だ|。|$)/);
     if (industryMatch && !memory.industry) {
       memory.industry = industryMatch[1].trim();
       updated = true;
     }
 
-    // 従業員数の検出
     const empMatch = userMsg.match(/(?:従業員|社員|スタッフ).*?(\d+).*?(?:人|名)/);
     if (empMatch && !memory.employeeCount) {
       memory.employeeCount = empMatch[1] + '人';
       updated = true;
     }
 
-    // 決算期の検出
     const fyMatch = userMsg.match(/(?:決算|決算期|決算月).*?(\d{1,2})月/);
     if (fyMatch && !memory.fiscalYearEnd) {
       memory.fiscalYearEnd = fyMatch[1] + '月';

@@ -14,6 +14,10 @@ export const config = {
   ai: {
     provider: (process.env.AI_PROVIDER || 'template') as 'template' | 'anthropic',
     anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
+    openaiApiKey: process.env.OPENAI_API_KEY || '',
+    chatModel: process.env.CHAT_MODEL || 'gpt-4o',
+    geminiApiKey: process.env.GEMINI_API_KEY || '',
+    geminiModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
   },
   output: {
     dir: process.env.OUTPUT_DIR || './output',

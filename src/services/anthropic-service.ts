@@ -1,30 +1,31 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { usageTracker } from './usage-tracker.js';
 import type { RatingInput } from '../types/bank-rating.js';
 
 /**
- * Anthropic APIを使った財務分析サービス
+ * Gemini APIを使った財務分析サービス
  *
  * PDF/CSVから抽出したテキストや、freeeの数値データを
- * Claude APIに渡して分析・解釈を行う。
+ * Gemini APIに渡して分析・解釈を行う。
+ * 画像・PDF・動画のマルチモーダル入力に対応。
  */
 export class AnthropicAnalysisService {
-  private client: Anthropic | null = null;
+  private genAI: GoogleGenerativeAI | null = null;
 
   constructor() {
-    const apiKey = config.ai.anthropicApiKey;
+    const apiKey = config.ai.geminiApiKey;
     if (apiKey) {
-      this.client = new Anthropic({ apiKey });
-      logger.info('Anthropic APIクライアントを初期化しました');
+      this.genAI = new GoogleGenerativeAI(apiKey);
+      logger.info('Gemini API分析クライアントを初期化しました');
     } else {
-      logger.warn('ANTHROPIC_API_KEYが未設定です。AI分析機能は利用できません。');
+      logger.warn('GEMINI_API_KEYが未設定です。AI分析機能は利用できません。');
     }
   }
 
   isAvailable(): boolean {
-    return this.client !== null;
+    return this.genAI !== null;
   }
 
   /**
@@ -35,8 +36,8 @@ export class AnthropicAnalysisService {
     extractionNotes: string[];
     rawResponse: string;
   }> {
-    if (!this.client) {
-      throw new Error('Anthropic APIキーが設定されていません。.envファイルを確認してください。');
+    if (!this.genAI) {
+      throw new Error('Gemini APIキーが設定されていません。.envファイルを確認してください。');
     }
 
     const prompt = `あなたは財務データ抽出の専門家です。
@@ -79,20 +80,18 @@ ${documentText}
 
 JSONのみを返してください。説明文は不要です。`;
 
-    logger.info(`Anthropic APIで財務データを抽出中... (${fileName})`);
+    logger.info(`Gemini APIで財務データを抽出中... (${fileName})`);
 
-    const response = await this.client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
-      messages: [{ role: 'user', content: prompt }],
-    });
-
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
-    usageTracker.record(response.model, response.usage.input_tokens, response.usage.output_tokens, '財務データ抽出');
-    logger.info('Anthropic APIからレスポンスを受信しました');
+    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
+    const result = await model.generateContent(prompt);
+    const text = result.response.text();
+    this.recordUsage(result, '財務データ抽出(Gemini)');
+    logger.info('Gemini APIからレスポンスを受信しました');
 
     // JSONを抽出
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    const jsonBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const jsonStr = jsonBlockMatch ? jsonBlockMatch[1] : text;
+    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       throw new Error('AIからの応答から財務データを解析できませんでした');
     }
@@ -134,8 +133,8 @@ JSONのみを返してください。説明文は不要です。`;
     ratingJson: string,
     additionalJson: string,
   ): Promise<string> {
-    if (!this.client) {
-      throw new Error('Anthropic APIキーが設定されていません');
+    if (!this.genAI) {
+      throw new Error('Gemini APIキーが設定されていません');
     }
 
     const prompt = `あなたは中小企業専門の財務コンサルタントです。
@@ -190,49 +189,32 @@ ${additionalJson}
   }
 }`;
 
-    logger.info('Anthropic APIで分析コメントを生成中...');
+    logger.info('Gemini APIで分析コメントを生成中...');
 
-    const response = await this.client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
-      messages: [{ role: 'user', content: prompt }],
-    });
-
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
-    usageTracker.record(response.model, response.usage.input_tokens, response.usage.output_tokens, 'AI分析コメント生成');
+    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
+    const result = await model.generateContent(prompt);
+    const text = result.response.text();
+    this.recordUsage(result, 'AI分析コメント生成(Gemini)');
     logger.info('AI分析コメント生成完了');
     return text;
   }
 
   /**
-   * PDFファイルからテキストを抽出する（Claude Vision API使用）
+   * PDFファイルからテキストを抽出する（Gemini Vision使用）
    */
   async extractTextFromPDF(pdfBuffer: Buffer, fileName: string): Promise<string> {
-    if (!this.client) {
-      throw new Error('Anthropic APIキーが設定されていません');
+    if (!this.genAI) {
+      throw new Error('Gemini APIキーが設定されていません');
     }
 
     const base64 = pdfBuffer.toString('base64');
 
-    logger.info(`PDFからテキスト抽出中... (${fileName})`);
+    logger.info(`PDFからテキスト抽出中（Gemini）... (${fileName})`);
 
-    const response = await this.client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 8192,
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'document',
-            source: {
-              type: 'base64',
-              media_type: 'application/pdf',
-              data: base64,
-            },
-          },
-          {
-            type: 'text',
-            text: `この決算書PDFから、全ての財務数値を正確にテキストとして抽出してください。
+    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
+    const result = await model.generateContent([
+      { inlineData: { mimeType: 'application/pdf', data: base64 } },
+      { text: `この決算書PDFから、全ての財務数値を正確にテキストとして抽出してください。
 特に以下の項目を漏れなく抽出してください：
 - 貸借対照表（BS）の全科目と金額
 - 損益計算書（PL）の全科目と金額
@@ -243,15 +225,26 @@ ${additionalJson}
 - 減価償却費
 - 前期比較データがあれば前期の数値も
 
-表形式で科目名と金額を整理して出力してください。`,
-          },
-        ],
-      }],
-    });
+表形式で科目名と金額を整理して出力してください。` },
+    ]);
 
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
-    usageTracker.record(response.model, response.usage.input_tokens, response.usage.output_tokens, 'PDF読み取り');
+    const text = result.response.text();
+    this.recordUsage(result, 'PDF読み取り(Gemini)');
     logger.info(`PDFテキスト抽出完了 (${text.length}文字)`);
     return text;
+  }
+
+  private recordUsage(result: any, purpose: string): void {
+    try {
+      const usage = result.response.usageMetadata;
+      if (usage) {
+        usageTracker.record(
+          config.ai.geminiModel,
+          usage.promptTokenCount || 0,
+          usage.candidatesTokenCount || 0,
+          purpose,
+        );
+      }
+    } catch { /* ignore */ }
   }
 }

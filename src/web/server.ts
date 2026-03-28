@@ -69,11 +69,11 @@ const upload = multer({
     },
   }),
   fileFilter: (_req, file, cb) => {
-    const allowed = ['.pdf', '.csv', '.xlsx', '.xls'];
+    const allowed = ['.pdf', '.csv', '.xlsx', '.xls', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.mov', '.avi', '.webm'];
     const ext = path.extname(file.originalname).toLowerCase();
     cb(null, allowed.includes(ext));
   },
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 50 * 1024 * 1024 },  // 動画対応のため50MB
 });
 
 /** freeeトークンが保存されているか */
@@ -522,6 +522,65 @@ app.post('/plan/upload', upload.single('file'), (req, res) => {
   res.redirect('/plan');
 });
 
+// === 計画分析API（Claude） ===
+import { planAnalysisService } from '../services/plan-analysis-service.js';
+
+// 計画データ取得
+app.get('/api/plan', (_req, res) => {
+  res.json(planAnalysisService.getPlan());
+});
+
+// 月次目標を設定/更新
+app.post('/api/plan/targets', express.json(), (req, res) => {
+  const targets: Array<{ year: number; month: number; revenue: number; grossProfit: number; ordinaryIncome: number }> = req.body.targets || [];
+  for (const t of targets) {
+    planAnalysisService.setTarget(t);
+  }
+  res.json({ ok: true, count: targets.length });
+});
+
+// 計画 vs 実績の差分分析を実行（Claude）
+app.post('/api/plan/analyze', express.json(), async (req, res) => {
+  try {
+    if (!planAnalysisService.isAvailable()) {
+      res.status(400).json({ error: 'ANTHROPIC_API_KEYが未設定です' });
+      return;
+    }
+
+    const trend = await buildTrendData();
+    const plan = planAnalysisService.getPlan();
+
+    if (plan.targets.length === 0) {
+      res.status(400).json({ error: '計画データが未設定です。先に月次目標を入力してください。' });
+      return;
+    }
+
+    const futureMonths = req.body.futureMonths || 3;
+    const result = await planAnalysisService.analyzePlanVariance(
+      trend.months,
+      plan.targets,
+      futureMonths,
+    );
+
+    res.json(result);
+  } catch (error) {
+    logger.error('計画分析エラー', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : '分析に失敗しました' });
+  }
+});
+
+// 修正計画を反映
+app.post('/api/plan/apply', express.json(), (req, res) => {
+  const targets = req.body.targets || [];
+  planAnalysisService.applyRevisedTargets(targets);
+  res.json({ ok: true, count: targets.length });
+});
+
+// 分析履歴
+app.get('/api/plan/history', (_req, res) => {
+  res.json(planAnalysisService.getHistory());
+});
+
 // 財務分析AIエージェント
 app.get('/agent/finance', async (_req, res) => {
   try {
@@ -831,18 +890,19 @@ app.post('/agent/accounting/analyze', upload.single('file'), async (req, res) =>
 app.post('/agent/accounting/analyze-video', upload.single('video'), async (req, res) => {
   try {
     if (!req.file) { res.status(400).send('動画が選択されていません'); return; }
-    if (!receiptService.isAvailable()) { res.status(400).send('ANTHROPIC_API_KEYが未設定です'); return; }
+    if (!receiptService.isAvailable()) { res.status(400).send('GEMINI_API_KEYが未設定です'); return; }
 
-    // 動画から静止画フレームを抽出（ffmpegが必要。なければ1フレーム目を使う）
-    // TODO: ffmpegでのフレーム抽出を実装
-    // 現在は動画の先頭をそのまま画像として扱う簡易実装
     const buffer = fs.readFileSync(req.file.path);
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    const mimeMap: Record<string, string> = { '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.avi': 'video/x-msvideo', '.webm': 'video/webm' };
+    const mimeType = mimeMap[ext] || 'video/mp4';
 
-    // 動画をそのままAI に送れないため、エラーメッセージで案内
-    // 将来的にはffmpegでフレーム抽出する
+    // Geminiで動画を直接解析
+    const analysis = await receiptService.analyzeVideo(buffer, mimeType, req.file.originalname);
+
     res.send(renderAccountingPageHTML({
       aiAvailable: true,
-      error: '動画解析は現在、静止画キャプチャ方式で対応しています。動画の代わりに、レシートを撮影した写真（JPEG/PNG）を複数枚アップロードしてください。ffmpeg連携による動画フレーム自動抽出は開発中です。',
+      analysis,
     }));
   } catch (error) {
     logger.error('動画解析エラー', error);
