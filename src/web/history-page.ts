@@ -6,11 +6,11 @@ export function renderHistoryHTML(analyses: AnalysisSummary[]): string {
   const fmtDate = (iso: string) => new Date(iso).toLocaleString('ja-JP');
 
   const sourceLabel = (s: string) => {
-    switch (s) { case 'upload': return '📄 アップロード'; case 'freee': return '🔗 freee'; default: return '📋 デモ'; }
+    switch (s) { case 'upload': return 'アップロード'; case 'freee': return 'freee'; default: return 'デモ'; }
   };
 
   const rankColor = (r: string) => {
-    switch (r) { case 'A': return '#3b82f6'; case 'B': return '#22c55e'; case 'C': return '#eab308'; case 'D': return '#f59e0b'; default: return '#ef4444'; }
+    switch (r) { case 'A': return '#2298ae'; case 'B': return '#2298ae'; case 'C': return '#3da8b8'; case 'D': return '#5ab4c4'; default: return '#ef4444'; }
   };
 
   const bodyHTML = `
@@ -54,7 +54,7 @@ export function renderHistoryHTML(analyses: AnalysisSummary[]): string {
 
 ${analyses.length === 0 ? `
 <div class="empty-state">
-  <div class="empty-icon">📊</div>
+  <div class="empty-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text2)" stroke-width="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
   <h3>分析履歴がありません</h3>
   <p>決算書をアップロードするか、freeeから分析を実行すると<br>結果がここに保存されます。</p>
   <a href="/agent/finance" class="btn-primary" style="margin-top:16px">分析を開始</a>

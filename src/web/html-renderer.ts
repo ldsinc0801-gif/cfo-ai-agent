@@ -297,7 +297,7 @@ new Chart(document.getElementById('expenseChart'), {
     datasets: [{
       data: ${JSON.stringify(expValues)},
       backgroundColor: [
-        '#0071e3','#34c759','#ff9f0a','#ff3b30','#af52de','#5ac8fa','#d2d2d7'
+        '#0071e3','#2298ae','#ff9f0a','#ff3b30','#af52de','#5ac8fa','#d2d2d7'
       ],
       borderWidth: 0,
       hoverOffset: 8,
@@ -396,7 +396,7 @@ function gaugeBar(label: string, value: number | null, max: number, suffix: stri
     </div>`;
   }
   const pct = Math.min(100, Math.max(0, (value / max) * 100));
-  const color = pct >= 60 ? '#34c759' : pct >= 35 ? '#ff9f0a' : '#ff3b30';
+  const color = pct >= 60 ? '#2298ae' : pct >= 35 ? '#ff9f0a' : '#ff3b30';
   return `
     <div class="gauge">
       <div class="gauge-header"><span>${label}</span><strong>${value.toFixed(1)}${suffix}</strong></div>
@@ -455,7 +455,7 @@ const CSS = `
   --gray3:#f5f5f7;
   --white:#fff;
   --blue:#0071e3;
-  --green:#34c759;
+  --green:#2298ae;
   --orange:#ff9f0a;
   --red:#ff3b30;
   --radius:16px;

@@ -40,7 +40,7 @@ ${renderSidebar('chat')}
     <aside class="chat-sidebar">
       ${osSummary.length > 0 ? `
       <div class="mem-card">
-        <h3>🧠 企業AI OS</h3>
+        <h3>企業AI OS</h3>
         <div style="font-size:12px;color:#6b7280;margin-bottom:10px">企業の第一次情報をAIが参照しています</div>
         <div class="os-categories">
           ${osSummary.map(c => `
@@ -54,7 +54,7 @@ ${renderSidebar('chat')}
         </div>
       </div>` : ''}
       <div class="mem-card">
-        <h3>${osSummary.length > 0 ? '📝 追加メモ' : '🧠 記憶している情報'}</h3>
+        <h3>${osSummary.length > 0 ? '追加メモ' : '記憶している情報'}</h3>
         <form action="/chat/memory" method="post" class="mem-form">
           <label>会社名<input name="companyName" value="${esc(memory.companyName)}" placeholder="株式会社〇〇"/></label>
           <label>業種<input name="industry" value="${esc(memory.industry)}" placeholder="IT、飲食、建設 等"/></label>
@@ -66,7 +66,7 @@ ${renderSidebar('chat')}
         ${memory.lastUpdated ? `<div class="mem-updated">最終更新: ${new Date(memory.lastUpdated).toLocaleString('ja-JP')}</div>` : ''}
       </div>
       <div class="mem-card">
-        <h3>💡 質問例</h3>
+        <h3>質問例</h3>
         <div class="suggestion-list">
           <button class="suggestion" onclick="askSuggestion(this.textContent)">うちの財務状態はどう？</button>
           <button class="suggestion" onclick="askSuggestion(this.textContent)">銀行融資を受けるには何を改善すべき？</button>
@@ -82,17 +82,17 @@ ${renderSidebar('chat')}
       <div class="chat-messages" id="chatMessages">
 ${history.length === 0 ? `
         <div class="chat-welcome">
-          <div class="chat-welcome-icon">🤖</div>
+          <div class="chat-welcome-icon"></div>
           <h2>AI CFOへようこそ</h2>
           <p>財務・経営に関する質問にお答えします。<br>あなたの会社の情報を覚えているので、具体的なアドバイスが可能です。</p>
         </div>
 ` : history.map(m => m.role === 'user' ? `
         <div class="msg msg-user">
-          <div class="msg-avatar">👤</div>
+          <div class="msg-avatar"></div>
           <div class="msg-bubble msg-bubble-user">${escWithBreaks(m.content)}</div>
         </div>` : `
         <div class="msg msg-ai">
-          <div class="msg-avatar">🤖</div>
+          <div class="msg-avatar"></div>
           <div class="msg-bubble msg-bubble-ai">
             ${formatAIMessage(m.content)}
             <div class="msg-actions">
@@ -111,7 +111,7 @@ ${history.length === 0 ? `
 
       <!-- Input -->
       <div class="chat-input-wrap">
-        ${!aiAvailable ? '<div class="chat-warn">⚠️ ANTHROPIC_API_KEYが未設定のため利用できません</div>' : ''}
+        ${!aiAvailable ? '<div class="chat-warn">ANTHROPIC_API_KEYが未設定のため利用できません</div>' : ''}
         <form id="chatForm" class="chat-input-form" onsubmit="sendChat(event)" onkeydown="if(event.key==='Enter'&&!event.shiftKey)event.preventDefault()">
           <textarea id="chatInput" class="chat-input" placeholder="経営に関する質問を入力..." rows="1" ${!aiAvailable ? 'disabled' : ''}></textarea>
           <button type="submit" class="chat-send" ${!aiAvailable ? 'disabled' : ''}>
@@ -221,7 +221,7 @@ function sendChat(e){
   // ローディング表示
   var loadingId = 'loading-' + Date.now();
   messagesEl.insertAdjacentHTML('beforeend',
-    '<div class="msg msg-ai" id="'+loadingId+'"><div class="msg-avatar">🤖</div><div class="msg-bubble msg-bubble-ai"><div class="typing"><span></span><span></span><span></span></div></div></div>');
+    '<div class="msg msg-ai" id="'+loadingId+'"><div class="msg-avatar"></div><div class="msg-bubble msg-bubble-ai"><div class="typing"><span></span><span></span><span></span></div></div></div>');
   messagesEl.scrollTop = messagesEl.scrollHeight;
 
   fetch('/chat/send', {
@@ -234,7 +234,7 @@ function sendChat(e){
     var el = document.getElementById(loadingId);
     if(el) el.remove();
     if(data.error){
-      appendMessage('ai', '⚠️ エラー: ' + data.error);
+      appendMessage('ai', 'エラー: ' + data.error);
     } else {
       appendMessage('ai', data.reply);
       // 企業AI OSへの保存提案があれば確認UIを表示
@@ -247,13 +247,13 @@ function sendChat(e){
   .catch(function(err){
     var el = document.getElementById(loadingId);
     if(el) el.remove();
-    appendMessage('ai', '⚠️ 通信エラーが発生しました');
+    appendMessage('ai', '通信エラーが発生しました');
   });
 }
 
 function appendMessage(role, content){
   var cls = role === 'user' ? 'msg-user' : 'msg-ai';
-  var avatar = role === 'user' ? '👤' : '🤖';
+  var avatar = role === 'user' ? '' : '';
   var bubbleCls = role === 'user' ? 'msg-bubble-user' : 'msg-bubble-ai';
   var formatted = role === 'ai' ? formatContent(content) : escapeHtml(content).replace(/\\n/g, '<br>');
   var taskBtn = role === 'ai' ? '<div class="msg-actions"><button class="msg-action-btn" onclick="openTaskModal(this)" title="タスクに追加"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14"/><path d="M5 12h14"/></svg> タスク追加</button><button class="msg-action-btn" onclick="openOSModal(this)" title="企業AI OSに保存"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> OS保存</button></div>' : '';
@@ -297,8 +297,8 @@ function extractActionItems(text){
   for(var i=0;i<lines.length;i++){
     var l = lines[i];
     // 番号付き・箇条書き・矢印の行を抽出
-    if(/^[0-9０-９]+[\.．)）]/.test(l) || /^[-・•▶→✅☑]/.test(l) || /^[a-zA-Z][\.)]/.test(l)){
-      var clean = l.replace(/^[0-9０-９\\.．)）・•▶→✅☑a-zA-Z\\s\\-]+/,'').trim();
+    if(/^[0-9０-９]+[\.．)）]/.test(l) || /^[-・•▶→]/.test(l) || /^[a-zA-Z][\.)]/.test(l)){
+      var clean = l.replace(/^[0-9０-９\\.．)）・•▶→a-zA-Z\\s\\-]+/,'').trim();
       if(clean.length > 5 && clean.length < 200) items.push(clean);
     }
     // 「〜する」「〜を検討」「〜の確認」等のアクション語尾
@@ -560,16 +560,16 @@ const CHAT_CSS = `
 .task-check-item:hover{border-color:var(--primary);background:var(--primary-light)}
 .task-check-item input{margin-top:3px;flex-shrink:0;accent-color:var(--primary)}
 .task-check-item span{flex:1}
-.task-notice{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#22c55e;color:#fff;padding:10px 24px;border-radius:10px;font-size:14px;font-weight:600;z-index:300;animation:fadeInUp .3s ease}
+.task-notice{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#2298ae;color:#fff;padding:10px 24px;border-radius:10px;font-size:14px;font-weight:600;z-index:300;animation:fadeInUp .3s ease}
 @keyframes fadeInUp{from{opacity:0;transform:translateX(-50%) translateY(10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 .chat-hint{text-align:center;font-size:11px;color:var(--text2);padding:4px 0 2px;opacity:0.6}
-.os-proposal-banner{background:var(--card);border:1px solid #6366f1;border-radius:12px;padding:16px;margin:8px 0;animation:fadeInUp .3s ease}
-.os-proposal-header{font-size:14px;font-weight:700;color:#6366f1;margin-bottom:10px}
+.os-proposal-banner{background:var(--card);border:1px solid #2298ae;border-radius:12px;padding:16px;margin:8px 0;animation:fadeInUp .3s ease}
+.os-proposal-header{font-size:14px;font-weight:700;color:#2298ae;margin-bottom:10px}
 .os-proposal-list{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}
 .os-proposal-item{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;line-height:1.5;transition:all .15s}
-.os-proposal-item:hover{border-color:#6366f1;background:rgba(99,102,241,0.05)}
+.os-proposal-item:hover{border-color:#2298ae;background:rgba(99,102,241,0.05)}
 .os-proposal-item input{margin-top:3px;flex-shrink:0}
-.os-proposal-item strong{font-size:12px;color:#6366f1}
+.os-proposal-item strong{font-size:12px;color:#2298ae}
 .os-proposal-content{font-size:12px;color:var(--text2);margin-top:2px;max-height:60px;overflow:hidden;text-overflow:ellipsis}
 .os-proposal-actions{display:flex;gap:8px}
 .chat-main{flex:1;display:flex;flex-direction:column;min-width:0}

@@ -13,10 +13,10 @@ const LEVEL_LABELS: Record<MetricLevel, string> = {
 };
 
 const LEVEL_COLORS: Record<MetricLevel, string> = {
-  excellent: '#3b82f6',
-  good: '#22c55e',
-  fair: '#eab308',
-  warning: '#f59e0b',
+  excellent: '#2298ae',
+  good: '#2298ae',
+  fair: '#3da8b8',
+  warning: '#5ab4c4',
   danger: '#ef4444',
 };
 
@@ -54,10 +54,10 @@ function formatCurrency(value: number | null): string {
 
 function rankColor(rank: string): string {
   switch (rank) {
-    case 'A': return '#3b82f6';
-    case 'B': return '#22c55e';
-    case 'C': return '#eab308';
-    case 'D': return '#f59e0b';
+    case 'A': return '#2298ae';
+    case 'B': return '#2298ae';
+    case 'C': return '#3da8b8';
+    case 'D': return '#5ab4c4';
     case 'E': return '#ef4444';
     default: return '#6b7280';
   }
@@ -102,9 +102,9 @@ export function renderRatingHTML(
   }
 
   // データソース表示
-  const sourceLabel = options.source === 'upload' ? `📄 アップロード: ${esc(options.fileName ?? '')}` :
-                      options.source === 'freee' ? '🔗 freee APIから取得' :
-                      '📋 デモデータ（モック）';
+  const sourceLabel = options.source === 'upload' ? `アップロード: ${esc(options.fileName ?? '')}` :
+                      options.source === 'freee' ? 'freee APIから取得' :
+                      'デモデータ（モック）';
 
   const extractionNotesHTML = options.extractionNotes && options.extractionNotes.length > 0
     ? `<div class="extraction-notes"><strong>AI抽出メモ:</strong><ul>${options.extractionNotes.map(n => `<li>${esc(n)}</li>`).join('')}</ul></div>`
@@ -128,14 +128,14 @@ export function renderRatingHTML(
 .upload-inline p{font-size:13px;color:var(--text2);margin-top:8px}
 .source-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:8px;font-size:13px;font-weight:600;margin-bottom:16px}
 .source-badge--mock{background:#e5e7eb;color:#6b7280}
-.source-badge--upload{background:#dbeafe;color:#1e40af}
-.source-badge--freee{background:#dcfce7;color:#166534}
+.source-badge--upload{background:#d5eef3;color:#1b7f8e}
+.source-badge--freee{background:#d5eef3;color:#1b7f8e}
 .analysis-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
-.save-status{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:#166534}
+.save-status{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:#1b7f8e}
 .toolbar-actions{display:flex;gap:6px;margin-left:auto}
 .toolbar-btn{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:6px;background:var(--bg);border:1px solid var(--border);font-size:12px;font-weight:600;color:var(--text2);text-decoration:none;cursor:pointer;transition:all .15s}
 .toolbar-btn:hover{border-color:var(--primary);color:var(--primary)}
-.extraction-notes{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px}
+.extraction-notes{background:#ecf6f8;border:1px solid #a8d8e0;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px}
 .extraction-notes ul{margin:4px 0 0 16px}
 .extraction-notes li{margin-bottom:2px}
 .ai-commentary{font-size:14px;line-height:1.75;color:var(--text)}
@@ -154,7 +154,7 @@ export function renderRatingHTML(
 .progress-steps{display:flex;flex-direction:column;gap:4px;margin-bottom:20px}
 .progress-step{display:flex;align-items:center;gap:14px;padding:12px 16px;border-radius:8px;opacity:0.4;transition:all .4s ease}
 .progress-step.active{opacity:1;background:var(--primary-light)}
-.progress-step.done{opacity:0.7;background:#dcfce7}
+.progress-step.done{opacity:0.7;background:#d5eef3}
 .progress-step.done .progress-step-icon{color:var(--green)}
 .progress-step.done .step-num{display:none}
 .progress-step.done .progress-step-icon::after{content:'✓';font-size:16px;font-weight:700;color:var(--green)}
@@ -167,13 +167,13 @@ export function renderRatingHTML(
 .progress-step:not(.active) .spinner{display:none}
 
 .progress-bar-wrap{height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden;margin-bottom:12px}
-.progress-bar{height:100%;background:linear-gradient(90deg,var(--primary),#818cf8);border-radius:3px;width:0;transition:width 1.5s ease}
+.progress-bar{height:100%;background:linear-gradient(90deg,var(--primary),#4dbdcf);border-radius:3px;width:0;transition:width 1.5s ease}
 .progress-note{text-align:center;font-size:12px;color:var(--text2)}
 
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .spinner{animation:spin 1s linear infinite}
 
-.rating-banner{background:linear-gradient(135deg,#6366f1 0%,#a78bfa 50%,#818cf8 100%);border-radius:var(--radius);padding:32px 36px;margin-bottom:28px;color:#fff;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:20px}
+.rating-banner{background:linear-gradient(135deg,#2298ae 0%,#a78bfa 50%,#4dbdcf 100%);border-radius:var(--radius);padding:32px 36px;margin-bottom:28px;color:#fff;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:20px}
 .rating-banner h2{font-size:22px;font-weight:700;margin-bottom:4px}
 .rating-banner .banner-score{font-size:52px;font-weight:800;letter-spacing:-0.03em}
 .rating-banner .banner-score span{font-size:20px;font-weight:500;opacity:0.8}
@@ -199,15 +199,15 @@ export function renderRatingHTML(
 .metric-table th,.metric-table td{padding:10px 14px;font-size:13px}
 .metric-table .cat-header td{background:#f8f9fb;font-weight:700;font-size:13px;color:var(--primary);border-bottom:2px solid var(--primary)}
 
-.pill--excellent{background:rgba(59,130,246,0.12);color:#3b82f6}
-.pill--good{background:rgba(34,197,94,0.12);color:#22c55e}
+.pill--excellent{background:rgba(59,130,246,0.12);color:#2298ae}
+.pill--good{background:rgba(34,197,94,0.12);color:#2298ae}
 .pill--fair{background:rgba(234,179,8,0.12);color:#b45309}
-.pill--warning{background:rgba(245,158,11,0.12);color:#d97706}
+.pill--warning{background:rgba(245,158,11,0.12);color:#1b7f8e}
 .pill--danger{background:rgba(239,68,68,0.12);color:#ef4444}
 
 .pill--priority-high{background:rgba(239,68,68,0.12);color:#ef4444}
-.pill--priority-medium{background:rgba(245,158,11,0.12);color:#d97706}
-.pill--priority-low{background:rgba(34,197,94,0.12);color:#22c55e}
+.pill--priority-medium{background:rgba(245,158,11,0.12);color:#1b7f8e}
+.pill--priority-low{background:rgba(34,197,94,0.12);color:#2298ae}
 
 .opinions-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:28px}
 .opinion-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
@@ -215,9 +215,9 @@ export function renderRatingHTML(
 .opinion-card ul{list-style:none;padding:0}
 .opinion-card li{padding:6px 0;font-size:13px;line-height:1.55;border-bottom:1px solid var(--border);color:var(--text)}
 .opinion-card li:last-child{border-bottom:none}
-.opinion-positive h4{color:#22c55e}
+.opinion-positive h4{color:#2298ae}
 .opinion-negative h4{color:#ef4444}
-.opinion-caution h4{color:#f59e0b}
+.opinion-caution h4{color:#5ab4c4}
 
 .additional-block{background:#faf5ff;border:1px solid #e9d5ff;border-radius:var(--radius);padding:24px;margin-bottom:28px}
 .additional-block h3{font-size:15px;font-weight:700;margin-bottom:4px}
@@ -254,17 +254,17 @@ export function renderRatingHTML(
 <!-- Data Source Panel -->
 <div class="data-source-panel">
   <a href="/agent/finance" class="source-card ${options.source === 'mock' ? 'active' : ''}">
-    <div class="source-icon">📋</div>
+    <div class="source-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg></div>
     <h4>デモデータ</h4>
     <p>モックデータで格付を確認</p>
   </a>
   <a href="/agent/finance/freee" class="source-card ${options.source === 'freee' ? 'active' : ''}">
-    <div class="source-icon">🔗</div>
+    <div class="source-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg></div>
     <h4>freeeから分析</h4>
     <p>freee APIの会計データを使用</p>
   </a>
   <div class="source-card ${options.source === 'upload' ? 'active' : ''}" style="cursor:default">
-    <div class="source-icon">📄</div>
+    <div class="source-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
     <h4>決算書アップロード</h4>
     <p>PDF / CSVを財務分析AIが分析</p>
   </div>
@@ -284,7 +284,7 @@ export function renderRatingHTML(
       <input type="file" name="file" accept=".pdf,.csv,.xlsx" hidden id="financeFileInput"/>
     </label>
     <p>PDF・CSV・Excelの決算書を財務分析AIエージェントが読み取り、自動で銀行格付を算出します</p>
-    ${!options.aiAvailable ? '<p style="color:var(--red);font-size:12px;margin-top:4px">⚠️ ANTHROPIC_API_KEYが未設定のため、AI分析は利用できません</p>' : ''}
+    ${!options.aiAvailable ? '<p style="color:var(--red);font-size:12px;margin-top:4px">ANTHROPIC_API_KEYが未設定のため、AI分析は利用できません</p>' : ''}
   </div>
 
   <!-- Step 2: ファイル確認 -->
@@ -420,7 +420,7 @@ export function renderRatingHTML(
   <div class="source-badge source-badge--${options.source}">${sourceLabel}</div>
 ${options.analysisId ? `
   <div class="save-status">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2298ae" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
     <span>保存済み${options.savedAt ? ` (${new Date(options.savedAt).toLocaleString('ja-JP')})` : ''}</span>
   </div>
   <div class="toolbar-actions">
@@ -445,7 +445,7 @@ ${aiCommentaryHTML}
 <!-- Section 1: Welcome Banner -->
 <div class="rating-banner">
   <div>
-    <h2>📊 銀行格付スコアリング（129点満点）</h2>
+    <h2>銀行格付スコアリング（129点満点）</h2>
     <p style="opacity:0.85;font-size:14px;margin-top:4px">財務データに基づく銀行評価シミュレーション</p>
   </div>
   <div class="banner-score">${rating.totalScore}<span> / ${rating.maxScore} 点</span></div>
@@ -531,19 +531,19 @@ ${(['stability', 'profitability', 'growth', 'repayment'] as const).map(cat => {
   <div class="card-body">
     <div class="opinions-grid">
       <div class="opinion-card opinion-positive">
-        <h4>✅ ポジティブ</h4>
+        <h4>ポジティブ</h4>
         <ul>
 ${rating.positives.map(p => `          <li>${esc(p)}</li>`).join('\n')}
         </ul>
       </div>
       <div class="opinion-card opinion-negative">
-        <h4>❌ ネガティブ</h4>
+        <h4>ネガティブ</h4>
         <ul>
 ${rating.negatives.map(n => `          <li>${esc(n)}</li>`).join('\n')}
         </ul>
       </div>
       <div class="opinion-card opinion-caution">
-        <h4>👀 要注意</h4>
+        <h4>要注意</h4>
         <ul>
 ${rating.cautions.map(c => `          <li>${esc(c)}</li>`).join('\n')}
         </ul>
@@ -598,7 +598,7 @@ ${rating.actions.map(a => `        <tr>
 
 <!-- Section 7: 経営者向け要約 -->
 <div class="callout">
-  <h3>📋 経営者向け要約</h3>
+  <h3>経営者向け要約</h3>
   <ul>
 ${rating.executiveSummary.map(s => `    <li>${esc(s)}</li>`).join('\n')}
   </ul>
@@ -606,7 +606,7 @@ ${rating.executiveSummary.map(s => `    <li>${esc(s)}</li>`).join('\n')}
 
 <!-- Section 8: 深掘り質問 -->
 <div class="card">
-  <div class="card-header"><h3>🔍 深掘り質問</h3></div>
+  <div class="card-header"><h3>深掘り質問</h3></div>
   <div class="card-body">
     <ul class="questions-list">
 ${rating.deepDiveQuestions.map(q => `      <li>${esc(q)}</li>`).join('\n')}
@@ -689,22 +689,22 @@ function buildAICommentaryHTML(raw: string | null, rating: BankRatingResult): st
     report = JSON.parse(jsonMatch[0]);
   } catch {
     // パース失敗時はMarkdownフォールバック
-    return `<div class="card" style="margin-bottom:24px"><div class="card-header"><h3>🤖 AI分析コメント</h3></div><div class="card-body"><div style="white-space:pre-wrap;font-size:14px;line-height:1.8">${esc(raw)}</div></div></div>`;
+    return `<div class="card" style="margin-bottom:24px"><div class="card-header"><h3>AI分析コメント</h3></div><div class="card-body"><div style="white-space:pre-wrap;font-size:14px;line-height:1.8">${esc(raw)}</div></div></div>`;
   }
 
   const assessColor = (a: string) => {
-    switch(a) { case 'excellent': return '#3b82f6'; case 'good': return '#22c55e'; case 'fair': return '#eab308'; case 'warning': return '#f59e0b'; default: return '#ef4444'; }
+    switch(a) { case 'excellent': return '#2298ae'; case 'good': return '#2298ae'; case 'fair': return '#3da8b8'; case 'warning': return '#5ab4c4'; default: return '#ef4444'; }
   };
   const assessBg = (a: string) => {
-    switch(a) { case 'excellent': return '#eff6ff'; case 'good': return '#f0fdf4'; case 'fair': return '#fefce8'; case 'warning': return '#fffbeb'; default: return '#fef2f2'; }
+    switch(a) { case 'excellent': return '#ecf6f8'; case 'good': return '#ecf6f8'; case 'fair': return '#ecf6f8'; case 'warning': return '#ecf6f8'; default: return '#fef2f2'; }
   };
-  const riskColor = (l: string) => l === 'high' ? '#ef4444' : l === 'medium' ? '#f59e0b' : '#22c55e';
-  const riskBg = (l: string) => l === 'high' ? '#fef2f2' : l === 'medium' ? '#fffbeb' : '#f0fdf4';
+  const riskColor = (l: string) => l === 'high' ? '#ef4444' : l === 'medium' ? '#5ab4c4' : '#2298ae';
+  const riskBg = (l: string) => l === 'high' ? '#fef2f2' : l === 'medium' ? '#ecf6f8' : '#ecf6f8';
 
   return `
 <style>
 .ai-report{margin-bottom:28px}
-.ai-headline{background:linear-gradient(135deg,#1e1e2d,#2d2d44);border-radius:var(--radius);padding:32px;color:#fff;margin-bottom:20px;text-align:center}
+.ai-headline{background:linear-gradient(135deg,#1b7f8e,#2298ae);border-radius:var(--radius);padding:32px;color:#fff;margin-bottom:20px;text-align:center}
 .ai-headline h2{font-size:28px;font-weight:800;margin-bottom:8px;letter-spacing:-0.02em}
 .ai-headline .ai-grade{display:inline-flex;align-items:center;gap:8px;font-size:14px;background:rgba(255,255,255,0.15);padding:6px 18px;border-radius:20px;margin-bottom:12px}
 .ai-headline .ai-grade .grade-letter{font-size:22px;font-weight:800}
@@ -725,7 +725,7 @@ function buildAICommentaryHTML(raw: string | null, rating: BankRatingResult): st
 .bv-col ul{list-style:none;padding:0}
 .bv-col li{font-size:13px;padding:4px 0;padding-left:16px;position:relative;line-height:1.5}
 .bv-col li::before{content:'';position:absolute;left:0;top:10px;width:6px;height:6px;border-radius:50%}
-.bv-pos li::before{background:#22c55e}
+.bv-pos li::before{background:#2298ae}
 .bv-neg li::before{background:#ef4444}
 .bv-lending{background:var(--primary-light);border-radius:8px;padding:14px 16px;font-size:13px;line-height:1.6;color:var(--text)}
 .km-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:20px}
@@ -764,8 +764,8 @@ function buildAICommentaryHTML(raw: string | null, rating: BankRatingResult): st
 
   <!-- Strengths & Weaknesses -->
   <div class="sw-grid">
-    <div class="sw-card" style="background:#f0fdf4;border-color:#bbf7d0">
-      <h3>✅ 強み</h3>
+    <div class="sw-card" style="background:#ecf6f8;border-color:#a8d8e0">
+      <h3>強み</h3>
 ${(report.strengths || []).map(s => `
       <div class="sw-item">
         <div class="sw-icon">${s.icon}</div>
@@ -773,7 +773,7 @@ ${(report.strengths || []).map(s => `
       </div>`).join('')}
     </div>
     <div class="sw-card" style="background:#fef2f2;border-color:#fecaca">
-      <h3>⚠️ 弱み・課題</h3>
+      <h3>弱み・課題</h3>
 ${(report.weaknesses || []).map(w => `
       <div class="sw-item">
         <div class="sw-icon">${w.icon}</div>
@@ -784,7 +784,7 @@ ${(report.weaknesses || []).map(w => `
 
   <!-- Key Metrics Visual -->
   <div class="card" style="margin-bottom:20px">
-    <div class="card-header"><h3>📊 主要指標サマリー</h3><span class="card-sub">AI評価付き</span></div>
+    <div class="card-header"><h3>主要指標サマリー</h3><span class="card-sub">AI評価付き</span></div>
     <div class="card-body">
       <div class="km-grid">
 ${(report.keyMetrics || []).map(m => `
@@ -800,24 +800,24 @@ ${(report.keyMetrics || []).map(m => `
 
   <!-- Bank View -->
   <div class="bank-view">
-    <h3>🏦 銀行はこう見る</h3>
+    <h3>銀行はこう見る</h3>
     <div class="bv-comment">${esc(report.bankView?.overallComment || '')}</div>
     <div class="bv-cols">
       <div class="bv-col bv-pos">
-        <h4>✅ プラス評価</h4>
+        <h4>プラス評価</h4>
         <ul>${(report.bankView?.positives || []).map(p => `<li>${esc(p)}</li>`).join('')}</ul>
       </div>
       <div class="bv-col bv-neg">
-        <h4>❌ 懸念事項</h4>
+        <h4>懸念事項</h4>
         <ul>${(report.bankView?.concerns || []).map(c => `<li>${esc(c)}</li>`).join('')}</ul>
       </div>
     </div>
-    <div class="bv-lending">💡 <strong>融資への影響：</strong>${esc(report.bankView?.lendingImpact || '')}</div>
+    <div class="bv-lending"><strong>融資への影響：</strong>${esc(report.bankView?.lendingImpact || '')}</div>
   </div>
 
   <!-- Immediate Actions -->
   <div class="card" style="margin-bottom:20px">
-    <div class="card-header"><h3>🎯 今すぐやるべきこと</h3><span class="card-sub">優先順位付き</span></div>
+    <div class="card-header"><h3>今すぐやるべきこと</h3><span class="card-sub">優先順位付き</span></div>
     <div class="card-body">
       <div class="action-timeline">
 ${(report.immediateActions || []).map(a => `
@@ -827,8 +827,8 @@ ${(report.immediateActions || []).map(a => `
             <div class="at-action">${esc(a.action)}</div>
             <div class="at-reason">${esc(a.reason)}</div>
             <div class="at-tags">
-              <span class="at-tag">⏱ ${esc(a.timeframe)}</span>
-              <span class="at-tag">📈 ${esc(a.expectedEffect)}</span>
+              <span class="at-tag">${esc(a.timeframe)}</span>
+              <span class="at-tag">${esc(a.expectedEffect)}</span>
             </div>
           </div>
         </div>`).join('')}
@@ -839,7 +839,7 @@ ${(report.immediateActions || []).map(a => `
   <!-- Risk Alerts -->
 ${(report.riskAlerts || []).length > 0 ? `
   <div class="card" style="margin-bottom:20px">
-    <div class="card-header"><h3>🚨 リスクアラート</h3></div>
+    <div class="card-header"><h3>リスクアラート</h3></div>
     <div class="card-body">
       <div class="risk-list">
 ${report.riskAlerts.map(r => `
@@ -854,15 +854,15 @@ ${report.riskAlerts.map(r => `
   <!-- Industry Comparison -->
 ${report.industryComparison ? `
   <div class="ind-compare">
-    <h3>📊 同業比較</h3>
+    <h3>同業比較</h3>
     <div class="ind-pos">${esc(report.industryComparison.position)}</div>
     <div class="bv-cols">
       <div class="bv-col bv-pos">
-        <h4>📈 業界平均以上</h4>
+        <h4>業界平均以上</h4>
         <ul>${(report.industryComparison.aboveAverage || []).map(a => `<li>${esc(a)}</li>`).join('')}</ul>
       </div>
       <div class="bv-col bv-neg">
-        <h4>📉 業界平均以下</h4>
+        <h4>業界平均以下</h4>
         <ul>${(report.industryComparison.belowAverage || []).map(b => `<li>${esc(b)}</li>`).join('')}</ul>
       </div>
     </div>
@@ -871,14 +871,14 @@ ${report.industryComparison ? `
   <!-- Medium Term -->
 ${(report.mediumTermStrategy || []).length > 0 ? `
   <div class="card" style="margin-bottom:20px">
-    <div class="card-header"><h3>🗺️ 中長期的な改善の方向性</h3></div>
+    <div class="card-header"><h3>中長期的な改善の方向性</h3></div>
     <div class="card-body">
 ${report.mediumTermStrategy.map(s => `
       <div class="at-item">
         <div class="at-content">
           <div class="at-action">${esc(s.theme)}</div>
           <div class="at-reason">${esc(s.detail)}</div>
-          <div class="at-tags"><span class="at-tag">⏱ ${esc(s.timeframe)}</span></div>
+          <div class="at-tags"><span class="at-tag">${esc(s.timeframe)}</span></div>
         </div>
       </div>`).join('')}
     </div>

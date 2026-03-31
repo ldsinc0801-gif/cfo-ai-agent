@@ -17,6 +17,7 @@ import { renderAccountingPageHTML } from './accounting-page.js';
 import { renderChatHTML } from './chat-page.js';
 import { renderTaskPageHTML } from './task-page.js';
 import { receiptService } from '../services/receipt-service.js';
+import type { JournalEntry } from '../services/receipt-service.js';
 import { chatService } from '../services/chat-service.js';
 import { taskService } from '../services/task-service.js';
 import { generateMonthlyTasks } from '../config/task-templates.js';
@@ -892,20 +893,24 @@ app.get('/agent/accounting', (_req, res) => {
 app.post('/agent/accounting/analyze', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) { res.status(400).send('ファイルが選択されていません'); return; }
-    if (!receiptService.isAvailable()) { res.status(400).send('ANTHROPIC_API_KEYが未設定です'); return; }
+    if (!receiptService.isAvailable()) { res.status(400).send('GEMINI_API_KEYが未設定です'); return; }
 
     const filePath = req.file.path;
     const fileName = req.file.originalname;
     const ext = path.extname(fileName).toLowerCase();
     const buffer = fs.readFileSync(filePath);
 
+    // チャットメモリから業種を取得（学習ルール適用のため）
+    const memory = await chatService.getMemory();
+    const industry = memory.industry || undefined;
+
     let analysis;
     if (ext === '.pdf') {
-      analysis = await receiptService.analyzeReceiptPDF(buffer, fileName);
+      analysis = await receiptService.analyzeReceiptPDF(buffer, fileName, industry);
     } else {
       const mimeMap: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
       const mimeType = mimeMap[ext] || 'image/jpeg';
-      analysis = await receiptService.analyzeReceiptImage(buffer, mimeType, fileName);
+      analysis = await receiptService.analyzeReceiptImage(buffer, mimeType, fileName, industry);
     }
 
     res.send(renderAccountingPageHTML({ aiAvailable: true, analysis }));
@@ -929,8 +934,12 @@ app.post('/agent/accounting/analyze-video', upload.single('video'), async (req, 
     const mimeMap: Record<string, string> = { '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.avi': 'video/x-msvideo', '.webm': 'video/webm' };
     const mimeType = mimeMap[ext] || 'video/mp4';
 
+    // チャットメモリから業種を取得
+    const memory = await chatService.getMemory();
+    const industry = memory.industry || undefined;
+
     // Geminiで動画を直接解析
-    const analysis = await receiptService.analyzeVideo(buffer, mimeType, req.file.originalname);
+    const analysis = await receiptService.analyzeVideo(buffer, mimeType, req.file.originalname, industry);
 
     res.send(renderAccountingPageHTML({
       aiAvailable: true,
@@ -942,6 +951,23 @@ app.post('/agent/accounting/analyze-video', upload.single('video'), async (req, 
       aiAvailable: true,
       error: `解析に失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`,
     }));
+  }
+});
+
+// 会計AI：仕訳修正の記録（学習データ蓄積）
+app.post('/agent/accounting/correct', express.json(), async (req, res) => {
+  try {
+    const { original, corrected, reason } = req.body;
+    if (!original || !corrected) { res.status(400).json({ error: '修正前・修正後の仕訳データが必要です' }); return; }
+
+    const memory = await chatService.getMemory();
+    const industry = memory.industry || '未設定';
+
+    await receiptService.recordJournalCorrection(original, corrected, industry, reason);
+    res.json({ success: true, message: '修正を学習データとして記録しました' });
+  } catch (error) {
+    logger.error('仕訳修正記録エラー', error);
+    res.status(500).json({ error: '記録に失敗しました' });
   }
 });
 
@@ -961,14 +987,106 @@ app.get('/agent/accounting/csv', (req, res) => {
   }
 });
 
+// 会計AI：弥生会計用CSVダウンロード
+app.get('/agent/accounting/yayoi-csv', (req, res) => {
+  try {
+    const entriesJson = req.query.entries as string;
+    const entries = JSON.parse(entriesJson);
+    const includeCounter = req.query.counter !== '0';
+    const csv = receiptService.toYayoiCSV(entries, includeCounter);
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="yayoi-journal-${Date.now()}.csv"`);
+    res.send('\uFEFF' + csv);
+  } catch (error) {
+    res.status(400).send('弥生CSVの生成に失敗しました');
+  }
+});
+
 // 会計AI：freee APIに仕訳送信
-app.post('/agent/accounting/send-freee', express.urlencoded({ extended: true }), (req, res) => {
-  // TODO: freee APIへの仕訳送信を実装
-  // 現在はfreee APIの認証が未接続のため、プレビューのみ
-  res.send(renderAccountingPageHTML({
-    aiAvailable: true,
-    error: 'freee APIへの送信は、freee連携設定でアクセストークンを設定した後に利用できます。現在はCSVダウンロードをご利用ください。',
-  }));
+app.post('/agent/accounting/send-freee', express.urlencoded({ extended: true }), async (req, res) => {
+  try {
+    const token = getFreeeToken();
+    if (!token) {
+      res.send(renderAccountingPageHTML({
+        aiAvailable: true,
+        error: 'freee連携が未設定です。サイドバーの「freee連携設定」からアクセストークンを設定してください。',
+      }));
+      return;
+    }
+
+    const companyId = getSelectedCompanyId();
+    if (!companyId) {
+      res.send(renderAccountingPageHTML({
+        aiAvailable: true,
+        error: '事業所が未選択です。サイドバーの「事業所の選択」から事業所を選んでください。',
+      }));
+      return;
+    }
+
+    const entries: JournalEntry[] = JSON.parse(req.body.entries || '[]');
+    if (entries.length === 0) {
+      res.send(renderAccountingPageHTML({ aiAvailable: true, error: '送信する仕訳データがありません。' }));
+      return;
+    }
+
+    const { FreeeAuthClient } = await import('../clients/freee-auth.js');
+    const { FreeeApiClient } = await import('../clients/freee-api.js');
+    const auth = new FreeeAuthClient({
+      accessToken: token.access_token,
+      refreshToken: token.refresh_token,
+    });
+    const apiClient = new FreeeApiClient(auth);
+
+    const results: string[] = [];
+    for (const entry of entries) {
+      // 借方の勘定科目IDを検索
+      const accountId = await apiClient.findAccountItemId(companyId, entry.debitAccount);
+      if (!accountId) {
+        results.push(`[スキップ] ${entry.description}: 勘定科目「${entry.debitAccount}」がfreeeに見つかりません`);
+        continue;
+      }
+
+      // 税区分コード: 10%→課対仕入10%, 8%→課対仕入8%(軽), 0%→対象外
+      const taxCode = entry.taxRate === 10 ? 21 : entry.taxRate === 8 ? 23 : 0;
+      const dealType = entry.debitAccount.includes('売上') ? 'income' : 'expense';
+
+      // 貸方（相手勘定科目）に対応する口座を検索して決済済みにする
+      const wallet = await apiClient.findWalletable(companyId, entry.creditAccount);
+      const payments = wallet ? [{
+        amount: entry.amount,
+        from_walletable_id: wallet.id,
+        from_walletable_type: wallet.type,
+        date: entry.date,
+      }] : undefined;
+
+      await apiClient.createDeal(companyId, {
+        issue_date: entry.date,
+        type: dealType,
+        details: [{
+          account_item_id: accountId,
+          tax_code: taxCode,
+          amount: entry.amount,
+          description: `${entry.description} (${entry.partnerName})`,
+        }],
+        payments,
+      });
+
+      const paymentStatus = wallet ? `→ ${entry.creditAccount}で決済済み` : '→ 未決済（口座未設定）';
+      results.push(`[送信完了] ${entry.date} ${entry.debitAccount} ${entry.amount}円 ${paymentStatus} - ${entry.description}`);
+    }
+
+    res.send(renderAccountingPageHTML({
+      aiAvailable: true,
+      success: results.length > 0 ? `freee送信結果:\n${results.join('\n')}` : 'freeeへの送信が完了しました。',
+    }));
+  } catch (error) {
+    logger.error('freee送信エラー', error);
+    res.send(renderAccountingPageHTML({
+      aiAvailable: true,
+      error: `freee送信に失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`,
+    }));
+  }
 });
 
 // 資金調達AIエージェント
@@ -1059,17 +1177,17 @@ app.get('/settings/company', async (_req, res) => {
     const companyCards = companies.map(c => {
       const isSelected = c.id === selectedId;
       return `
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border:1px solid ${isSelected ? '#6366f1' : '#e5e7eb'};border-radius:10px;margin-bottom:10px;background:${isSelected ? 'rgba(99,102,241,0.06)' : '#fff'};transition:all .15s">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border:1px solid ${isSelected ? '#2298ae' : '#e5e7eb'};border-radius:10px;margin-bottom:10px;background:${isSelected ? 'rgba(99,102,241,0.06)' : '#fff'};transition:all .15s">
           <div>
             <div style="font-weight:700;font-size:15px;color:#1f2937">${escHtml(c.display_name)}</div>
             <div style="font-size:12px;color:#6b7280;margin-top:2px">事業所ID: ${c.id}</div>
           </div>
           <div style="display:flex;align-items:center;gap:8px">
-            ${isSelected ? '<span style="font-size:12px;font-weight:600;color:#6366f1;background:rgba(99,102,241,0.1);padding:4px 12px;border-radius:6px">選択中</span>' : ''}
+            ${isSelected ? '<span style="font-size:12px;font-weight:600;color:#2298ae;background:rgba(99,102,241,0.1);padding:4px 12px;border-radius:6px">選択中</span>' : ''}
             <form method="POST" action="/settings/company" style="margin:0">
               <input type="hidden" name="companyId" value="${c.id}">
               <input type="hidden" name="companyName" value="${escHtml(c.display_name)}">
-              <button type="submit" style="padding:8px 20px;border-radius:8px;border:none;background:${isSelected ? '#e5e7eb' : '#6366f1'};color:${isSelected ? '#6b7280' : '#fff'};font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:opacity .15s">${isSelected ? '選択済み' : '選択する'}</button>
+              <button type="submit" style="padding:8px 20px;border-radius:8px;border:none;background:${isSelected ? '#e5e7eb' : '#2298ae'};color:${isSelected ? '#6b7280' : '#fff'};font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:opacity .15s">${isSelected ? '選択済み' : '選択する'}</button>
             </form>
           </div>
         </div>`;
@@ -1089,14 +1207,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","H
 <body>
 <div style="max-width:520px;width:100%;margin:40px auto;padding:0 20px">
   <div style="text-align:center;margin-bottom:32px">
-    <div style="font-size:40px;margin-bottom:12px">🏢</div>
+    <div style="font-size:40px;margin-bottom:12px"></div>
     <h1 style="font-size:22px;font-weight:700;margin-bottom:8px">事業所の選択</h1>
     <p style="font-size:14px;color:#6b7280">freeeに登録されている事業所から、使用する事業所を選択してください。</p>
   </div>
   <div style="margin-bottom:24px">
     ${companyCards}
   </div>
-  ${selectedId ? `<div style="text-align:center"><a href="/" style="display:inline-block;background:#6366f1;color:#fff;padding:10px 28px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:14px">ダッシュボードへ</a></div>` : '<p style="text-align:center;color:#6b7280;font-size:13px">事業所を選択するとダッシュボードに進めます。</p>'}
+  ${selectedId ? `<div style="text-align:center"><a href="/" style="display:inline-block;background:#2298ae;color:#fff;padding:10px 28px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:14px">ダッシュボードへ</a></div>` : '<p style="text-align:center;color:#6b7280;font-size:13px">事業所を選択するとダッシュボードに進めます。</p>'}
 </div>
 </body>
 </html>`);
@@ -1136,7 +1254,7 @@ app.post('/chat/send', express.json(), async (req, res) => {
       const title = taskMatch[1]?.trim() || message.replace(/タスクにして|タスク追加|TODO/g, '').trim();
       if (title) {
         taskService.addFromChat(title);
-        res.json({ reply: `✅ タスクを追加しました：「${title}」\n\nタスクボードで確認できます。` });
+        res.json({ reply: `タスクを追加しました：「${title}」\n\nタスクボードで確認できます。` });
         return;
       }
     }

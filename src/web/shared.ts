@@ -111,9 +111,19 @@ ${renderSidebar(opts.active, opts.companyName)}
       <h1 class="header-title">${esc(opts.title)}</h1>
     </div>
     <div class="header-right">
-      <div class="usage-badge" id="usageBadge" title="API使用量">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-        <span id="usageText">--</span>
+      <div class="usage-wrap">
+        <div class="usage-badge" id="usageBadge" title="クリックで詳細表示" onclick="toggleUsagePanel()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+          <span id="usageText">--</span>
+        </div>
+        <div class="usage-panel" id="usagePanel" style="display:none">
+          <div class="usage-panel-header">
+            <strong>API使用量ログ</strong>
+            <button class="usage-panel-close" onclick="toggleUsagePanel()">&times;</button>
+          </div>
+          <div class="usage-panel-summary" id="usagePanelSummary"></div>
+          <div class="usage-panel-list" id="usagePanelList"><p style="color:var(--text2);font-size:12px">読み込み中...</p></div>
+        </div>
       </div>
       <a href="/" class="btn-secondary">ダッシュボードへ戻る</a>
     </div>
@@ -130,21 +140,69 @@ ${USAGE_SCRIPT}
 const USAGE_SCRIPT = `
 <script>
 (function(){
+  var lastData = null;
+
   function updateUsage(){
     fetch('/api/usage').then(function(r){return r.json()}).then(function(d){
-      var badges = document.querySelectorAll('.usage-badge');
-      badges.forEach(function(b){
-        var txt = b.querySelector('[id^="usageText"]') || b.querySelector('.usage-text-val');
-        if(txt){
-          if(d.requestCount === 0){
-            txt.textContent = 'API未使用';
-          } else {
-            txt.textContent = d.totalTokens.toLocaleString('ja-JP') + ' tok / $' + d.totalCost.toFixed(4) + ' (約' + Math.ceil(d.totalCostYen) + '円)';
-          }
+      lastData = d;
+      var txt = document.getElementById('usageText');
+      if(txt){
+        if(d.requestCount === 0){
+          txt.textContent = 'API未使用';
+        } else {
+          txt.textContent = d.totalTokens.toLocaleString('ja-JP') + ' tok / $' + d.totalCost.toFixed(4) + ' (約' + Math.ceil(d.totalCostYen) + '円)';
         }
-      });
+      }
+      renderPanel(d);
     }).catch(function(){});
   }
+
+  function renderPanel(d){
+    var summary = document.getElementById('usagePanelSummary');
+    var list = document.getElementById('usagePanelList');
+    if(!summary || !list) return;
+
+    summary.innerHTML =
+      '<div class="up-stat"><span class="up-label">入力</span><span class="up-val">' + d.totalInputTokens.toLocaleString('ja-JP') + ' tok</span></div>' +
+      '<div class="up-stat"><span class="up-label">出力</span><span class="up-val">' + d.totalOutputTokens.toLocaleString('ja-JP') + ' tok</span></div>' +
+      '<div class="up-stat"><span class="up-label">合計コスト</span><span class="up-val">$' + d.totalCost.toFixed(4) + ' (約' + Math.ceil(d.totalCostYen) + '円)</span></div>' +
+      '<div class="up-stat"><span class="up-label">リクエスト数</span><span class="up-val">' + d.requestCount + '回</span></div>';
+
+    if(!d.records || d.records.length === 0){
+      list.innerHTML = '<p style="color:var(--text2);font-size:12px;padding:8px 0">まだAPIリクエストがありません</p>';
+      return;
+    }
+    var html = '<table class="up-table"><thead><tr><th>時刻</th><th>用途</th><th>モデル</th><th>トークン</th><th>コスト</th></tr></thead><tbody>';
+    var records = d.records.slice().reverse();
+    for(var i=0;i<records.length;i++){
+      var r = records[i];
+      var t = new Date(r.timestamp);
+      var time = t.getHours()+':'+('0'+t.getMinutes()).slice(-2)+':'+('0'+t.getSeconds()).slice(-2);
+      var model = r.model.replace('models/','').replace(/-\\d{8}$/,'');
+      html += '<tr><td>' + time + '</td><td>' + r.purpose + '</td><td class="up-model">' + model + '</td><td class="num">' + (r.inputTokens+r.outputTokens).toLocaleString('ja-JP') + '</td><td class="num">$' + r.cost.toFixed(4) + '</td></tr>';
+    }
+    html += '</tbody></table>';
+    list.innerHTML = html;
+  }
+
+  window.toggleUsagePanel = function(){
+    var panel = document.getElementById('usagePanel');
+    if(panel.style.display === 'none'){
+      panel.style.display = 'block';
+      if(lastData) renderPanel(lastData);
+    } else {
+      panel.style.display = 'none';
+    }
+  };
+
+  document.addEventListener('click', function(e){
+    var wrap = document.querySelector('.usage-wrap');
+    var panel = document.getElementById('usagePanel');
+    if(wrap && panel && !wrap.contains(e.target)){
+      panel.style.display = 'none';
+    }
+  });
+
   updateUsage();
   setInterval(updateUsage, 10000);
 })();
@@ -152,21 +210,21 @@ const USAGE_SCRIPT = `
 
 export const SHARED_CSS = `
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{--sidebar-w:240px;--header-h:60px;--bg:#f4f5f7;--card:#fff;--text:#1f2937;--text2:#6b7280;--border:#e5e7eb;--primary:#6366f1;--primary-light:rgba(99,102,241,0.1);--green:#22c55e;--orange:#f59e0b;--red:#ef4444;--radius:12px}
+:root{--sidebar-w:240px;--header-h:60px;--bg:#ffffff;--card:#fff;--text:#1f2937;--text2:#6b7280;--border:#e5e7eb;--primary:#2298ae;--primary-light:rgba(34,152,174,0.08);--green:#2298ae;--orange:#5ab4c4;--red:#ef4444;--radius:12px}
 html{-webkit-font-smoothing:antialiased}
 body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Hiragino Sans",Meiryo,sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.55}
 
-.sidebar{position:fixed;top:0;left:0;bottom:0;width:var(--sidebar-w);background:#1e1e2d;color:#a2a3b7;display:flex;flex-direction:column;z-index:100;transition:transform .25s ease}
+.sidebar{position:fixed;top:0;left:0;bottom:0;width:var(--sidebar-w);background:#1b7f8e;color:#c4e4ea;display:flex;flex-direction:column;z-index:100;transition:transform .25s ease}
 .sidebar-brand{display:flex;align-items:center;gap:10px;padding:20px 20px 16px;color:#fff;font-size:18px;font-weight:700}
 .sidebar-nav{flex:1;overflow-y:auto;padding:0 12px}
-.nav-section{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#565674;padding:20px 12px 8px}
-.nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;color:#a2a3b7;text-decoration:none;font-size:14px;font-weight:500;transition:all .15s;margin-bottom:2px}
+.nav-section{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#68b3be;padding:20px 12px 8px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;color:#c4e4ea;text-decoration:none;font-size:14px;font-weight:500;transition:all .15s;margin-bottom:2px}
 .nav-item:hover{background:rgba(255,255,255,0.06);color:#fff}
 .nav-item.active{background:var(--primary);color:#fff}
 .nav-item.nav-disabled{opacity:0.4;pointer-events:none}
-.sidebar-footer{padding:16px 20px;border-top:1px solid #2d2d44}
+.sidebar-footer{padding:16px 20px;border-top:1px solid rgba(255,255,255,0.15)}
 .sidebar-company{font-size:13px;color:#d1d5db;font-weight:600}
-.sidebar-version{font-size:11px;color:#565674;margin-top:2px}
+.sidebar-version{font-size:11px;color:#68b3be;margin-top:2px}
 
 .main{margin-left:var(--sidebar-w)}
 .header{height:var(--header-h);background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:50}
@@ -221,8 +279,22 @@ th{font-weight:600;color:var(--text2);font-size:12px;text-align:left}
 td.num{text-align:right;font-variant-numeric:tabular-nums}
 
 .muted{color:var(--text2)}
-.usage-badge{display:flex;align-items:center;gap:5px;padding:5px 12px;border-radius:8px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:11px;font-weight:600;color:#166534;cursor:default;white-space:nowrap;transition:all .2s}
-.usage-badge:hover{background:#dcfce7}
+.usage-wrap{position:relative}
+.usage-badge{display:flex;align-items:center;gap:5px;padding:5px 12px;border-radius:8px;background:#ecf6f8;border:1px solid #a8d8e0;font-size:11px;font-weight:600;color:#1b7f8e;cursor:pointer;white-space:nowrap;transition:all .2s}
+.usage-badge:hover{background:#d5eef3}
+.usage-panel{position:absolute;top:calc(100% + 8px);right:0;width:520px;background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,0.12);z-index:200;overflow:hidden}
+.usage-panel-header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--border);font-size:14px}
+.usage-panel-close{background:none;border:none;font-size:20px;color:var(--text2);cursor:pointer;line-height:1;padding:0 4px}
+.usage-panel-close:hover{color:var(--text)}
+.usage-panel-summary{display:grid;grid-template-columns:1fr 1fr;gap:0;padding:12px 18px;border-bottom:1px solid var(--border);background:#fafafa}
+.up-stat{display:flex;justify-content:space-between;padding:4px 8px;font-size:12px}
+.up-label{color:var(--text2)}.up-val{font-weight:600}
+.usage-panel-list{max-height:300px;overflow-y:auto;padding:8px 18px 14px}
+.up-table{width:100%;border-collapse:collapse;font-size:11px}
+.up-table th{text-align:left;color:var(--text2);font-weight:600;padding:6px 6px;border-bottom:1px solid var(--border);font-size:10px;text-transform:uppercase;letter-spacing:.03em}
+.up-table td{padding:6px 6px;border-bottom:1px solid #f3f4f6;vertical-align:top}
+.up-table td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.up-model{font-size:10px;color:var(--text2);max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 @media(max-width:768px){
   .sidebar{transform:translateX(-100%)}

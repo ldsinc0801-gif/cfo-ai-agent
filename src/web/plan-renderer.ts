@@ -60,7 +60,7 @@ ${renderSidebar('plan')}
             </div>
             <div id="filePreview" class="file-preview" style="display:none">
               <div class="file-preview-info">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2298ae" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                 <span id="fileName"></span>
               </div>
               <button type="submit" class="btn-primary">アップロード</button>
@@ -72,7 +72,7 @@ ${uploadedFiles.length > 0 ? `
             <h4>アップロード済みファイル</h4>
 ${uploadedFiles.map(f => `
             <div class="uploaded-item">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2298ae" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
               <span>${esc(f)}</span>
             </div>`).join('')}
           </div>` : ''}
@@ -85,7 +85,7 @@ ${uploadedFiles.map(f => `
         </div>
         <div class="card-body">
           <div class="ai-status">
-            <div class="ai-status-icon">🤖</div>
+            <div class="ai-status-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>
             <div class="ai-status-text">
               <h4>事業計画AIエージェント</h4>
               <p>アップロードされた事業計画書・予算データをAIが分析し、月次目標を自動生成します。</p>
@@ -93,28 +93,28 @@ ${uploadedFiles.map(f => `
           </div>
           <div class="ai-features">
             <div class="ai-feature">
-              <div class="ai-feature-icon">📄</div>
+              <div class="ai-feature-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></div>
               <div>
                 <strong>PDF解析</strong>
                 <p>事業計画書PDFから売上・利益目標を自動抽出</p>
               </div>
             </div>
             <div class="ai-feature">
-              <div class="ai-feature-icon">📊</div>
+              <div class="ai-feature-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></div>
               <div>
                 <strong>CSV取込</strong>
                 <p>予算CSVから月別目標を一括登録</p>
               </div>
             </div>
             <div class="ai-feature">
-              <div class="ai-feature-icon">🎯</div>
+              <div class="ai-feature-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></div>
               <div>
                 <strong>ギャップ分析</strong>
                 <p>実績と目標の乖離を自動検出しアラート</p>
               </div>
             </div>
             <div class="ai-feature">
-              <div class="ai-feature-icon">💡</div>
+              <div class="ai-feature-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></div>
               <div>
                 <strong>施策提案</strong>
                 <p>目標未達時の改善施策をAIが提案（将来実装）</p>
@@ -207,9 +207,9 @@ new Chart(document.getElementById('gapChart'),{
   data:{
     labels:months,
     datasets:[
-      {label:'目標',data:targetRev,backgroundColor:'rgba(99,102,241,0.15)',borderColor:'#6366f1',borderWidth:1.5,borderDash:[4,4],borderRadius:4,borderSkipped:false,order:2},
+      {label:'目標',data:targetRev,backgroundColor:'rgba(99,102,241,0.15)',borderColor:'#2298ae',borderWidth:1.5,borderDash:[4,4],borderRadius:4,borderSkipped:false,order:2},
       {label:'実績',data:actualRev,backgroundColor:'rgba(99,102,241,0.7)',borderRadius:4,borderSkipped:false,order:1},
-      {label:'ギャップ',data:gaps,type:'line',borderColor:gaps.map(function(g){return g>=0?'#22c55e':'#ef4444'}),backgroundColor:'transparent',pointBackgroundColor:gaps.map(function(g){return g>=0?'#22c55e':'#ef4444'}),pointRadius:6,pointHoverRadius:8,borderWidth:0,order:0}
+      {label:'ギャップ',data:gaps,type:'line',borderColor:gaps.map(function(g){return g>=0?'#2298ae':'#ef4444'}),backgroundColor:'transparent',pointBackgroundColor:gaps.map(function(g){return g>=0?'#2298ae':'#ef4444'}),pointRadius:6,pointHoverRadius:8,borderWidth:0,order:0}
     ]
   },
   options:{
@@ -317,7 +317,7 @@ const PLAN_CSS = `
 .uploaded-list{margin-top:20px;padding-top:16px;border-top:1px solid var(--border)}
 .uploaded-list h4{font-size:13px;font-weight:700;color:var(--text2);margin-bottom:10px}
 .uploaded-item{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;color:var(--text)}
-.ai-status{display:flex;gap:16px;align-items:center;padding:20px;background:linear-gradient(135deg,#6366f1,#818cf8);border-radius:10px;color:#fff;margin-bottom:20px}
+.ai-status{display:flex;gap:16px;align-items:center;padding:20px;background:linear-gradient(135deg,#2298ae,#4dbdcf);border-radius:10px;color:#fff;margin-bottom:20px}
 .ai-status-icon{font-size:36px}
 .ai-status-text h4{font-size:16px;font-weight:700;margin-bottom:4px}
 .ai-status-text p{font-size:13px;opacity:0.9;line-height:1.5}

@@ -204,6 +204,101 @@ export class FreeeApiClient {
       return response.data;
     });
   }
+
+  /**
+   * 口座一覧を取得
+   *
+   * freee API: GET /api/1/walletables
+   */
+  async getWalletables(companyId: number): Promise<any[]> {
+    return this.requestWithRetry(async () => {
+      logger.info('口座一覧を取得中...');
+      const response = await this.client.get('/api/1/walletables', {
+        params: { company_id: companyId },
+      });
+      return response.data.walletables || [];
+    });
+  }
+
+  /**
+   * 貸方勘定科目名からfreeeの口座（walletable）を検索
+   *
+   * 「現金」→ wallet type: wallet
+   * 「普通預金」等の銀行口座 → wallet type: bank_account
+   * 見つからない場合はnull（未決済として登録）
+   */
+  async findWalletable(companyId: number, creditAccountName: string): Promise<{ id: number; type: string } | null> {
+    const walletables = await this.getWalletables(companyId);
+
+    // 完全一致を優先、次に部分一致
+    let match = walletables.find((w: any) => w.name === creditAccountName);
+    if (!match) {
+      match = walletables.find((w: any) =>
+        creditAccountName.includes(w.name) || w.name.includes(creditAccountName)
+      );
+    }
+    // 「現金」の場合はwalletタイプの口座を探す
+    if (!match && creditAccountName === '現金') {
+      match = walletables.find((w: any) => w.type === 'wallet');
+    }
+
+    return match ? { id: match.id, type: match.type } : null;
+  }
+
+  /**
+   * 取引（収入/支出）を登録
+   *
+   * freee API: POST /api/1/deals
+   * payments を含めると決済済み（貸方が口座）として登録される
+   */
+  async createDeal(
+    companyId: number,
+    params: {
+      issue_date: string;
+      type: 'income' | 'expense';
+      details: {
+        account_item_id: number;
+        tax_code: number;
+        amount: number;
+        description?: string;
+      }[];
+      payments?: {
+        amount: number;
+        from_walletable_id: number;
+        from_walletable_type: string;
+        date: string;
+      }[];
+      ref_number?: string;
+    }
+  ): Promise<any> {
+    return this.requestWithRetry(async () => {
+      logger.info(`取引を登録中... (${params.type}, ${params.issue_date})`);
+      const body: any = {
+        company_id: companyId,
+        issue_date: params.issue_date,
+        type: params.type,
+        details: params.details,
+        ref_number: params.ref_number,
+      };
+      if (params.payments && params.payments.length > 0) {
+        body.payments = params.payments;
+      }
+      const response = await this.client.post('/api/1/deals', body);
+      logger.info('取引を登録しました');
+      return response.data;
+    });
+  }
+
+  /**
+   * 勘定科目名からIDを検索
+   */
+  async findAccountItemId(companyId: number, accountName: string): Promise<number | null> {
+    const data = await this.getAccountItems(companyId);
+    const item = data.account_items.find(
+      (a: any) => a.name === accountName || a.shortcut1 === accountName
+    );
+    return item ? item.id : null;
+  }
 }
 
 export class FreeeApiError extends Error {

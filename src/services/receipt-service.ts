@@ -3,6 +3,7 @@ import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { usageTracker } from './usage-tracker.js';
 import { accountRulesToPrompt } from '../config/account-rules.js';
+import { journalLearningService } from './journal-learning-service.js';
 
 /** 仕訳データ */
 export interface JournalEntry {
@@ -48,17 +49,18 @@ export class ReceiptService {
   /**
    * 画像（領収書・レシート）から仕訳データを生成
    */
-  async analyzeReceiptImage(imageBuffer: Buffer, mimeType: string, fileName: string): Promise<ReceiptAnalysis> {
+  async analyzeReceiptImage(imageBuffer: Buffer, mimeType: string, fileName: string, industry?: string): Promise<ReceiptAnalysis> {
     if (!this.genAI) throw new Error('GEMINI_API_KEYが未設定です');
 
     logger.info(`領収書画像を解析中（Gemini）: ${fileName}`);
 
     const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
     const base64 = imageBuffer.toString('base64');
+    const prompt = await this.buildPrompt(industry);
 
     const result = await model.generateContent([
       { inlineData: { mimeType, data: base64 } },
-      { text: RECEIPT_PROMPT },
+      { text: prompt },
     ]);
 
     const text = result.response.text();
@@ -69,17 +71,18 @@ export class ReceiptService {
   /**
    * PDFの領収書・請求書から仕訳データを生成
    */
-  async analyzeReceiptPDF(pdfBuffer: Buffer, fileName: string): Promise<ReceiptAnalysis> {
+  async analyzeReceiptPDF(pdfBuffer: Buffer, fileName: string, industry?: string): Promise<ReceiptAnalysis> {
     if (!this.genAI) throw new Error('GEMINI_API_KEYが未設定です');
 
     logger.info(`領収書PDFを解析中（Gemini）: ${fileName}`);
 
     const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
     const base64 = pdfBuffer.toString('base64');
+    const prompt = await this.buildPrompt(industry);
 
     const result = await model.generateContent([
       { inlineData: { mimeType: 'application/pdf', data: base64 } },
-      { text: RECEIPT_PROMPT },
+      { text: prompt },
     ]);
 
     const text = result.response.text();
@@ -93,20 +96,21 @@ export class ReceiptService {
    * Geminiは動画を直接入力できるため、フレーム抽出不要。
    * 動画内の領収書・レシートを自動認識して仕訳データを生成する。
    */
-  async analyzeVideo(videoBuffer: Buffer, mimeType: string, fileName: string): Promise<ReceiptAnalysis> {
+  async analyzeVideo(videoBuffer: Buffer, mimeType: string, fileName: string, industry?: string): Promise<ReceiptAnalysis> {
     if (!this.genAI) throw new Error('GEMINI_API_KEYが未設定です');
 
     logger.info(`動画を解析中（Gemini）: ${fileName}`);
 
     const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
     const base64 = videoBuffer.toString('base64');
+    const prompt = await this.buildPrompt(industry);
 
     const result = await model.generateContent([
       { inlineData: { mimeType, data: base64 } },
       { text: `この動画に映っている領収書・レシート・請求書を全て読み取り、仕訳データを生成してください。
 同じ書類が複数回映っている場合は1件にまとめてください。
 
-${RECEIPT_PROMPT}` },
+${prompt}` },
     ]);
 
     const text = result.response.text();
@@ -117,12 +121,13 @@ ${RECEIPT_PROMPT}` },
   /**
    * 複数画像を一括解析（動画フレーム互換）
    */
-  async analyzeVideoFrames(frames: { buffer: Buffer; mimeType: string }[]): Promise<ReceiptAnalysis> {
+  async analyzeVideoFrames(frames: { buffer: Buffer; mimeType: string }[], industry?: string): Promise<ReceiptAnalysis> {
     if (!this.genAI) throw new Error('GEMINI_API_KEYが未設定です');
 
     logger.info(`画像${frames.length}枚を一括解析中（Gemini）...`);
 
     const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
+    const prompt = await this.buildPrompt(industry);
 
     const parts = [
       ...frames.map(f => ({
@@ -132,7 +137,7 @@ ${RECEIPT_PROMPT}` },
 各画像に写っている領収書・レシートを全て読み取り、仕訳データを生成してください。
 同じ領収書が複数画像に写っている場合は1件にまとめてください。
 
-${RECEIPT_PROMPT}` },
+${prompt}` },
     ];
 
     const result = await model.generateContent(parts);
@@ -150,6 +155,50 @@ ${RECEIPT_PROMPT}` },
     return [header, ...rows].join('\n');
   }
 
+  /**
+   * 弥生会計用CSV文字列に変換
+   *
+   * フォーマット:
+   *   1列目: 日付（YYYY年M月D日）
+   *   2列目: 摘要
+   *   3列目: 勘定科目（借方）
+   *   4列目: 金額（経費はマイナス、売上はプラス）
+   *   5列目: 相手勘定科目（貸方）※オプション
+   */
+  toYayoiCSV(entries: JournalEntry[], includeCounterAccount: boolean = true): string {
+    const headers = includeCounterAccount
+      ? '日付,摘要,勘定科目,金額,相手勘定科目'
+      : '日付,摘要,勘定科目,金額';
+
+    const rows = entries.map(e => {
+      // 日付を「2026年1月1日」形式に変換
+      const [y, m, d] = e.date.split('-').map(Number);
+      const dateStr = `${y}年${m}月${d}日`;
+
+      // 摘要: 取引先 + 内容
+      const description = e.partnerName
+        ? `${e.partnerName} ${e.description}`.trim()
+        : e.description;
+
+      // 売上系はプラス、経費系はマイナス
+      const isIncome = e.debitAccount.includes('売上') || e.creditAccount.includes('売上');
+      const amount = isIncome ? e.amount : -e.amount;
+
+      const cols = [
+        dateStr,
+        `"${description}"`,
+        e.debitAccount,
+        amount,
+      ];
+      if (includeCounterAccount) {
+        cols.push(e.creditAccount);
+      }
+      return cols.join(',');
+    });
+
+    return [headers, ...rows].join('\n');
+  }
+
   /** freee API用の仕訳パラメータに変換 */
   toFreeeParams(entry: JournalEntry, companyId: number) {
     return {
@@ -163,6 +212,32 @@ ${RECEIPT_PROMPT}` },
         description: `${entry.description} (${entry.partnerName})`,
       }],
     };
+  }
+
+  /**
+   * 業種に応じた学習済みルールを含むプロンプトを生成
+   */
+  private async buildPrompt(industry?: string): Promise<string> {
+    const basePrompt = getReceiptPrompt();
+    if (!industry) return basePrompt;
+
+    const learnedRules = await journalLearningService.getLearnedRulesForPrompt(industry);
+    if (!learnedRules) return basePrompt;
+
+    // 基本プロンプトの勘定科目ルールの後に学習済みルールを挿入
+    return `${basePrompt}\n\n${learnedRules}`;
+  }
+
+  /**
+   * ユーザーが仕訳を修正した際に学習データとして記録する
+   */
+  async recordJournalCorrection(
+    original: JournalEntry,
+    corrected: JournalEntry,
+    industry: string,
+    reason?: string,
+  ): Promise<void> {
+    await journalLearningService.recordCorrection(original, corrected, industry, reason);
   }
 
   private recordUsage(result: any, purpose: string): void {
@@ -253,7 +328,5 @@ JSONのみ返してください：
   "notes": ["読み取り時の注意点や推定した項目"]
 }`;
 }
-
-const RECEIPT_PROMPT = getReceiptPrompt();
 
 export const receiptService = new ReceiptService();

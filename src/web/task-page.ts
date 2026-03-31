@@ -71,7 +71,7 @@ ${flashMsg}
   <div class="card toolbar-card">
     <form action="/tasks/generate-monthly" method="post" class="gen-form">
       <div class="gen-info">
-        <span class="gen-icon">📅</span>
+        <span class="gen-icon"></span>
         <div>
           <div class="gen-title">月次タスク一括生成</div>
           <div class="gen-desc">経理・財務の定型業務タスクを時系列で自動生成</div>
@@ -131,7 +131,7 @@ ${googleAuthed ? `
   <!-- Todo -->
   <div class="kanban-col" data-status="todo" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
     <div class="kanban-header kanban-header--todo">
-      <span class="kanban-dot" style="background:#6366f1"></span>
+      <span class="kanban-dot" style="background:#2298ae"></span>
       未着手 <span class="kanban-count">${todoTasks.length}</span>
     </div>
     <div class="kanban-list">
@@ -143,7 +143,7 @@ ${todoTasks.length === 0 ? '<div class="kanban-empty">タスクなし</div>' :
   <!-- In Progress -->
   <div class="kanban-col" data-status="in_progress" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
     <div class="kanban-header kanban-header--prog">
-      <span class="kanban-dot" style="background:#f59e0b"></span>
+      <span class="kanban-dot" style="background:#5ab4c4"></span>
       進行中 <span class="kanban-count">${inProgressTasks.length}</span>
     </div>
     <div class="kanban-list">
@@ -155,7 +155,7 @@ ${inProgressTasks.length === 0 ? '<div class="kanban-empty">タスクなし</div
   <!-- Done -->
   <div class="kanban-col" data-status="done" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
     <div class="kanban-header kanban-header--done">
-      <span class="kanban-dot" style="background:#22c55e"></span>
+      <span class="kanban-dot" style="background:#2298ae"></span>
       完了 <span class="kanban-count">${doneTasks.length}</span>
     </div>
     <div class="kanban-list">
@@ -222,10 +222,10 @@ ${SYNC_AND_DND_SCRIPT}
 }
 
 function taskCard(t: Task, googleAuthed: boolean): string {
-  const prColor = t.priority === 'high' ? '#ef4444' : t.priority === 'medium' ? '#f59e0b' : '#22c55e';
+  const prColor = t.priority === 'high' ? '#ef4444' : t.priority === 'medium' ? '#5ab4c4' : '#2298ae';
   const prLabel = t.priority === 'high' ? '高' : t.priority === 'medium' ? '中' : '低';
   const catLabel = ({ finance: '財務', accounting: '会計', cashflow: '資金繰り', plan: '事業計画', general: '一般' })[t.category] || t.category;
-  const srcIcon = t.source === 'ai_analysis' ? '🤖' : t.source === 'chat' ? '💬' : '✏️';
+  const srcIcon = t.source === 'ai_analysis' ? '' : t.source === 'chat' ? '' : '';
   const date = t.dueDate
     ? new Date(t.dueDate).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' }) + ' 期日'
     : new Date(t.createdAt).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' });
@@ -265,9 +265,9 @@ const TASK_CSS = `
 .ts-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center}
 .ts-num{font-size:28px;font-weight:800;letter-spacing:-0.02em}
 .ts-label{font-size:12px;color:var(--text2);font-weight:600;margin-top:2px}
-.ts-todo .ts-num{color:#6366f1}
-.ts-prog .ts-num{color:#f59e0b}
-.ts-done .ts-num{color:#22c55e}
+.ts-todo .ts-num{color:#2298ae}
+.ts-prog .ts-num{color:#5ab4c4}
+.ts-done .ts-num{color:#2298ae}
 .ts-high .ts-num{color:#ef4444}
 
 .task-toolbar{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
@@ -289,8 +289,8 @@ const TASK_CSS = `
 .kanban-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .kanban-count{font-size:12px;font-weight:600;color:var(--text2);margin-left:auto}
 .kanban-header--todo{background:#eef2ff;color:#4338ca}
-.kanban-header--prog{background:#fffbeb;color:#92400e}
-.kanban-header--done{background:#f0fdf4;color:#166534}
+.kanban-header--prog{background:#ecf6f8;color:#1b7f8e}
+.kanban-header--done{background:#ecf6f8;color:#1b7f8e}
 .kanban-list{display:flex;flex-direction:column;gap:8px}
 .kanban-empty{text-align:center;padding:20px;font-size:13px;color:var(--text2)}
 
@@ -336,7 +336,7 @@ const TASK_CSS = `
 .edit-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
 
 .flash{padding:12px 16px;border-radius:8px;font-size:13px;font-weight:600;margin-bottom:16px}
-.flash--success{background:#f0fdf4;border:1px solid #bbf7d0;color:#166534}
+.flash--success{background:#ecf6f8;border:1px solid #a8d8e0;color:#1b7f8e}
 
 .sync-toolbar{margin-bottom:20px}
 .sync-row{display:flex;gap:0;padding:0}
@@ -349,7 +349,7 @@ const TASK_CSS = `
 .sync-desc code{background:var(--bg);padding:1px 6px;border-radius:4px;font-size:11px}
 .sync-info{flex:1}
 .sync-status{font-size:11px;font-weight:700;padding:4px 10px;border-radius:6px;white-space:nowrap}
-.sync-status--ok{background:#f0fdf4;color:#166534}
+.sync-status--ok{background:#ecf6f8;color:#1b7f8e}
 .sync-status--off{background:#f3f4f6;color:#6b7280}
 
 @media(max-width:768px){

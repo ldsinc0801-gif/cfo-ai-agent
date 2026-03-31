@@ -158,13 +158,13 @@ ${renderSidebar('dashboard', meta.companyName)}
     <!-- KPI Row -->
     <div class="kpi-row">
       ${options.periodTotals
-        ? kpiCard('売上高（期間合計）', formatCurrency(options.periodTotals.revenue), null, '📊')
-        : kpiCard('売上高', formatCurrency(es.monthlyRevenue), es.revenueChangeRate, '📊')}
+        ? kpiCard('売上高（期間合計）', formatCurrency(options.periodTotals.revenue), null, '')
+        : kpiCard('売上高', formatCurrency(es.monthlyRevenue), es.revenueChangeRate, '')}
       ${options.periodTotals
-        ? kpiCard('経常利益（期間合計）', formatCurrency(options.periodTotals.ordinaryIncome), null, '💰')
-        : kpiCard('経常利益', formatCurrency(es.monthlyProfit), es.profitChangeRate, '💰')}
-      ${kpiCard('現預金残高', formatCurrency(options.periodTotals ? options.periodTotals.cashAndDeposits : es.cashBalance), cf.cashChangeRate !== 0 ? cf.cashChangeRate : null, '🏦')}
-      ${kpiCard('資金繰り余力', cf.cashRunwayMonths >= 999 ? '十分' : cf.cashRunwayMonths.toFixed(1) + 'か月', null, '⏳', `risk-${cf.shortageRisk}`)}
+        ? kpiCard('経常利益（期間合計）', formatCurrency(options.periodTotals.ordinaryIncome), null, '')
+        : kpiCard('経常利益', formatCurrency(es.monthlyProfit), es.profitChangeRate, '')}
+      ${kpiCard('現預金残高', formatCurrency(options.periodTotals ? options.periodTotals.cashAndDeposits : es.cashBalance), cf.cashChangeRate !== 0 ? cf.cashChangeRate : null, '')}
+      ${kpiCard('資金繰り余力', cf.cashRunwayMonths >= 999 ? '十分' : cf.cashRunwayMonths.toFixed(1) + 'か月', null, '', `risk-${cf.shortageRisk}`)}
     </div>
 
     <!-- Main Trend Chart (wide) -->
@@ -173,7 +173,7 @@ ${renderSidebar('dashboard', meta.companyName)}
         <h3>売上・利益推移</h3>
         <div style="display:flex;align-items:center;gap:16px">
           <span class="card-sub" style="display:flex;align-items:center;gap:5px"><span style="display:inline-block;width:20px;height:2px;border-top:2px dashed #b0b0c0"></span> 目標</span>
-          <span class="card-sub" style="display:flex;align-items:center;gap:5px"><span style="display:inline-block;width:20px;height:2.5px;background:#6366f1;border-radius:1px"></span> 実績</span>
+          <span class="card-sub" style="display:flex;align-items:center;gap:5px"><span style="display:inline-block;width:20px;height:2.5px;background:#2298ae;border-radius:1px"></span> 実績</span>
           <span class="card-sub">${trendPeriodLabel}</span>
         </div>
       </div>
@@ -350,7 +350,7 @@ new Chart(document.getElementById('expenseChart'),{
   type:'doughnut',
   data:{
     labels:${expLabels},
-    datasets:[{data:${expValues},backgroundColor:['#6366f1','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#d1d5db'],borderWidth:0,hoverOffset:6}]
+    datasets:[{data:${expValues},backgroundColor:['#2298ae','#2298ae','#5ab4c4','#ef4444','#8b5cf6','#06b6d4','#d1d5db'],borderWidth:0,hoverOffset:6}]
   },
   options:{
     responsive:true,maintainAspectRatio:false,cutout:'65%',
@@ -372,9 +372,9 @@ new Chart(document.getElementById('trendChart'),{
       {label:'粗利目標',data:${JSON.stringify(targetGrossProfit)},borderColor:'rgba(139,92,246,0.25)',backgroundColor:'rgba(139,92,246,0.03)',fill:true,tension:0.4,borderWidth:1.5,borderDash:[8,4],pointRadius:0,pointHoverRadius:4,pointBackgroundColor:'rgba(139,92,246,0.4)',order:5},
       {label:'利益目標',data:${JSON.stringify(targetProfit)},borderColor:'rgba(34,197,94,0.3)',backgroundColor:'rgba(34,197,94,0.04)',fill:true,tension:0.4,borderWidth:1.5,borderDash:[8,4],pointRadius:0,pointHoverRadius:4,pointBackgroundColor:'rgba(34,197,94,0.4)',order:6},
       // 実績ライン（前面に表示）
-      {label:'売上高',data:${JSON.stringify(trendRevenue)},borderColor:'#6366f1',backgroundColor:'rgba(99,102,241,0.12)',fill:true,tension:0.4,borderWidth:2.5,pointRadius:5,pointHoverRadius:8,pointBackgroundColor:'#fff',pointBorderColor:'#6366f1',pointBorderWidth:2.5,order:1},
+      {label:'売上高',data:${JSON.stringify(trendRevenue)},borderColor:'#2298ae',backgroundColor:'rgba(99,102,241,0.12)',fill:true,tension:0.4,borderWidth:2.5,pointRadius:5,pointHoverRadius:8,pointBackgroundColor:'#fff',pointBorderColor:'#2298ae',pointBorderWidth:2.5,order:1},
       {label:'売上総利益',data:${JSON.stringify(trendGrossProfit)},borderColor:'#8b5cf6',backgroundColor:'rgba(139,92,246,0.08)',fill:true,tension:0.4,borderWidth:2,pointRadius:5,pointHoverRadius:8,pointBackgroundColor:'#fff',pointBorderColor:'#8b5cf6',pointBorderWidth:2,order:2},
-      {label:'経常利益',data:${JSON.stringify(trendProfit)},borderColor:'#22c55e',backgroundColor:'rgba(34,197,94,0.1)',fill:true,tension:0.4,borderWidth:2,pointRadius:5,pointHoverRadius:8,pointBackgroundColor:'#fff',pointBorderColor:'#22c55e',pointBorderWidth:2,order:3}
+      {label:'経常利益',data:${JSON.stringify(trendProfit)},borderColor:'#2298ae',backgroundColor:'rgba(34,197,94,0.1)',fill:true,tension:0.4,borderWidth:2,pointRadius:5,pointHoverRadius:8,pointBackgroundColor:'#fff',pointBorderColor:'#2298ae',pointBorderWidth:2,order:3}
     ]
   },
   options:{
@@ -425,8 +425,8 @@ new Chart(document.getElementById('costTrendChart'),{
   data:{
     labels:${JSON.stringify(trendMonths)},
     datasets:[
-      {label:'販管費',data:${JSON.stringify(trendSGA)},borderColor:'#f59e0b',backgroundColor:'rgba(245,158,11,0.15)',fill:true,tension:0.4,borderWidth:2,pointRadius:3},
-      {label:'営業利益',data:${JSON.stringify(trendOperating)},borderColor:'#22c55e',backgroundColor:'rgba(34,197,94,0.15)',fill:true,tension:0.4,borderWidth:2,pointRadius:3}
+      {label:'販管費',data:${JSON.stringify(trendSGA)},borderColor:'#5ab4c4',backgroundColor:'rgba(245,158,11,0.15)',fill:true,tension:0.4,borderWidth:2,pointRadius:3},
+      {label:'営業利益',data:${JSON.stringify(trendOperating)},borderColor:'#2298ae',backgroundColor:'rgba(34,197,94,0.15)',fill:true,tension:0.4,borderWidth:2,pointRadius:3}
     ]
   },
   options:{
@@ -442,7 +442,7 @@ new Chart(document.getElementById('radarChart'),{
   type:'radar',
   data:{
     labels:${evalLabels},
-    datasets:[{data:${evalScores},fill:true,backgroundColor:'rgba(99,102,241,0.15)',borderColor:'#6366f1',borderWidth:2,pointBackgroundColor:'#6366f1',pointRadius:4,pointHoverRadius:6}]
+    datasets:[{data:${evalScores},fill:true,backgroundColor:'rgba(99,102,241,0.15)',borderColor:'#2298ae',borderWidth:2,pointBackgroundColor:'#2298ae',pointRadius:4,pointHoverRadius:6}]
   },
   options:{
     responsive:true,maintainAspectRatio:false,
@@ -481,7 +481,7 @@ function kpiCard(label: string, value: string, changeRate: number | null, icon: 
   }
   return `
       <div class="kpi-card">
-        <div class="kpi-icon">${icon}</div>
+        ${icon ? `<div class="kpi-icon">${icon}</div>` : ''}
         <div class="kpi-info">
           <div class="kpi-label">${label}</div>
           <div class="kpi-value ${extraClass}">${value}</div>
@@ -495,7 +495,7 @@ function gaugeBar(label: string, value: number | null, max: number, suffix: stri
     return `<div class="gauge"><div class="gauge-head"><span>${label}</span><strong>—</strong></div><div class="gauge-track"><div class="gauge-fill" style="width:0"></div></div></div>`;
   }
   const pct = Math.min(100, Math.max(0, (value / max) * 100));
-  const color = pct >= 60 ? '#22c55e' : pct >= 35 ? '#f59e0b' : '#ef4444';
+  const color = pct >= 60 ? '#2298ae' : pct >= 35 ? '#5ab4c4' : '#ef4444';
   return `<div class="gauge"><div class="gauge-head"><span>${label}</span><strong>${value.toFixed(1)}${suffix}</strong></div><div class="gauge-track"><div class="gauge-fill" style="width:${pct}%;background:${color}"></div></div></div>`;
 }
 
@@ -576,15 +576,15 @@ const CSS = `
 :root{
   --sidebar-w:240px;
   --header-h:60px;
-  --bg:#f4f5f7;
+  --bg:#ffffff;
   --card:#fff;
   --text:#1f2937;
   --text2:#6b7280;
   --border:#e5e7eb;
-  --primary:#6366f1;
+  --primary:#2298ae;
   --primary-light:rgba(99,102,241,0.1);
-  --green:#22c55e;
-  --orange:#f59e0b;
+  --green:#2298ae;
+  --orange:#5ab4c4;
   --red:#ef4444;
   --radius:12px;
 }
@@ -594,7 +594,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","H
 /* === Sidebar === */
 .sidebar{
   position:fixed;top:0;left:0;bottom:0;width:var(--sidebar-w);
-  background:#1e1e2d;color:#a2a3b7;
+  background:#1b7f8e;color:#c4e4ea;
   display:flex;flex-direction:column;z-index:100;
   transition:transform .25s ease;
 }
@@ -603,19 +603,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","H
   padding:20px 20px 16px;color:#fff;font-size:18px;font-weight:700;letter-spacing:-0.02em;
 }
 .sidebar-nav{flex:1;overflow-y:auto;padding:0 12px}
-.nav-section{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#565674;padding:20px 12px 8px}
+.nav-section{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#68b3be;padding:20px 12px 8px}
 .nav-item{
   display:flex;align-items:center;gap:10px;
   padding:10px 12px;border-radius:8px;
-  color:#a2a3b7;text-decoration:none;font-size:14px;font-weight:500;
+  color:#c4e4ea;text-decoration:none;font-size:14px;font-weight:500;
   transition:all .15s;margin-bottom:2px;
 }
 .nav-item:hover{background:rgba(255,255,255,0.06);color:#fff}
 .nav-item.active{background:var(--primary);color:#fff}
 .nav-item.nav-disabled{opacity:0.4;pointer-events:none}
-.sidebar-footer{padding:16px 20px;border-top:1px solid #2d2d44}
-.sidebar-company{font-size:13px;color:#d1d5db;font-weight:600}
-.sidebar-version{font-size:11px;color:#565674;margin-top:2px}
+.sidebar-footer{padding:16px 20px;border-top:1px solid rgba(255,255,255,0.15)}
+.sidebar-company{font-size:13px;color:#fff;font-weight:600}
+.sidebar-version{font-size:11px;color:#68b3be;margin-top:2px}
 
 /* === Main === */
 .main{margin-left:var(--sidebar-w)}
@@ -663,8 +663,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","H
 .report-dropdown.open .report-menu{display:block}
 .report-menu-item{display:flex;align-items:center;gap:8px;padding:10px 16px;font-size:13px;font-weight:500;color:var(--text);text-decoration:none;transition:background .1s}
 .report-menu-item:hover{background:var(--bg)}
-.usage-badge{display:flex;align-items:center;gap:5px;padding:5px 12px;border-radius:8px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:11px;font-weight:600;color:#166534;cursor:default;white-space:nowrap;transition:all .2s}
-.usage-badge:hover{background:#dcfce7}
+.usage-badge{display:flex;align-items:center;gap:5px;padding:5px 12px;border-radius:8px;background:#ecf6f8;border:1px solid #a8d8e0;font-size:11px;font-weight:600;color:#1b7f8e;cursor:default;white-space:nowrap;transition:all .2s}
+.usage-badge:hover{background:#d5eef3}
 .menu-toggle{display:none;background:none;border:none;cursor:pointer;color:var(--text);padding:4px}
 
 /* === Content === */
@@ -672,7 +672,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","H
 
 /* === Welcome === */
 .welcome-card{
-  background:linear-gradient(135deg,#6366f1 0%,#818cf8 100%);
+  background:linear-gradient(135deg,#2298ae 0%,#4dbdcf 100%);
   border-radius:var(--radius);padding:28px 32px;margin-bottom:24px;color:#fff;
 }
 .welcome-card h2{font-size:20px;font-weight:700;margin-bottom:8px}
@@ -728,9 +728,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","H
 .insight-section{margin-bottom:14px}
 .insight-section:last-child{margin-bottom:0}
 .insight-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px;padding:2px 8px;border-radius:4px;display:inline-block}
-.insight-label--good{background:#dcfce7;color:#166534}
-.insight-label--warn{background:#fef3c7;color:#92400e}
-.insight-label--action{background:#dbeafe;color:#1e40af}
+.insight-label--good{background:#d5eef3;color:#1b7f8e}
+.insight-label--warn{background:#d5eef3;color:#1b7f8e}
+.insight-label--action{background:#d5eef3;color:#1b7f8e}
 .insight-item{font-size:13px;padding:4px 0;padding-left:14px;position:relative;line-height:1.55}
 .insight-item::before{content:'';position:absolute;left:0;top:10px;width:6px;height:6px;border-radius:50%}
 .insight-item--good::before{background:var(--green)}
@@ -754,9 +754,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","H
 /* Pill */
 .pill{display:inline-block;padding:4px 14px;border-radius:980px;font-size:12px;font-weight:600}
 .pill--sm{padding:3px 10px;font-size:11px}
-.pill--excellent{background:#dbeafe;color:#1e40af}
-.pill--good{background:#dcfce7;color:#166534}
-.pill--fair{background:#fef3c7;color:#92400e}
+.pill--excellent{background:#d5eef3;color:#1b7f8e}
+.pill--good{background:#d5eef3;color:#1b7f8e}
+.pill--fair{background:#d5eef3;color:#1b7f8e}
 .pill--warning{background:#fed7aa;color:#9a3412}
 .pill--critical{background:#fecaca;color:#991b1b}
 
