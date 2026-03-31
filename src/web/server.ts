@@ -33,6 +33,10 @@ import { logger } from '../utils/logger.js';
 import { isSupabaseAvailable } from '../clients/supabase.js';
 import * as repo from '../repositories/supabase-repository.js';
 import { learningService } from '../services/learning-service.js';
+import { seedDemoData } from '../demo-data.js';
+
+// デモデータの初期化
+seedDemoData();
 
 const anthropicService = new AnthropicAnalysisService();
 
