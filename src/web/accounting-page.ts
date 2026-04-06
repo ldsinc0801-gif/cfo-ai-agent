@@ -212,6 +212,66 @@ document.querySelectorAll('.edit-select').forEach(function(sel){
   });
 });
 
+function sendChatCorrection(){
+  var input = document.getElementById('chatInput');
+  var msg = input.value.trim();
+  if(!msg) return;
+  input.value = '';
+
+  var chatArea = document.getElementById('chatMessages');
+  chatArea.innerHTML += '<div class="chat-msg chat-msg-user">'+msg+'</div>';
+  chatArea.innerHTML += '<div class="chat-loading" id="chatLoading">AIが解析中...</div>';
+  chatArea.scrollTop = chatArea.scrollHeight;
+
+  // 現在の仕訳データを収集
+  var rows = document.querySelectorAll('tr[data-original]');
+  var entries = [];
+  rows.forEach(function(tr){
+    var entry = JSON.parse(tr.dataset.original);
+    entry.debitAccount = tr.querySelector('.edit-debit').value;
+    entry.creditAccount = tr.querySelector('.edit-credit').value;
+    entries.push(entry);
+  });
+
+  fetch('/agent/accounting/chat-correct', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({entries:entries, message:msg})
+  }).then(function(r){return r.json()}).then(function(data){
+    var loading = document.getElementById('chatLoading');
+    if(loading) loading.remove();
+
+    if(data.success && data.corrections && data.corrections.length > 0){
+      // 修正を適用
+      data.corrections.forEach(function(c){
+        var tr = document.querySelector('tr[data-idx="'+c.index+'"]');
+        if(!tr) return;
+        var sel = tr.querySelector(c.field === 'debitAccount' ? '.edit-debit' : '.edit-credit');
+        if(sel){
+          sel.value = c.newValue;
+          sel.style.background = '#d5eef3';
+          setTimeout(function(){ sel.style.background = ''; }, 2000);
+        }
+        // data-originalを更新
+        var orig = JSON.parse(tr.dataset.original);
+        orig[c.field] = c.newValue;
+        tr.dataset.original = JSON.stringify(orig);
+      });
+      chatArea.innerHTML += '<div class="chat-msg chat-msg-ai">'+data.aiMessage+'</div>';
+    } else if(data.success){
+      chatArea.innerHTML += '<div class="chat-msg chat-msg-ai">'+(data.aiMessage || '修正対象が見つかりませんでした')+'</div>';
+    } else {
+      chatArea.innerHTML += '<div class="chat-msg chat-msg-ai error">'+(data.error || 'エラーが発生しました')+'</div>';
+    }
+    chatArea.scrollTop = chatArea.scrollHeight;
+  }).catch(function(err){
+    var loading = document.getElementById('chatLoading');
+    if(loading) loading.remove();
+    chatArea.innerHTML += '<div class="chat-msg chat-msg-ai error">通信エラーが発生しました</div>';
+    chatArea.scrollTop = chatArea.scrollHeight;
+  });
+}
+
 function saveCorrection(idx){
   var tr = document.querySelector('tr[data-idx="'+idx+'"]');
   var original = JSON.parse(tr.dataset.original);
@@ -313,6 +373,19 @@ ${entries.map((e, i) => `
     </div>
     <div id="correctionMsg" class="correction-msg" style="display:none"></div>
 
+    <!-- Chat Correction -->
+    <div class="chat-correct-area">
+      <div class="chat-correct-header">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+        仕訳の修正（チャット）
+      </div>
+      <div class="chat-messages" id="chatMessages"></div>
+      <div class="chat-input-row">
+        <input type="text" id="chatInput" class="chat-input" placeholder="例: 2件目の借方を旅費交通費にして" onkeydown="if(event.key==='Enter')sendChatCorrection()"/>
+        <button class="btn-primary btn-sm" onclick="sendChatCorrection()">送信</button>
+      </div>
+    </div>
+
     <!-- Actions -->
     <div class="result-actions">
       <form action="/agent/accounting/send-freee" method="post" style="display:inline">
@@ -387,6 +460,19 @@ const PAGE_CSS = `
 .correction-msg{padding:10px 16px;border-radius:8px;font-size:13px;margin-top:12px;transition:opacity .3s}
 .correction-ok{background:#d5eef3;color:#1b7f8e;border:1px solid #8dd0da}
 .correction-err{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+
+.chat-correct-area{margin-top:20px;border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.chat-correct-header{padding:12px 16px;background:var(--bg);font-size:13px;font-weight:600;color:var(--text2);display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border)}
+.chat-messages{max-height:240px;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:8px}
+.chat-messages:empty::before{content:'勘定科目の修正をチャットで指示できます';color:var(--text2);font-size:12px;text-align:center;padding:20px 0}
+.chat-input-row{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--border);background:var(--bg)}
+.chat-input{flex:1;border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:13px;outline:none;transition:border-color .2s}
+.chat-input:focus{border-color:var(--primary)}
+.chat-msg{padding:8px 12px;border-radius:10px;font-size:13px;max-width:85%;line-height:1.5;word-break:break-word}
+.chat-msg-user{background:var(--primary);color:#fff;align-self:flex-end;border-bottom-right-radius:4px}
+.chat-msg-ai{background:#ecf6f8;color:#1b7f8e;align-self:flex-start;border-bottom-left-radius:4px}
+.chat-msg-ai.error{background:#fef2f2;color:#991b1b}
+.chat-loading{align-self:flex-start;color:var(--text2);font-size:12px;padding:8px 0}
 
 @media(max-width:768px){
   .acc-grid{grid-template-columns:1fr}

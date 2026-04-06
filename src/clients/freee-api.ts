@@ -57,11 +57,15 @@ export class FreeeApiClient {
   private handleApiError(error: unknown): Error {
     if (error instanceof AxiosError) {
       const status = error.response?.status;
-      const message = error.response?.data?.message || error.message;
+      const data = error.response?.data;
+      const message = data?.message || error.message;
+      const errors = data?.errors ? JSON.stringify(data.errors) : '';
+      const detail = errors ? `${message} [${errors}]` : message;
 
       switch (status) {
         case 400:
-          return new FreeeApiError(`リクエストが不正です: ${message}`, status);
+          logger.error(`freee API 400エラー詳細:`, { message, errors: data?.errors, body: error.config?.data });
+          return new FreeeApiError(`リクエストが不正です: ${detail}`, status);
         case 401:
           return new FreeeApiError('認証に失敗しました。トークンを再取得してください。', status);
         case 403:

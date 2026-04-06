@@ -16,8 +16,24 @@ function getCompanyNameFromToken(): string {
   return '';
 }
 
+function getDemoModeInfo(): { enabled: boolean; companyName: string } {
+  try {
+    const demoPath = path.resolve('data/demo-mode.json');
+    if (fs.existsSync(demoPath)) {
+      const data = JSON.parse(fs.readFileSync(demoPath, 'utf-8'));
+      if (data.enabled && data.profileId) {
+        // プロファイル名を簡易取得
+        const names: Record<string, string> = { consulting: '株式会社フローリッシュ', restaurant: '株式会社さくら食堂', construction: '大和建設株式会社' };
+        return { enabled: true, companyName: names[data.profileId] || 'デモ' };
+      }
+    }
+  } catch { /* ignore */ }
+  return { enabled: false, companyName: '' };
+}
+
 export function renderSidebar(active: string, companyName?: string): string {
-  const displayName = companyName || getCompanyNameFromToken() || 'AI CFO';
+  const demo = getDemoModeInfo();
+  const displayName = demo.enabled ? demo.companyName : (companyName || getCompanyNameFromToken() || 'AI CFO');
   const menu = [
     { id: 'dashboard', href: '/', icon: ICONS.home, label: 'ダッシュボード' },
     { id: 'chat', href: '/chat', icon: ICONS.chat, label: 'AIチャット' },
@@ -30,6 +46,7 @@ export function renderSidebar(active: string, companyName?: string): string {
     { id: 'plan', href: '/plan', icon: ICONS.star, label: '事業計画AI' },
     { id: 'accounting', href: '/agent/accounting', icon: ICONS.calculator, label: '会計AI' },
     { id: 'funding', href: '/agent/funding', icon: ICONS.bank, label: '資金調達AI' },
+    { id: 'secretary', href: '/agent/secretary', icon: ICONS.file, label: '秘書AI' },
   ];
 
   const settings = [
@@ -42,7 +59,9 @@ export function renderSidebar(active: string, companyName?: string): string {
   <div class="sidebar-brand">
     <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
     <span>AI CFO</span>
+    ${demo.enabled ? '<span style="font-size:9px;background:#f59e0b;color:#fff;padding:2px 6px;border-radius:4px;margin-left:4px;font-weight:700">DEMO</span>' : ''}
   </div>
+  ${demo.enabled ? `<div style="padding:4px 16px 8px;font-size:11px;color:#f59e0b;font-weight:600">${esc(displayName)}</div>` : ''}
   <nav class="sidebar-nav">
     <div class="nav-section">メニュー</div>
 ${menu.map(i => navItem(i, active)).join('\n')}

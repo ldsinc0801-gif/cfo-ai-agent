@@ -73,6 +73,193 @@ export interface RatingPageOptions {
   savedAt?: string;
 }
 
+/** 分析中ローディング画面（Flourish Japan パーティクルアニメーション） */
+export function renderAnalysisLoadingHTML(source: string): string {
+  const label = source === 'freee' ? 'freeeデータ' : source === 'demo' ? 'デモデータ' : '決算書';
+  const apiUrl = `/api/finance/${source}`;
+
+  const bodyHTML = `
+<style>
+.loading-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: #1a7f8f;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  transition: opacity 0.6s;
+}
+.loading-overlay.fade-out { opacity: 0; }
+
+canvas#particleCanvas {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none;
+}
+
+.loading-content {
+  position: relative; z-index: 1;
+  text-align: center; color: #fff;
+}
+.loading-title {
+  font-size: 18px; font-weight: 600;
+  margin-top: 40px; letter-spacing: 2px;
+}
+.loading-sub {
+  font-size: 13px; opacity: 0.8; margin-top: 8px;
+}
+.loading-logo {
+  font-size: 24px; font-weight: 300; letter-spacing: 4px;
+  margin-bottom: 8px; font-family: 'Georgia', serif;
+}
+.loading-dots span {
+  display: inline-block; width: 6px; height: 6px;
+  background: #fff; border-radius: 50%; margin: 0 3px;
+  animation: loadDot 1.4s infinite ease-in-out both;
+}
+.loading-dots span:nth-child(1) { animation-delay: -0.32s; }
+.loading-dots span:nth-child(2) { animation-delay: -0.16s; }
+@keyframes loadDot {
+  0%, 80%, 100% { transform: scale(0); }
+  40% { transform: scale(1); }
+}
+
+.loading-error {
+  display: none; background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.3); border-radius: 12px;
+  padding: 20px 28px; margin-top: 24px; max-width: 400px;
+}
+.loading-error h4 { margin: 0 0 8px; font-size: 15px; }
+.loading-error p { margin: 0; font-size: 13px; opacity: 0.9; }
+.loading-error a { color: #fff; text-decoration: underline; }
+</style>
+
+<div class="loading-overlay" id="loadingOverlay">
+  <canvas id="particleCanvas"></canvas>
+  <div class="loading-content">
+    <div class="loading-logo">Flourish Japan</div>
+    <div class="loading-dots"><span></span><span></span><span></span></div>
+    <div class="loading-title" id="loadingStatus">財務データを分析中...</div>
+    <div class="loading-sub">${esc(label)}からAIが格付分析を実行しています</div>
+    <div class="loading-error" id="loadingError">
+      <h4>分析に失敗しました</h4>
+      <p id="errorMsg"></p>
+      <p style="margin-top:12px"><a href="/agent/finance">戻る</a></p>
+    </div>
+  </div>
+</div>
+
+<script>
+// === Particle Animation ===
+(function() {
+  var canvas = document.getElementById('particleCanvas');
+  var ctx = canvas.getContext('2d');
+  var particles = [];
+  var W, H, cx, cy;
+
+  function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    cx = W / 2; cy = H / 2 - 30;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  // Particle: starts near center and expands outward
+  function spawn() {
+    var angle = Math.random() * Math.PI * 2;
+    var speed = 0.3 + Math.random() * 1.5;
+    var r = 1 + Math.random() * 4;
+    return {
+      x: cx + (Math.random() - 0.5) * 40,
+      y: cy + (Math.random() - 0.5) * 40,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      r: r,
+      life: 1,
+      decay: 0.002 + Math.random() * 0.004,
+      maxR: r + Math.random() * 3,
+    };
+  }
+
+  // Initial burst
+  for (var i = 0; i < 80; i++) particles.push(spawn());
+
+  function animate() {
+    ctx.clearRect(0, 0, W, H);
+
+    // Spawn new particles
+    if (particles.length < 150) {
+      for (var s = 0; s < 2; s++) particles.push(spawn());
+    }
+
+    for (var i = particles.length - 1; i >= 0; i--) {
+      var p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.life -= p.decay;
+      // Grow then shrink
+      var currentR = p.life > 0.5 ? p.maxR * (1 - p.life) * 2 : p.maxR * p.life * 2;
+      currentR = Math.max(0.5, currentR);
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, currentR, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,' + (p.life * 0.7) + ')';
+      ctx.fill();
+
+      if (p.life <= 0) {
+        particles.splice(i, 1);
+      }
+    }
+
+    // Center glow
+    var grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, 60);
+    grad.addColorStop(0, 'rgba(255,255,255,0.25)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(cx - 60, cy - 60, 120, 120);
+
+    requestAnimationFrame(animate);
+  }
+  animate();
+})();
+
+// === API Call ===
+(function() {
+  var status = document.getElementById('loadingStatus');
+  var steps = ['freeeからデータを取得中...', '財務指標を計算中...', 'AIが格付分析を実行中...', '結果をまとめています...'];
+  var idx = 0;
+  var stepTimer = setInterval(function() {
+    idx++;
+    if (idx < steps.length) status.textContent = steps[idx];
+  }, 3000);
+
+  fetch('${apiUrl}')
+    .then(function(r) {
+      clearInterval(stepTimer);
+      return r.text().then(function(html) {
+        if (!r.ok) {
+          // サーバーがHTMLエラーページを返すので直接表示
+          document.open();
+          document.write(html);
+          document.close();
+          return;
+        }
+        status.textContent = '完了！';
+        setTimeout(function() {
+          document.open();
+          document.write(html);
+          document.close();
+        }, 600);
+      });
+    })
+    .catch(function() {
+      clearInterval(stepTimer);
+      // ネットワークエラー等の場合は直接遷移
+      window.location.href = '/';
+    });
+})();
+</script>`;
+
+  return agentPageShell({ active: 'finance', title: '分析中...', bodyHTML });
+}
+
 export function renderRatingHTML(
   rating: BankRatingResult,
   additional: AdditionalMetrics,

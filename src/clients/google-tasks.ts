@@ -56,7 +56,7 @@ class GoogleTasksClient {
       client_id: process.env.GOOGLE_CLIENT_ID || '',
       redirect_uri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/auth/google/callback',
       response_type: 'code',
-      scope: 'https://www.googleapis.com/auth/tasks',
+      scope: 'https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/gmail.compose',
       access_type: 'offline',
       prompt: 'consent',
     });

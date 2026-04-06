@@ -34,7 +34,11 @@ export function renderHistoryHTML(analyses: AnalysisSummary[]): string {
 .hc-metric{flex:1}
 .hc-metric-label{font-size:11px;color:var(--text2);font-weight:600}
 .hc-metric-val{font-size:14px;font-weight:700;margin-top:2px}
-.hc-actions{display:flex;gap:6px;margin-top:12px}
+.history-card-wrap{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);transition:all .2s;overflow:hidden}
+.history-card-wrap:hover{border-color:var(--primary);box-shadow:0 4px 12px rgba(99,102,241,0.1);transform:translateY(-1px)}
+.history-card-wrap .history-card{border:none;border-radius:0}
+.history-card-wrap .history-card:hover{box-shadow:none;transform:none}
+.hc-actions{display:flex;gap:6px;padding:0 20px 16px}
 .hc-action{padding:4px 10px;border-radius:6px;border:1px solid var(--border);font-size:11px;font-weight:600;color:var(--text2);text-decoration:none;background:var(--card);transition:all .15s}
 .hc-action:hover{border-color:var(--primary);color:var(--primary)}
 .hc-action--del:hover{border-color:var(--red);color:var(--red)}
@@ -49,7 +53,10 @@ export function renderHistoryHTML(analyses: AnalysisSummary[]): string {
     <h2>分析履歴</h2>
     <span class="history-count">${analyses.length}件の分析結果</span>
   </div>
-  <a href="/agent/finance" class="btn-primary">＋ 新規分析</a>
+  <div style="display:flex;gap:8px;align-items:center">
+    ${analyses.length > 0 ? `<form action="/agent/finance/history/delete-all" method="post" style="margin:0" onsubmit="return confirm('全ての分析履歴を削除しますか？')"><button type="submit" class="btn-secondary btn-sm" style="cursor:pointer;color:var(--red);border-color:var(--red)">全件削除</button></form>` : ''}
+    <a href="/agent/finance" class="btn-primary">＋ 新規分析</a>
+  </div>
 </div>
 
 ${analyses.length === 0 ? `
@@ -62,35 +69,38 @@ ${analyses.length === 0 ? `
 ` : `
 <div class="history-grid">
 ${analyses.map(a => `
-  <a href="/agent/finance/history/${esc(a.id)}" class="history-card">
-    <div class="hc-top">
-      <div class="hc-rank" style="background:${rankColor(a.rank)}">${esc(a.rank)}</div>
-      <div class="hc-score">
-        <div class="hc-score-val">${a.totalScore}<span style="font-size:14px;font-weight:500;color:var(--text2)"> / 129</span></div>
-        <div class="hc-score-max">${esc(a.rankLabel)}</div>
+  <div class="history-card-wrap">
+    <a href="/agent/finance/history/${esc(a.id)}" class="history-card">
+      <div class="hc-top">
+        <div class="hc-rank" style="background:${rankColor(a.rank)}">${esc(a.rank)}</div>
+        <div class="hc-score">
+          <div class="hc-score-val">${a.totalScore}<span style="font-size:14px;font-weight:500;color:var(--text2)"> / 129</span></div>
+          <div class="hc-score-max">${esc(a.rankLabel)}</div>
+        </div>
       </div>
-    </div>
-    <div class="hc-meta">
-      <div class="hc-filename">${a.fileName ? esc(a.fileName) : 'freeeデータ分析'}</div>
-      <div class="hc-date">${fmtDate(a.createdAt)}</div>
-      <span class="hc-source">${sourceLabel(a.source)}</span>
-    </div>
-    <div class="hc-metrics">
-      <div class="hc-metric">
-        <div class="hc-metric-label">売上高</div>
-        <div class="hc-metric-val">${fmtCurrency(a.revenue)}</div>
+      <div class="hc-meta">
+        <div class="hc-filename">${a.fileName ? esc(a.fileName) : 'freeeデータ分析'}</div>
+        <div class="hc-date">${fmtDate(a.createdAt)}</div>
+        <span class="hc-source">${sourceLabel(a.source)}</span>
       </div>
-      <div class="hc-metric">
-        <div class="hc-metric-label">経常利益</div>
-        <div class="hc-metric-val">${fmtCurrency(a.ordinaryIncome)}</div>
+      <div class="hc-metrics">
+        <div class="hc-metric">
+          <div class="hc-metric-label">売上高</div>
+          <div class="hc-metric-val">${fmtCurrency(a.revenue)}</div>
+        </div>
+        <div class="hc-metric">
+          <div class="hc-metric-label">経常利益</div>
+          <div class="hc-metric-val">${fmtCurrency(a.ordinaryIncome)}</div>
+        </div>
       </div>
-    </div>
-    <div class="hc-actions" onclick="event.preventDefault();event.stopPropagation();">
+    </a>
+    <div class="hc-actions">
+      <a href="/agent/finance/history/${esc(a.id)}" class="hc-action">詳細を見る</a>
       <form action="/agent/finance/history/${esc(a.id)}/delete" method="post" style="margin:0" onsubmit="return confirm('この分析結果を削除しますか？')">
         <button type="submit" class="hc-action hc-action--del" style="cursor:pointer">削除</button>
       </form>
     </div>
-  </a>`).join('')}
+  </div>`).join('')}
 </div>
 `}`;
 

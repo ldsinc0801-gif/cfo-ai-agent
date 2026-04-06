@@ -4,6 +4,7 @@ import { logger } from '../utils/logger.js';
 import { usageTracker } from './usage-tracker.js';
 import { accountRulesToPrompt } from '../config/account-rules.js';
 import { journalLearningService } from './journal-learning-service.js';
+import { getAllAccountNames } from '../config/freee-accounts.js';
 
 /** 仕訳データ */
 export interface JournalEntry {
@@ -238,6 +239,77 @@ ${prompt}` },
     reason?: string,
   ): Promise<void> {
     await journalLearningService.recordCorrection(original, corrected, industry, reason);
+  }
+
+  /**
+   * チャットによる仕訳修正の解釈
+   * ユーザーの自然言語メッセージから修正内容をAIで解析する
+   */
+  async interpretCorrection(
+    entries: JournalEntry[],
+    userMessage: string,
+  ): Promise<{ corrections: Array<{ index: number; field: 'debitAccount' | 'creditAccount'; newValue: string }>; aiMessage: string }> {
+    if (!this.genAI) throw new Error('GEMINI_API_KEYが未設定です');
+
+    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
+    const accountNames = getAllAccountNames();
+
+    const entrySummary = entries.map((e, i) =>
+      `${i + 1}件目: 日付=${e.date}, 借方=${e.debitAccount}, 貸方=${e.creditAccount}, 金額=${e.amount}円, 摘要=${e.description}, 取引先=${e.partnerName}`
+    ).join('\n');
+
+    const prompt = `以下の仕訳データに対してユーザーが修正を依頼しています。
+
+【現在の仕訳データ】
+${entrySummary}
+
+【有効な勘定科目一覧】
+${accountNames.join('、')}
+
+【ユーザーの修正依頼】
+${userMessage}
+
+以下のJSON形式のみで回答してください:
+{
+  "corrections": [
+    { "index": 0, "field": "debitAccount", "newValue": "勘定科目名" }
+  ],
+  "message": "修正内容の説明（日本語で簡潔に）"
+}
+
+ルール:
+- indexは0始まり（1件目=0, 2件目=1, 3件目=2）
+- fieldは "debitAccount"（借方）または "creditAccount"（貸方）のみ
+- newValueは有効な勘定科目一覧に含まれるもののみ使用すること
+- 取引先名で指定された場合は該当する全ての仕訳を修正対象にする
+- 修正がない場合や理解できない場合は corrections を空配列にして message で理由を説明
+- JSONのみ返すこと`;
+
+    const result = await model.generateContent([{ text: prompt }]);
+    const text = result.response.text();
+    this.recordUsage(result, '仕訳修正解釈(Gemini)');
+
+    try {
+      const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, text];
+      const jsonStr = (jsonMatch[1] || text).match(/\{[\s\S]*\}/);
+      if (!jsonStr) throw new Error('JSON not found');
+      const parsed = JSON.parse(jsonStr[0]);
+
+      // 有効な勘定科目のみ通す
+      const validCorrections = (parsed.corrections || []).filter((c: any) =>
+        typeof c.index === 'number' &&
+        c.index >= 0 && c.index < entries.length &&
+        (c.field === 'debitAccount' || c.field === 'creditAccount') &&
+        accountNames.includes(c.newValue)
+      );
+
+      return {
+        corrections: validCorrections,
+        aiMessage: parsed.message || '修正を処理しました。',
+      };
+    } catch {
+      return { corrections: [], aiMessage: 'メッセージを理解できませんでした。例:「2件目の借方を旅費交通費にして」' };
+    }
   }
 
   private recordUsage(result: any, purpose: string): void {

@@ -21,7 +21,7 @@ import type { JournalEntry } from '../services/receipt-service.js';
 import { chatService } from '../services/chat-service.js';
 import { taskService } from '../services/task-service.js';
 import { generateMonthlyTasks } from '../config/task-templates.js';
-import { renderRatingHTML } from './rating-page.js';
+import { renderRatingHTML, renderAnalysisLoadingHTML } from './rating-page.js';
 import { calculateBankRating, calculateAdditionalMetrics } from '../domain/banking/rating-calculator.js';
 import { createMockRatingInput } from '../../tests/fixtures/mock-rating-input.js';
 import { AnthropicAnalysisService } from '../services/anthropic-service.js';
@@ -63,6 +63,13 @@ function clearCache(): void {
   logger.info('APIキャッシュをクリアしました');
 }
 
+// CORS（企業AI OSからのAPI呼び出し対応）
+app.use((_req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  next();
+});
+
 // ファイルアップロード設定
 const uploadDir = path.resolve('uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
@@ -77,11 +84,11 @@ const upload = multer({
     },
   }),
   fileFilter: (_req, file, cb) => {
-    const allowed = ['.pdf', '.csv', '.xlsx', '.xls', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.mov', '.avi', '.webm'];
+    const allowed = ['.pdf', '.csv', '.xlsx', '.xls', '.doc', '.docx', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.mov', '.avi', '.webm'];
     const ext = path.extname(file.originalname).toLowerCase();
     cb(null, allowed.includes(ext));
   },
-  limits: { fileSize: 50 * 1024 * 1024 },  // 動画対応のため50MB
+  limits: { fileSize: 200 * 1024 * 1024 },  // 動画対応のため200MB
 });
 
 /** freeeトークンが保存されているか */
@@ -128,6 +135,16 @@ function isFreeeConnected(): boolean {
 
 /** レポートデータを生成（freee接続時は実データ、未接続時はモック） */
 async function buildReport(year?: number, month?: number) {
+  // デモモード: デモプロファイルのデータでレポート生成
+  const demoProfile = getDemoProfile();
+  if (demoProfile) {
+    logger.info(`デモモード: ${demoProfile.companyName}のレポート`);
+    const builder = new ReportBuilder();
+    const mockRaw = createMockRawData();
+    const now = new Date();
+    return builder.build(mockRaw, year || now.getFullYear(), month || (now.getMonth() === 0 ? 12 : now.getMonth()));
+  }
+
   const cacheKey = `report-${year || 'default'}-${month || 'default'}-${getSelectedCompanyId()}`;
   const cached = getCached<any>(cacheKey);
   if (cached) { logger.info(`レポート: キャッシュヒット (${cacheKey})`); return cached; }
@@ -180,6 +197,17 @@ async function buildReport(year?: number, month?: number) {
 
 /** トレンドデータを生成（freee接続時は実データ、未接続時はモック） */
 async function buildTrendData(endYear?: number, endMonth?: number, monthCount: number = 6): Promise<import('../types/trend.js').TrendData> {
+  // デモモード: 即座にデモデータを返す（freee APIをスキップ）
+  const demoProfileEarly = getDemoProfile();
+  if (demoProfileEarly) {
+    logger.info(`デモモード: ${demoProfileEarly.companyName}のトレンドデータ`);
+    const plan = planAnalysisService.getPlan();
+    return {
+      months: demoProfileEarly.trendMonths,
+      targets: plan.targets.length > 0 ? plan.targets : demoProfileEarly.targets,
+    };
+  }
+
   const now = new Date();
   const targetYear = endYear || now.getFullYear();
   const targetMonth = endMonth || (now.getMonth() === 0 ? 12 : now.getMonth());
@@ -211,6 +239,13 @@ async function buildTrendData(endYear?: number, endMonth?: number, monthCount: n
       logger.info(`freee実データでトレンド取得: 事業所ID=${companyId} ${targetYear}年${targetMonth}月から${monthCount}か月分`);
 
       const trend = await freeeService.fetchTrendData(companyId, targetYear, targetMonth, monthCount);
+
+      // 保存済みの月次目標をマージ
+      const plan = planAnalysisService.getPlan();
+      if (plan.targets.length > 0) {
+        trend.targets = plan.targets;
+      }
+
       setCache(cacheKey, trend);
 
       // freeeデータをSupabaseに自動蓄積
@@ -227,7 +262,12 @@ async function buildTrendData(endYear?: number, endMonth?: number, monthCount: n
   }
 
   logger.info('モックデータでトレンド生成');
-  return createMockTrendData();
+  const mock = createMockTrendData();
+  const plan = planAnalysisService.getPlan();
+  if (plan.targets.length > 0) {
+    mock.targets = plan.targets;
+  }
+  return mock;
 }
 
 /** アップロード済みファイル一覧 */
@@ -529,13 +569,86 @@ app.get('/plan', async (_req, res) => {
   }
 });
 
-app.post('/plan/upload', upload.single('file'), (req, res) => {
+import { planExtractService } from '../services/plan-extract-service.js';
+
+app.post('/plan/upload', upload.single('file'), async (req, res) => {
   if (!req.file) {
     res.status(400).send('ファイルが選択されていません');
     return;
   }
   logger.info(`ファイルアップロード: ${req.file.originalname} → ${req.file.filename}`);
+
+  // AI解析で数値抽出 → 目標に自動反映
+  if (planExtractService.isAvailable()) {
+    try {
+      const result = await planExtractService.extractAndApply(req.file.path, req.file.originalname);
+      clearCache();
+      logger.info(`事業計画解析完了: 月次${result.monthlyTargets.length}件, 年間KPI${result.annualKpi ? 'あり' : 'なし'}, 確信度${result.confidence}`);
+    } catch (e) {
+      logger.warn('事業計画の自動解析に失敗（ファイルは保存済み）:', e instanceof Error ? e.message : e);
+    }
+  }
+
   res.redirect('/plan');
+});
+
+// 手動で再解析するAPI
+app.post('/plan/analyze-file', express.json(), async (req, res) => {
+  const filename = req.body.filename;
+  if (!filename || filename.includes('..') || filename.includes('/')) {
+    res.status(400).json({ error: '不正なファイル名' });
+    return;
+  }
+  if (!planExtractService.isAvailable()) {
+    res.status(400).json({ error: 'GEMINI_API_KEYが未設定です' });
+    return;
+  }
+  const filePath = path.join(uploadDir, filename);
+  if (!fs.existsSync(filePath)) {
+    res.status(404).json({ error: 'ファイルが見つかりません' });
+    return;
+  }
+  try {
+    const result = await planExtractService.extractAndApply(filePath, filename);
+    clearCache();
+    res.json({
+      ok: true,
+      monthlyCount: result.monthlyTargets.length,
+      hasAnnualKpi: !!result.annualKpi,
+      customKpiCount: result.customKpis.length,
+      customKpiNames: result.customKpis.map(ck => ck.name),
+      confidence: result.confidence,
+      notes: result.notes,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : '解析に失敗しました' });
+  }
+});
+
+// ファイル削除
+app.post('/plan/delete', express.json(), (req, res) => {
+  const filename = req.body.filename;
+  if (!filename || filename.includes('..') || filename.includes('/')) {
+    res.status(400).json({ error: '不正なファイル名' });
+    return;
+  }
+  const filePath = path.join(uploadDir, filename);
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+    logger.info(`ファイル削除: ${filename}`);
+    res.json({ ok: true });
+  } else {
+    res.status(404).json({ error: 'ファイルが見つかりません' });
+  }
+});
+
+app.post('/plan/delete-all', (_req, res) => {
+  const files = fs.readdirSync(uploadDir).filter(f => !f.startsWith('.'));
+  for (const f of files) {
+    fs.unlinkSync(path.join(uploadDir, f));
+  }
+  logger.info(`全ファイル削除: ${files.length}件`);
+  res.json({ ok: true, count: files.length });
 });
 
 // === 計画分析API（Claude） ===
@@ -552,7 +665,16 @@ app.post('/api/plan/targets', express.json(), (req, res) => {
   for (const t of targets) {
     planAnalysisService.setTarget(t);
   }
+  clearCache();
   res.json({ ok: true, count: targets.length });
+});
+
+// 月次目標を全クリア
+app.post('/api/plan/targets/clear', (_req, res) => {
+  planAnalysisService.savePlan({ targets: [], updatedAt: '', notes: '' });
+  clearCache();
+  logger.info('月次目標を全クリアしました');
+  res.json({ ok: true });
 });
 
 // 計画 vs 実績の差分分析を実行（Claude）
@@ -592,6 +714,29 @@ app.post('/api/plan/apply', express.json(), (req, res) => {
   res.json({ ok: true, count: targets.length });
 });
 
+// 年間KPI目標の保存
+import { saveAnnualKpi, loadAnnualKpi } from './plan-renderer.js';
+
+app.get('/api/plan/kpi', (_req, res) => {
+  res.json(loadAnnualKpi());
+});
+
+app.post('/api/plan/kpi', express.json(), (req, res) => {
+  const kpi = {
+    fiscalYear: req.body.fiscalYear || '',
+    targetRevenue: Number(req.body.targetRevenue) || 0,
+    targetProfit: Number(req.body.targetProfit) || 0,
+    targetMargin: Number(req.body.targetMargin) || 0,
+    targetEquityRatio: Number(req.body.targetEquityRatio) || 0,
+    targetProductivity: Number(req.body.targetProductivity) || 0,
+    employeeCount: Number(req.body.employeeCount) || 1,
+    customKpis: Array.isArray(req.body.customKpis) ? req.body.customKpis : [],
+  };
+  saveAnnualKpi(kpi);
+  logger.info(`年間KPI目標を保存: ${kpi.fiscalYear}`);
+  res.json({ ok: true });
+});
+
 // 分析履歴
 app.get('/api/plan/history', (_req, res) => {
   res.json(planAnalysisService.getHistory());
@@ -621,10 +766,21 @@ app.get('/api/learn/insights', async (_req, res) => {
 // 財務分析AIエージェント
 app.get('/agent/finance', async (_req, res) => {
   try {
+    // デモモード
+    const demoProfile = getDemoProfile();
+    if (demoProfile) {
+      logger.info(`デモモード財務分析: ${demoProfile.companyName}`);
+      res.send(renderRatingHTML(demoProfile.rating, demoProfile.additional, {
+        aiAvailable: true,
+        aiCommentary: demoProfile.aiCommentary,
+        source: 'freee',
+      }));
+      return;
+    }
+
     // freee接続時は自動的にfreeeデータで表示
     const token = getFreeeToken();
     if (token && getSelectedCompanyId()) {
-      // /agent/finance/freee と同じロジックでfreeeデータを取得
       res.redirect('/agent/finance/freee');
       return;
     }
@@ -723,8 +879,13 @@ app.post('/agent/finance/analyze', upload.single('file'), async (req, res) => {
   }
 });
 
-// 財務分析：freeeデータからAI分析
-app.get('/agent/finance/freee', async (_req, res) => {
+// 財務分析：freeeデータ分析のローディング画面
+app.get('/agent/finance/freee', (_req, res) => {
+  res.send(renderAnalysisLoadingHTML('freee'));
+});
+
+// 財務分析：freeeデータからAI分析（API）
+app.get('/api/finance/freee', async (_req, res) => {
   try {
     let input: import('../types/bank-rating.js').RatingInput;
 
@@ -843,7 +1004,8 @@ app.get('/agent/finance/freee', async (_req, res) => {
     }));
   } catch (error) {
     logger.error('freee分析エラー', error);
-    res.status(500).send('分析に失敗しました');
+    const errMsg = error instanceof Error ? error.message : '分析に失敗しました';
+    res.status(500).send(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>分析エラー</title><style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#1a7f8f;font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#fff}.box{text-align:center;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.25);border-radius:16px;padding:40px 48px;max-width:440px}h1{font-size:18px;font-weight:700;margin:0 0 12px}p{font-size:14px;opacity:0.85;margin:0 0 24px;line-height:1.6}.links{display:flex;gap:12px;justify-content:center}a{display:inline-block;background:#fff;color:#1a7f8f;padding:12px 36px;border-radius:8px;font-weight:600;font-size:14px;text-decoration:none}a:hover{opacity:0.85}a.secondary{background:rgba(255,255,255,0.2);color:#fff}</style></head><body><div class="box"><h1>分析に失敗しました</h1><p>${errMsg.replace(/</g, '&lt;')}</p><div class="links"><a href="/">ダッシュボードへ</a><a href="/auth/freee" class="secondary">freee再認証</a></div></div></body></html>`);
   }
 });
 
@@ -877,6 +1039,15 @@ app.post('/agent/finance/history/:id/delete', (req, res) => {
   res.redirect('/agent/finance/history');
 });
 
+app.post('/agent/finance/history/delete-all', (_req, res) => {
+  const all = analysisStore.list();
+  for (const a of all) {
+    analysisStore.delete(a.id);
+  }
+  logger.info(`分析履歴を全件削除: ${all.length}件`);
+  res.redirect('/agent/finance/history');
+});
+
 // 分析結果のJSONダウンロード
 app.get('/agent/finance/history/:id/json', (req, res) => {
   const analysis = analysisStore.get(req.params.id);
@@ -890,34 +1061,82 @@ app.get('/agent/finance/history/:id/json', (req, res) => {
 
 // 会計AIエージェント
 app.get('/agent/accounting', (_req, res) => {
-  res.send(renderAccountingPageHTML({ aiAvailable: receiptService.isAvailable() }));
+  res.send(renderAccountingPageHTML({ aiAvailable: receiptService.isAvailable() || isDemoMode() }));
 });
 
-// 会計AI：領収書・PDFの解析
-app.post('/agent/accounting/analyze', upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) { res.status(400).send('ファイルが選択されていません'); return; }
-    if (!receiptService.isAvailable()) { res.status(400).send('GEMINI_API_KEYが未設定です'); return; }
+// 会計AI：領収書・PDFの解析（複数ファイル対応）
+import { DEMO_ANALYSIS_RESULT } from '../services/demo-mode.js';
 
-    const filePath = req.file.path;
-    const fileName = req.file.originalname;
-    const ext = path.extname(fileName).toLowerCase();
-    const buffer = fs.readFileSync(filePath);
+app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res) => {
+  try {
+    const files = req.files as Express.Multer.File[] | undefined;
+    if (!files || files.length === 0) { res.status(400).send('ファイルが選択されていません'); return; }
+
+    // デモモード: プリセット仕訳データを返す
+    if (isDemoMode()) {
+      logger.info(`デモモード: 会計AI解析 (${files.length}ファイル) → プリセットデータ`);
+      res.send(renderAccountingPageHTML({ aiAvailable: true, analysis: DEMO_ANALYSIS_RESULT }));
+      return;
+    }
+
+    if (!receiptService.isAvailable()) { res.status(400).send('GEMINI_API_KEYが未設定です'); return; }
 
     // チャットメモリから業種を取得（学習ルール適用のため）
     const memory = await chatService.getMemory();
     const industry = memory.industry || undefined;
 
-    let analysis;
-    if (ext === '.pdf') {
-      analysis = await receiptService.analyzeReceiptPDF(buffer, fileName, industry);
-    } else {
-      const mimeMap: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
-      const mimeType = mimeMap[ext] || 'image/jpeg';
-      analysis = await receiptService.analyzeReceiptImage(buffer, mimeType, fileName, industry);
-    }
+    if (files.length === 1) {
+      // 1ファイルの場合：従来通り個別解析
+      const file = files[0];
+      const ext = path.extname(file.originalname).toLowerCase();
+      const buffer = fs.readFileSync(file.path);
 
-    res.send(renderAccountingPageHTML({ aiAvailable: true, analysis }));
+      let analysis;
+      if (ext === '.pdf') {
+        analysis = await receiptService.analyzeReceiptPDF(buffer, file.originalname, industry);
+      } else {
+        const mimeMap: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
+        const mimeType = mimeMap[ext] || 'image/jpeg';
+        analysis = await receiptService.analyzeReceiptImage(buffer, mimeType, file.originalname, industry);
+      }
+      res.send(renderAccountingPageHTML({ aiAvailable: true, analysis }));
+    } else {
+      // 複数ファイルの場合
+      const imageFiles = files.filter(f => !f.originalname.toLowerCase().endsWith('.pdf'));
+      const pdfFiles = files.filter(f => f.originalname.toLowerCase().endsWith('.pdf'));
+
+      const allEntries: JournalEntry[] = [];
+      const allNotes: string[] = [];
+
+      // 画像は一括でGeminiに送信
+      if (imageFiles.length > 0) {
+        const frames = imageFiles.map(f => {
+          const ext = path.extname(f.originalname).toLowerCase();
+          const mimeMap: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
+          return { buffer: fs.readFileSync(f.path), mimeType: mimeMap[ext] || 'image/jpeg' };
+        });
+        const imgAnalysis = await receiptService.analyzeVideoFrames(frames, industry);
+        allEntries.push(...imgAnalysis.entries);
+        allNotes.push(...imgAnalysis.notes);
+      }
+
+      // PDFは1件ずつ解析して結果をマージ
+      for (const pdfFile of pdfFiles) {
+        const pdfAnalysis = await receiptService.analyzeReceiptPDF(
+          fs.readFileSync(pdfFile.path), pdfFile.originalname, industry,
+        );
+        allEntries.push(...pdfAnalysis.entries);
+        allNotes.push(...pdfAnalysis.notes);
+      }
+
+      const analysis: import('../services/receipt-service.js').ReceiptAnalysis = {
+        entries: allEntries,
+        rawText: '',
+        confidence: allEntries.length > 0 ? 'high' : 'low',
+        notes: allNotes,
+      };
+      res.send(renderAccountingPageHTML({ aiAvailable: true, analysis }));
+    }
   } catch (error) {
     logger.error('領収書解析エラー', error);
     res.send(renderAccountingPageHTML({
@@ -931,6 +1150,14 @@ app.post('/agent/accounting/analyze', upload.single('file'), async (req, res) =>
 app.post('/agent/accounting/analyze-video', upload.single('video'), async (req, res) => {
   try {
     if (!req.file) { res.status(400).send('動画が選択されていません'); return; }
+
+    // デモモード
+    if (isDemoMode()) {
+      logger.info('デモモード: 動画解析 → プリセットデータ');
+      res.send(renderAccountingPageHTML({ aiAvailable: true, analysis: DEMO_ANALYSIS_RESULT }));
+      return;
+    }
+
     if (!receiptService.isAvailable()) { res.status(400).send('GEMINI_API_KEYが未設定です'); return; }
 
     const buffer = fs.readFileSync(req.file.path);
@@ -975,6 +1202,37 @@ app.post('/agent/accounting/correct', express.json(), async (req, res) => {
   }
 });
 
+// 会計AI：チャットによる仕訳修正（AI解釈 + 学習）
+app.post('/agent/accounting/chat-correct', express.json({ limit: '5mb' }), async (req, res) => {
+  try {
+    const { entries, message } = req.body;
+    if (!entries || !message) {
+      res.status(400).json({ error: '仕訳データとメッセージが必要です' });
+      return;
+    }
+
+    // Geminiで修正内容を解釈
+    const result = await receiptService.interpretCorrection(entries, message);
+
+    // 修正があれば学習データとして記録
+    if (result.corrections.length > 0) {
+      const memory = await chatService.getMemory();
+      const industry = memory.industry || '未設定';
+
+      for (const correction of result.corrections) {
+        const original = entries[correction.index];
+        const corrected = { ...original, [correction.field]: correction.newValue };
+        await receiptService.recordJournalCorrection(original, corrected, industry, message);
+      }
+    }
+
+    res.json({ success: true, corrections: result.corrections, aiMessage: result.aiMessage });
+  } catch (error) {
+    logger.error('チャット修正エラー', error);
+    res.status(500).json({ error: `修正に失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}` });
+  }
+});
+
 // 会計AI：CSVダウンロード
 app.get('/agent/accounting/csv', (req, res) => {
   try {
@@ -1010,6 +1268,22 @@ app.get('/agent/accounting/yayoi-csv', (req, res) => {
 // 会計AI：freee APIに仕訳送信
 app.post('/agent/accounting/send-freee', express.urlencoded({ extended: true }), async (req, res) => {
   try {
+    // デモモード: freee送信成功画面を返す
+    if (isDemoMode()) {
+      const entries: JournalEntry[] = JSON.parse(req.body.entries || '[]');
+      const demoProfile = getDemoProfile();
+      const companyName = demoProfile?.companyName || 'デモ会社';
+      const results = entries.map(e =>
+        `[送信完了] ${e.date} ${e.debitAccount} ${e.amount.toLocaleString()}円 → ${e.creditAccount}で決済済み - ${e.description}`
+      );
+      logger.info(`デモモード: freee送信完了（${entries.length}件）`);
+      res.send(renderAccountingPageHTML({
+        aiAvailable: true,
+        success: `freee送信結果（${companyName}）:\n${results.join('\n')}\n\n※デモモードのため実際の送信は行われていません`,
+      }));
+      return;
+    }
+
     const token = getFreeeToken();
     if (!token) {
       res.send(renderAccountingPageHTML({
@@ -1098,6 +1372,346 @@ app.get('/agent/funding', (_req, res) => {
   res.send(renderFundingAgentHTML());
 });
 
+// ========== 秘書AIエージェント ==========
+import { renderSecretaryPageHTML, renderSecretaryFormHTML, renderGmailDraftHTML, renderTemplateSetupHTML } from './secretary-page.js';
+import { secretaryService, loadCompanySettings, saveCompanySettings } from '../services/secretary-service.js';
+import type { CompanySettings } from '../services/secretary-service.js';
+import { gmailClient } from '../clients/google-gmail.js';
+import { getServiceList, loadBillingConfigs, saveBillingConfig, getBillingConfig, calcInvoiceDateFromConfig, calcDueDateFromConfig, detectInvoiceTasksFromGoogle } from '../services/secretary-auto.js';
+import type { CustomerBilling } from '../services/secretary-auto.js';
+
+// 秘書AI：メインページ（Googleタスク検知付き）
+app.get('/agent/secretary', async (_req, res) => {
+  const templates = secretaryService.listTemplates();
+  const documents = secretaryService.listDocuments();
+  const billingConfigs = loadBillingConfigs();
+  let detectedTasks: Array<{ title: string; customerName: string }> = [];
+
+  if (isDemoMode()) {
+    // デモモード: プリセットタスクとテンプレート
+    detectedTasks = [
+      { title: '株式会社ABC 4月分請求書作成', customerName: '株式会社ABC' },
+      { title: 'DEFコンサル 4月分請求書', customerName: 'DEFコンサル' },
+    ];
+    // デモ用テンプレートがなければ作成
+    if (templates.length === 0) {
+      try {
+        await secretaryService.createTemplate('請求書テンプレート', 'invoice', '');
+        await secretaryService.createTemplate('見積書テンプレート', 'estimate', '');
+      } catch { /* skip */ }
+    }
+    // デモ用会社設定
+    const cs = loadCompanySettings();
+    if (!cs || !cs.companyName) {
+      const demoProfile = getDemoProfile();
+      saveCompanySettings({
+        companyName: demoProfile?.companyName || '株式会社フローリッシュ',
+        postalCode: '100-0001',
+        address: '東京都千代田区千代田1-1',
+        representative: '川口 直人',
+        registrationNumber: 'T1234567890123',
+        bankName: '三菱UFJ銀行',
+        branchName: '東京営業部',
+        accountType: '普通預金',
+        accountNumber: '1234567',
+        accountHolder: 'カ）フローリッシュ',
+      });
+    }
+    // デモ用請求設定
+    if (billingConfigs.length === 0) {
+      saveBillingConfig([
+        { customerName: '株式会社ABC', closingDay: 31, invoiceDay: 1, dueDateType: 'end_next' },
+        { customerName: 'DEFコンサル', closingDay: 25, invoiceDay: 27, dueDateType: 'end_next' },
+        { customerName: '株式会社GHI', closingDay: 31, invoiceDay: 5, dueDateType: 'end_next' },
+      ]);
+    }
+  } else {
+    try {
+      const result = await detectInvoiceTasksFromGoogle();
+      detectedTasks = result.tasks;
+    } catch { /* skip */ }
+  }
+
+  const companySettings = loadCompanySettings();
+  const updatedTemplates = secretaryService.listTemplates();
+  const updatedConfigs = loadBillingConfigs();
+  res.send(renderSecretaryPageHTML({ templates: updatedTemplates, documents, detectedTasks, billingConfigs: updatedConfigs, companySettings }));
+});
+
+// 秘書AI：会社情報・振込先設定の保存
+app.post('/agent/secretary/company-settings', express.urlencoded({ extended: true }), (req, res) => {
+  const settings: CompanySettings = {
+    companyName: req.body.companyName || '',
+    postalCode: req.body.postalCode || '',
+    address: req.body.address || '',
+    representative: req.body.representative || '',
+    registrationNumber: req.body.registrationNumber || '',
+    bankName: req.body.bankName || '',
+    branchName: req.body.branchName || '',
+    accountType: req.body.accountType || '普通預金',
+    accountNumber: req.body.accountNumber || '',
+    accountHolder: req.body.accountHolder || '',
+  };
+  saveCompanySettings(settings);
+  res.redirect('/agent/secretary');
+});
+
+// 秘書AI：テンプレート登録ページ
+app.get('/agent/secretary/template-setup', (_req, res) => {
+  res.send(renderTemplateSetupHTML());
+});
+
+// 秘書AI：テンプレートアップロード
+app.post('/agent/secretary/template/upload', upload.single('template'), async (req, res) => {
+  try {
+    const name = req.body.name || '無題のテンプレート';
+    const type = req.body.type || 'invoice';
+    const uploadedFile = req.file?.path || '';
+    await secretaryService.createTemplate(name, type, uploadedFile || '');
+    res.redirect('/agent/secretary');
+  } catch (error) {
+    logger.error('テンプレート登録エラー', error);
+    res.send(renderSecretaryPageHTML({
+      templates: secretaryService.listTemplates(),
+      documents: secretaryService.listDocuments(),
+      error: `テンプレート登録に失敗: ${error instanceof Error ? error.message : '不明なエラー'}`,
+    }));
+  }
+});
+
+// 秘書AI：テンプレート削除
+app.post('/agent/secretary/template/:id/delete', (req, res) => {
+  secretaryService.deleteTemplate(req.params.id);
+  res.redirect('/agent/secretary');
+});
+
+// 秘書AI：書類削除
+app.post('/agent/secretary/document/:id/delete', (req, res) => {
+  secretaryService.deleteDocument(req.params.id);
+  res.redirect('/agent/secretary');
+});
+
+app.post('/agent/secretary/documents/delete-all', (_req, res) => {
+  const count = secretaryService.deleteAllDocuments();
+  logger.info(`作成済み書類を全件削除: ${count}件`);
+  res.redirect('/agent/secretary');
+});
+
+// 秘書AI：顧客別請求設定の保存
+app.post('/agent/secretary/billing-config', express.urlencoded({ extended: true }), (req, res) => {
+  const names = Array.isArray(req.body.cfg_name) ? req.body.cfg_name : [req.body.cfg_name].filter(Boolean);
+  const closings = Array.isArray(req.body.cfg_closing) ? req.body.cfg_closing : [req.body.cfg_closing].filter(Boolean);
+  const invoices = Array.isArray(req.body.cfg_invoice) ? req.body.cfg_invoice : [req.body.cfg_invoice].filter(Boolean);
+  const dues = Array.isArray(req.body.cfg_due) ? req.body.cfg_due : [req.body.cfg_due].filter(Boolean);
+
+  const configs: CustomerBilling[] = names.map((name: string, i: number) => ({
+    customerName: name,
+    closingDay: Number(closings[i]) || 0,
+    invoiceDay: Number(invoices[i]) || 0,
+    dueDateType: dues[i] || 'end_next',
+  })).filter((c: CustomerBilling) => c.customerName.trim());
+
+  saveBillingConfig(configs);
+  res.redirect('/agent/secretary');
+});
+
+// 秘書AI：書類作成フォーム（企業AI OS連携）
+app.get('/agent/secretary/create/:templateId', (req, res) => {
+  const template = secretaryService.getTemplate(req.params.templateId);
+  if (!template) { res.redirect('/agent/secretary'); return; }
+
+  const customerName = (req.query.customer as string) || '';
+  const billingConfig = customerName ? getBillingConfig(customerName) : null;
+  const serviceList = getServiceList();
+
+  let invoiceDate: string | undefined;
+  let dueDate: string | undefined;
+  if (billingConfig) {
+    invoiceDate = calcInvoiceDateFromConfig(billingConfig);
+    dueDate = calcDueDateFromConfig(invoiceDate, billingConfig);
+  }
+
+  res.send(renderSecretaryFormHTML({
+    template, serviceList, customerName, billingConfig, invoiceDate, dueDate,
+  }));
+});
+
+// 秘書AI：PDF生成（一括生成対応）
+app.post('/agent/secretary/generate', express.urlencoded({ extended: true }), async (req, res) => {
+  try {
+    const template = secretaryService.getTemplate(req.body.templateId);
+    if (!template) { res.redirect('/agent/secretary'); return; }
+
+    // フォームデータを整形
+    const baseData: Record<string, any> = {};
+    for (const field of template.fields) {
+      if (field.type === 'lines') continue;
+      if (field.type === 'number') {
+        baseData[field.key] = Number(req.body[field.key]) || 0;
+      } else {
+        baseData[field.key] = req.body[field.key] || '';
+      }
+    }
+    // テンプレートfieldsに含まれないが必要なフィールド
+    if (req.body.subject) baseData.subject = req.body.subject;
+
+    // 明細行の処理
+    if (req.body.line_item) {
+      const items = Array.isArray(req.body.line_item) ? req.body.line_item : [req.body.line_item];
+      const prices = Array.isArray(req.body.line_unitPrice) ? req.body.line_unitPrice : [req.body.line_unitPrice];
+      const qtys = Array.isArray(req.body.line_quantity) ? req.body.line_quantity : [req.body.line_quantity];
+      const amounts = Array.isArray(req.body.line_amount) ? req.body.line_amount : [req.body.line_amount];
+
+      baseData.lines = items.map((item: string, i: number) => ({
+        item,
+        unitPrice: Number(prices[i]) || 0,
+        quantity: Number(qtys[i]) || 0,
+        amount: Number(amounts[i]) || 0,
+      })).filter((l: any) => l.item);
+
+      baseData.subtotal = Number(req.body.subtotal) || 0;
+      baseData.tax = Number(req.body.tax) || 0;
+      baseData.total = Number(req.body.total) || 0;
+    }
+
+    // 一括生成: 請求日と支払期限を計算
+    const batchMonths = Math.min(Number(req.body.batchMonths) || 1, 12);
+    const dayType = req.body.invoiceDayType || 'today';
+    const dueDateType = req.body.dueDateType || 'end_next';
+    const now = new Date();
+
+    function calcInvoiceDate(monthOffset: number): string {
+      const targetYear = now.getFullYear() + Math.floor((now.getMonth() + monthOffset) / 12);
+      const targetMonth = (now.getMonth() + monthOffset) % 12;
+      const lastDay = new Date(targetYear, targetMonth + 1, 0).getDate();
+
+      let day: number;
+      if (dayType === 'end') {
+        day = lastDay;
+      } else if (dayType === 'today' || dayType === 'custom') {
+        const customDate = req.body.customInvoiceDate ? new Date(req.body.customInvoiceDate) : now;
+        day = Math.min(customDate.getDate(), lastDay);
+      } else {
+        day = Math.min(Number(dayType), lastDay);
+      }
+
+      return `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+
+    function toLocalDateStr(d: Date): string {
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
+    function calcDueDate(invoiceDateStr: string): string {
+      const [y, m, dd] = invoiceDateStr.split('-').map(Number);
+      if (dueDateType === 'end_next') {
+        const d = new Date(y, m + 1, 0); // 翌月末 (m is 1-based, so m+1 month's day 0 = end of month m)
+        return toLocalDateStr(d);
+      } else if (dueDateType === 'end_same') {
+        const d = new Date(y, m, 0); // 当月末
+        return toLocalDateStr(d);
+      } else if (dueDateType === '10_next') {
+        const d = new Date(y, m, 10); // 翌月10日
+        return toLocalDateStr(d);
+      } else {
+        const days = Number(dueDateType) || 30;
+        const d = new Date(y, m - 1, dd + days);
+        return toLocalDateStr(d);
+      }
+    }
+
+    const generatedDocs: string[] = [];
+    for (let i = 0; i < batchMonths; i++) {
+      const data = { ...baseData };
+      const invoiceDate = calcInvoiceDate(i);
+      const dueDate = calcDueDate(invoiceDate);
+
+      // 日付フィールドを設定
+      data.invoiceDate = invoiceDate;
+      data.estimateDate = invoiceDate;
+      data.dueDate = dueDate;
+      data.validUntil = dueDate;
+
+      // 請求書番号に月を反映
+      if (data.invoiceNo && batchMonths > 1) {
+        const d = new Date(invoiceDate);
+        data.invoiceNo = `${data.invoiceNo}-${d.getFullYear()}${(d.getMonth() + 1).toString().padStart(2, '0')}`;
+      }
+
+      const doc = await secretaryService.generatePDF(template, data);
+      generatedDocs.push(doc.id);
+    }
+
+    if (generatedDocs.length === 1) {
+      res.redirect(`/agent/secretary/gmail/${generatedDocs[0]}`);
+    } else {
+      // 複数生成の場合はメインページに戻って結果を表示
+      res.send(renderSecretaryPageHTML({
+        templates: secretaryService.listTemplates(),
+        documents: secretaryService.listDocuments(),
+        success: `${batchMonths}ヶ月分の${template.name}を生成しました（${generatedDocs.length}件）`,
+      }));
+    }
+  } catch (error) {
+    logger.error('PDF生成エラー', error);
+    const template = secretaryService.getTemplate(req.body.templateId);
+    if (template) {
+      res.send(renderSecretaryFormHTML(template, `PDF生成に失敗: ${error instanceof Error ? error.message : '不明なエラー'}`));
+    } else {
+      res.redirect('/agent/secretary');
+    }
+  }
+});
+
+// 秘書AI：PDFダウンロード
+app.get('/agent/secretary/download/:docId', (req, res) => {
+  const doc = secretaryService.getDocument(req.params.docId);
+  if (!doc || !fs.existsSync(doc.pdfPath)) { res.status(404).send('PDFが見つかりません'); return; }
+  res.download(doc.pdfPath, `${doc.templateName}_${doc.data.customerName || 'document'}.pdf`);
+});
+
+// 秘書AI：Gmail下書きフォーム
+app.get('/agent/secretary/gmail/:docId', (req, res) => {
+  const doc = secretaryService.getDocument(req.params.docId);
+  if (!doc) { res.redirect('/agent/secretary'); return; }
+  res.send(renderGmailDraftHTML(doc));
+});
+
+// 秘書AI：Gmail下書き送信
+app.post('/agent/secretary/gmail-draft', express.urlencoded({ extended: true }), async (req, res) => {
+  const doc = secretaryService.getDocument(req.body.docId);
+  if (!doc) { res.redirect('/agent/secretary'); return; }
+
+  try {
+    // デモモード: Gmail送信成功を模擬
+    if (isDemoMode()) {
+      logger.info(`デモモード: Gmail下書き作成（${doc.templateName}）`);
+      res.send(renderGmailDraftHTML(doc, undefined, `Gmail下書きを作成しました（デモ）。\n宛先: ${req.body.to}\n件名: ${req.body.subject}\n\n※デモモードのため実際の下書きは作成されていません`));
+      return;
+    }
+
+    if (!gmailClient.isAvailable()) {
+      res.send(renderGmailDraftHTML(doc, 'Google認証が未設定です。Google連携を設定してください。'));
+      return;
+    }
+
+    const pdfContent = fs.readFileSync(doc.pdfPath);
+    const filename = `${doc.templateName}_${doc.data.customerName || 'document'}.pdf`;
+
+    await gmailClient.createDraft(
+      req.body.to,
+      req.body.subject,
+      req.body.body,
+      [{ filename, mimeType: 'application/pdf', content: pdfContent }],
+    );
+
+    res.send(renderGmailDraftHTML(doc, undefined, `Gmail下書きを作成しました。\nGmailの下書きフォルダを確認してください。`));
+  } catch (error) {
+    logger.error('Gmail下書きエラー', error);
+    res.send(renderGmailDraftHTML(doc, `Gmail下書き作成に失敗: ${error instanceof Error ? error.message : '不明なエラー'}`));
+  }
+});
+
 // API（JSON）
 app.get('/api/report', async (_req, res) => {
   try {
@@ -1113,6 +1727,20 @@ app.get('/api/report', async (_req, res) => {
 import { FreeeAuthClient } from '../clients/freee-auth.js';
 import { FreeeService } from '../services/freee-service.js';
 const freeeAuth = new FreeeAuthClient();
+
+// === デモモード ===
+import { isDemoMode, getDemoProfile, enableDemoMode, disableDemoMode, DEMO_PROFILES } from '../services/demo-mode.js';
+
+app.post('/settings/demo', express.urlencoded({ extended: true }), (req, res) => {
+  const profileId = req.body.profileId;
+  if (profileId === 'off') {
+    disableDemoMode();
+  } else if (profileId) {
+    enableDemoMode(profileId);
+  }
+  clearCache();
+  res.redirect('/settings/company');
+});
 
 app.get('/auth/freee', (_req, res) => {
   res.redirect(freeeAuth.getAuthorizationUrl());
@@ -1163,20 +1791,54 @@ app.get('/callback', async (req, res) => {
 app.get('/settings/company', async (_req, res) => {
   try {
     const token = getFreeeToken();
-    if (!token) {
-      res.redirect('/auth/freee');
+    const demoActive = isDemoMode();
+    const demoProfile = getDemoProfile();
+    const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+    // デモプロファイル選択カード
+    const demoCards = DEMO_PROFILES.map(p => {
+      const isSelected = demoActive && demoProfile?.id === p.id;
+      const revLabel = (p.revenue / 10000).toLocaleString() + '万円';
+      return `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border:2px solid ${isSelected ? '#f59e0b' : '#e5e7eb'};border-radius:10px;margin-bottom:10px;background:${isSelected ? 'rgba(245,158,11,0.06)' : '#fff'}">
+          <div>
+            <div style="font-weight:700;font-size:15px;color:#1f2937">${escHtml(p.companyName)}</div>
+            <div style="font-size:12px;color:#6b7280;margin-top:2px">${escHtml(p.industry)} / 従業員${p.employees}名 / 売上${revLabel}</div>
+            <div style="font-size:11px;color:#9ca3af;margin-top:1px">${escHtml(p.description)}</div>
+          </div>
+          <form method="POST" action="/settings/demo" style="margin:0">
+            <input type="hidden" name="profileId" value="${p.id}">
+            <button type="submit" style="padding:8px 20px;border-radius:8px;border:none;background:${isSelected ? '#f59e0b' : '#f59e0b'};color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;opacity:${isSelected ? '0.6' : '1'}">${isSelected ? 'デモ中' : 'デモ開始'}</button>
+          </form>
+        </div>`;
+    }).join('');
+
+    const demoSection = `
+      <div style="margin-bottom:32px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <div>
+            <h2 style="font-size:18px;font-weight:700;margin-bottom:4px">デモモード</h2>
+            <p style="font-size:13px;color:#6b7280">営業先でfreee連携なしでデモ実演できます（AI APIも不要）</p>
+          </div>
+          ${demoActive ? '<form method="POST" action="/settings/demo" style="margin:0"><input type="hidden" name="profileId" value="off"><button type="submit" style="padding:8px 16px;border-radius:8px;border:1px solid #ef4444;background:transparent;color:#ef4444;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">デモ解除</button></form>' : ''}
+        </div>
+        ${demoActive ? '<div style="background:#fffbeb;border:1px solid #f59e0b;border-radius:8px;padding:12px 16px;margin-bottom:12px;font-size:13px;color:#92400e;font-weight:600">デモモード実行中: ' + escHtml(demoProfile?.companyName || '') + '</div>' : ''}
+        ${demoCards}
+      </div>`;
+
+    if (!token && !demoActive) {
+      // freee未接続 & デモ未選択：デモ選択 + freee連携ボタン
+      res.send(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>設定 | AI CFO</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN",sans-serif;background:#f4f5f7;color:#1f2937;font-size:14px;min-height:100vh;display:flex;align-items:center;justify-content:center}</style></head><body><div style="max-width:520px;width:100%;margin:40px auto;padding:0 20px"><div style="text-align:center;margin-bottom:32px"><h1 style="font-size:22px;font-weight:700;margin-bottom:8px">データソースの選択</h1><p style="font-size:14px;color:#6b7280">freee連携またはデモモードを選択してください</p></div>${demoSection}<div style="text-align:center;margin-top:16px;padding-top:24px;border-top:1px solid #e5e7eb"><p style="font-size:13px;color:#6b7280;margin-bottom:12px">本番データを使用する場合</p><a href="/auth/freee" style="display:inline-block;background:#2298ae;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px">freeeと連携する</a></div>${demoActive ? '<div style="text-align:center;margin-top:16px"><a href="/" style="display:inline-block;background:#f59e0b;color:#fff;padding:10px 28px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:14px">ダッシュボードへ（デモ）</a></div>' : ''}</div></body></html>`);
       return;
     }
 
     const auth = new FreeeAuthClient({
-      accessToken: token.access_token,
-      refreshToken: token.refresh_token,
+      accessToken: token!.access_token,
+      refreshToken: token!.refresh_token,
     });
     const freeeService = new FreeeService(auth);
     const companies = await freeeService.getCompanies();
     const selectedId = getSelectedCompanyId();
-
-    const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
     const companyCards = companies.map(c => {
       const isSelected = c.id === selectedId;
@@ -1219,12 +1881,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","H
     ${companyCards}
   </div>
   ${selectedId ? `<div style="text-align:center"><a href="/" style="display:inline-block;background:#2298ae;color:#fff;padding:10px 28px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:14px">ダッシュボードへ</a></div>` : '<p style="text-align:center;color:#6b7280;font-size:13px">事業所を選択するとダッシュボードに進めます。</p>'}
+  <div style="margin-top:32px;padding-top:24px;border-top:1px solid #e5e7eb">${demoSection}</div>
 </div>
 </body>
 </html>`);
   } catch (error) {
     logger.error('事業所一覧取得エラー', error);
-    res.status(500).send('事業所一覧の取得に失敗しました。freee連携を再設定してください。');
+    // freee接続失敗時もデモ選択画面を表示
+    const demoActive2 = isDemoMode();
+    const demoProfile2 = getDemoProfile();
+    const escHtml2 = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const demoCards2 = DEMO_PROFILES.map(p => {
+      const isSelected = demoActive2 && demoProfile2?.id === p.id;
+      const revLabel = (p.revenue / 10000).toLocaleString() + '万円';
+      return `<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border:2px solid ${isSelected ? '#f59e0b' : '#e5e7eb'};border-radius:10px;margin-bottom:10px;background:${isSelected ? 'rgba(245,158,11,0.06)' : '#fff'}"><div><div style="font-weight:700;font-size:15px">${escHtml2(p.companyName)}</div><div style="font-size:12px;color:#6b7280;margin-top:2px">${escHtml2(p.industry)} / ${p.employees}名 / ${revLabel}</div></div><form method="POST" action="/settings/demo" style="margin:0"><input type="hidden" name="profileId" value="${p.id}"><button type="submit" style="padding:8px 20px;border-radius:8px;border:none;background:#f59e0b;color:#fff;font-size:13px;font-weight:600;cursor:pointer">${isSelected ? 'デモ中' : 'デモ開始'}</button></form></div>`;
+    }).join('');
+    res.send(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>設定 | AI CFO</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN",sans-serif;background:#f4f5f7;color:#1f2937;font-size:14px;min-height:100vh;display:flex;align-items:center;justify-content:center}</style></head><body><div style="max-width:520px;width:100%;margin:40px auto;padding:0 20px"><div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:12px 16px;margin-bottom:24px;font-size:13px;color:#991b1b">freee接続に失敗しました。再認証するか、デモモードをご利用ください。</div><h2 style="font-size:18px;font-weight:700;margin-bottom:16px">デモモード</h2>${demoCards2}<div style="text-align:center;margin-top:24px;padding-top:20px;border-top:1px solid #e5e7eb"><a href="/auth/freee" style="display:inline-block;background:#2298ae;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px">freee再認証</a></div>${demoActive2 ? '<div style="text-align:center;margin-top:12px"><a href="/" style="display:inline-block;background:#f59e0b;color:#fff;padding:10px 28px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:14px">ダッシュボードへ（デモ）</a></div>' : ''}</div></body></html>`);
   }
 });
 
@@ -1580,6 +2252,7 @@ app.listen(PORT, () => {
   console.log(`  事業計画AI:         http://localhost:${PORT}/plan`);
   console.log(`  会計AI:             http://localhost:${PORT}/agent/accounting`);
   console.log(`  資金調達AI:         http://localhost:${PORT}/agent/funding`);
+  console.log(`  秘書AI:             http://localhost:${PORT}/agent/secretary`);
   console.log(`  API (JSON):         http://localhost:${PORT}/api/report`);
   console.log('========================================');
   console.log('');
