@@ -74,6 +74,41 @@ export function renderPlanHTML(trend: TrendData, uploadedFiles: string[]): strin
   const kpi = loadAnnualKpi();
   const actual = calcActualKpi(trend.months, kpi);
 
+  // ロカベンベンチマークデータを読み込み
+  let locabenData = { categories: [], benchmarks: {} };
+  try {
+    const locabenPath = path.resolve('src/config/locaben-benchmarks.json');
+    if (fs.existsSync(locabenPath)) {
+      locabenData = JSON.parse(fs.readFileSync(locabenPath, 'utf-8'));
+    }
+  } catch { /* ignore */ }
+
+  // シミュレーター用: freee実績データをJSONで埋め込み
+  const simBaseMonths = trend.months.length > 0
+    ? trend.months.slice(-12).map(m => ({
+        month: `${m.month}月`,
+        revenue: m.revenue,
+        cogs: m.costOfSales,
+        fixed: m.sgaExpenses,
+        variable: 0,
+        employees: kpi.employeeCount || 1,
+        depreciation: 0,
+        debt: 0,
+        totalAssets: m.totalAssets,
+        netAssets: m.netAssets,
+      }))
+    : null;
+
+  const simKpiTarget = {
+    targetRevenue: kpi.targetRevenue,
+    targetProfit: kpi.targetProfit,
+    targetMargin: kpi.targetMargin,
+    targetEquityRatio: kpi.targetEquityRatio,
+    targetProductivity: kpi.targetProductivity,
+    employeeCount: kpi.employeeCount || 1,
+    fiscalYear: kpi.fiscalYear,
+  };
+
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -81,6 +116,12 @@ export function renderPlanHTML(trend: TrendData, uploadedFiles: string[]): strin
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>事業計画AIエージェント</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+// freee実績データ（サーバーから注入）
+var FREEE_BASE_DATA = ${JSON.stringify(simBaseMonths)};
+var KPI_TARGET = ${JSON.stringify(simKpiTarget)};
+var LOCABEN = ${JSON.stringify(locabenData)};
+</script>
 <style>${SHARED_CSS}${PLAN_CSS}</style>
 </head>
 <body>
@@ -101,6 +142,15 @@ ${renderSidebar('plan')}
   </header>
 
   <div class="content">
+
+    <!-- Tab Navigation -->
+    <div class="plan-tabs">
+      <button class="plan-tab active" onclick="switchPlanTab('kpi')" id="tab-kpi">KPI目標・ギャップ分析</button>
+      <button class="plan-tab" onclick="switchPlanTab('simulator')" id="tab-simulator">経営シミュレーター</button>
+    </div>
+
+    <!-- KPI Tab -->
+    <div id="panel-kpi">
 
     <!-- Upload Section -->
     <div class="grid-2">
@@ -436,6 +486,174 @@ ${(kpi.customKpis || []).filter(ck => ck.scope === 'monthly').map(ck =>
       <div class="card-chart card-chart--tall"><canvas id="gapChart"></canvas></div>
     </div>
 
+    </div><!-- /panel-kpi -->
+
+    <!-- Simulator Tab -->
+    <div id="panel-simulator" style="display:none">
+
+      <!-- ベースデータ切替 -->
+      <div class="sim-source-bar">
+        <div class="sim-mode-toggle">
+          <button class="sim-mode-btn active" id="mode-actual" onclick="switchSimMode('actual')">実績ベース</button>
+          <button class="sim-mode-btn" id="mode-plan" onclick="switchSimMode('plan')">計画ベース</button>
+        </div>
+        <div>
+          <span class="sim-source-label">データ:</span>
+          <span id="simDataSource">---</span>
+        </div>
+        <div>
+          <span class="sim-source-label">KPI目標年度:</span>
+          <span style="font-weight:600">${esc(kpi.fiscalYear)}</span>
+        </div>
+      </div>
+
+      <!-- KPIカード -->
+      <div class="sim-kpi-grid">
+        <div class="sim-kpi-card" id="kpi-revenue">
+          <div class="sim-kpi-label">年間売上高</div>
+          <div class="sim-kpi-value">---</div>
+          <div class="sim-kpi-diff">---</div>
+        </div>
+        <div class="sim-kpi-card" id="kpi-profit">
+          <div class="sim-kpi-label">年間営業利益</div>
+          <div class="sim-kpi-value">---</div>
+          <div class="sim-kpi-diff">---</div>
+        </div>
+        <div class="sim-kpi-card" id="kpi-margin">
+          <div class="sim-kpi-label">営業利益率</div>
+          <div class="sim-kpi-value">---</div>
+          <div class="sim-kpi-diff">---</div>
+        </div>
+        <div class="sim-kpi-card" id="kpi-cf">
+          <div class="sim-kpi-label">キャッシュフロー</div>
+          <div class="sim-kpi-value">---</div>
+          <div class="sim-kpi-diff">---</div>
+        </div>
+      </div>
+
+      <div class="grid-sim">
+        <!-- スライダーパネル -->
+        <div class="card">
+          <div class="card-header">
+            <h3>シナリオ調整</h3>
+            <button class="btn-secondary btn-sm" onclick="resetSimParams()">リセット</button>
+          </div>
+          <div class="card-body">
+            <div class="sim-slider">
+              <div class="sim-slider-header"><span>売上成長率</span><span class="sim-slider-val" id="val-revenueGrowth">0</span><span>%</span></div>
+              <input type="range" id="sl-revenueGrowth" min="-30" max="50" step="1" value="0" oninput="updateSimParam('revenueGrowth',this.value)">
+              <div class="sim-slider-range"><span>-30%</span><span>+50%</span></div>
+            </div>
+            <div class="sim-slider">
+              <div class="sim-slider-header"><span>原価率</span><span class="sim-slider-val" id="val-cogsRatio">45</span><span>%</span></div>
+              <input type="range" id="sl-cogsRatio" min="10" max="80" step="1" value="45" oninput="updateSimParam('cogsRatio',this.value)">
+              <div class="sim-slider-range"><span>10%</span><span>80%</span></div>
+            </div>
+            <div class="sim-slider">
+              <div class="sim-slider-header"><span>固定費増減</span><span class="sim-slider-val" id="val-fixedCostChange">0</span><span>%</span></div>
+              <input type="range" id="sl-fixedCostChange" min="-30" max="30" step="1" value="0" oninput="updateSimParam('fixedCostChange',this.value)">
+              <div class="sim-slider-range"><span>-30%</span><span>+30%</span></div>
+            </div>
+            <div class="sim-slider">
+              <div class="sim-slider-header"><span>人員増減</span><span class="sim-slider-val" id="val-employeeChange">0</span><span>人</span></div>
+              <input type="range" id="sl-employeeChange" min="-3" max="10" step="1" value="0" oninput="updateSimParam('employeeChange',this.value)">
+              <div class="sim-slider-range"><span>-3人</span><span>+10人</span></div>
+            </div>
+            <div class="sim-slider">
+              <div class="sim-slider-header"><span>新規設備投資</span><span class="sim-slider-val" id="val-investment">0</span><span>万</span></div>
+              <input type="range" id="sl-investment" min="0" max="3000" step="50" value="0" oninput="updateSimParam('investment',this.value)">
+              <div class="sim-slider-range"><span>0万</span><span>3000万</span></div>
+            </div>
+            <div class="sim-slider">
+              <div class="sim-slider-header"><span>年間借入返済</span><span class="sim-slider-val" id="val-repayment">0</span><span>万</span></div>
+              <input type="range" id="sl-repayment" min="0" max="500" step="10" value="0" oninput="updateSimParam('repayment',this.value)">
+              <div class="sim-slider-range"><span>0万</span><span>500万</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- グラフ -->
+        <div class="card">
+          <div class="card-header"><h3>売上・利益シミュレーション</h3></div>
+          <div class="card-body">
+            <canvas id="simChart" height="280"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- 月次明細テーブル -->
+      <div class="card" style="margin-top:20px">
+        <div class="card-header"><h3>月次シミュレーション明細</h3></div>
+        <div class="card-body" style="overflow-x:auto">
+          <table class="target-table">
+            <thead>
+              <tr>
+                <th>月</th><th>売上</th><th>原価</th><th>粗利</th><th>固定費</th><th>営業利益</th><th>利益率</th><th>CF</th>
+              </tr>
+            </thead>
+            <tbody id="simTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ロカベン6指標比較 -->
+      <div class="card" style="margin-top:20px">
+        <div class="card-header">
+          <h3>ロカベン6指標 - 業種別ベンチマーク比較</h3>
+        </div>
+        <div class="card-body">
+          <div class="locaben-select-row">
+            <div class="kpi-field">
+              <label>業種（大分類）</label>
+              <select id="locaMajor" onchange="updateLocaMinor()">
+                <option value="">-- 業種を選択 --</option>
+              </select>
+            </div>
+            <div class="kpi-field">
+              <label>業種（小分類）</label>
+              <select id="locaMinor" onchange="updateLocaBenchmark()">
+                <option value="">-- 小分類を選択 --</option>
+              </select>
+            </div>
+            <div class="kpi-field">
+              <label>事業規模</label>
+              <select id="locaScale" onchange="updateLocaBenchmark()">
+                <option value="中規模事業者">中規模事業者</option>
+                <option value="小規模事業者">小規模事業者</option>
+              </select>
+            </div>
+          </div>
+          <div id="locabenResult" style="margin-top:16px"></div>
+        </div>
+      </div>
+
+      <!-- 銀行格付シミュレーション -->
+      <div class="card" style="margin-top:20px">
+        <div class="card-header">
+          <h3>銀行格付シミュレーション（129点満点）</h3>
+          <span class="card-sub">財務分析AI 評価基準</span>
+        </div>
+        <div class="card-body">
+          <div id="bankRatingResult">
+            <p style="color:var(--text2);font-size:13px">シミュレーション結果から銀行格付を簡易算出します。スライダーを調整すると自動更新されます。</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 計画に反映ボタン -->
+      <div class="sim-apply-bar">
+        <div class="sim-apply-info">
+          <strong>シミュレーション結果をKPI目標に反映</strong>
+          <p>シミュレーションの年間数値を事業計画のKPI目標に上書きします</p>
+        </div>
+        <button class="btn-primary" onclick="applySimToKpi()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+          計画に反映する
+        </button>
+      </div>
+
+    </div><!-- /panel-simulator -->
+
   </div>
 </div>
 
@@ -657,6 +875,579 @@ function deleteAllFiles(){
     .then(function(r){if(r.ok) location.reload(); else alert('削除に失敗しました');})
     .catch(function(){alert('削除に失敗しました');});
 }
+// --- Tab switching ---
+function switchPlanTab(tab){
+  document.getElementById('panel-kpi').style.display = tab==='kpi' ? '' : 'none';
+  document.getElementById('panel-simulator').style.display = tab==='simulator' ? '' : 'none';
+  document.getElementById('tab-kpi').classList.toggle('active', tab==='kpi');
+  document.getElementById('tab-simulator').classList.toggle('active', tab==='simulator');
+  if(tab==='simulator'){
+    initSimulator();
+    // display:noneから表示に切り替わった後にリサイズ
+    setTimeout(function(){ if(simChart) simChart.resize(); }, 50);
+  }
+}
+
+// --- Simulator mode switch ---
+function switchSimMode(mode){
+  simMode = mode;
+  document.getElementById('mode-actual').classList.toggle('active', mode==='actual');
+  document.getElementById('mode-plan').classList.toggle('active', mode==='plan');
+
+  if(mode === 'plan' && planBaseData.length > 0){
+    baseData = planBaseData;
+    document.getElementById('simDataSource').textContent = 'KPI計画データ（' + KPI_TARGET.fiscalYear + '）';
+    document.getElementById('simDataSource').style.color = '#3b82f6';
+  } else if(mode === 'plan' && planBaseData.length === 0){
+    alert('KPI目標が未設定です。先にKPI目標タブで目標を設定してください。');
+    switchSimMode('actual');
+    return;
+  } else {
+    baseData = actualBaseData;
+    if(FREEE_BASE_DATA && FREEE_BASE_DATA.length > 0){
+      document.getElementById('simDataSource').textContent = 'freee実績データ（直近12ヶ月）';
+      document.getElementById('simDataSource').style.color = '#10b981';
+    } else {
+      document.getElementById('simDataSource').textContent = 'デモデータ（freee未連携）';
+      document.getElementById('simDataSource').style.color = '#f59e0b';
+    }
+  }
+
+  // 原価率をベースデータから再計算
+  var tRev = baseData.reduce(function(s,d){return s+(d.revenue||0)},0);
+  var tCogs = baseData.reduce(function(s,d){return s+(d.cogs||0)},0);
+  var cRatio = (tRev > 0 && tCogs > 0) ? Math.round(tCogs/tRev*100) : 0;
+  simParams.cogsRatio = cRatio;
+  document.getElementById('sl-cogsRatio').value = cRatio;
+  document.getElementById('val-cogsRatio').textContent = cRatio;
+
+  runSimulation();
+}
+
+// --- Simulator ---
+var simInitialized = false;
+var simChart = null;
+var simParams = { revenueGrowth:0, cogsRatio:45, fixedCostChange:0, employeeChange:0, investment:0, repayment:0 };
+var baseData = [];
+var actualBaseData = [];  // freee実績ベース
+var planBaseData = [];    // KPI計画ベース
+var simMode = 'actual';   // 'actual' or 'plan'
+
+function initSimulator(){
+  if(simInitialized) return;
+  simInitialized = true;
+
+  // ===== 実績ベースデータ準備 =====
+  if(FREEE_BASE_DATA && FREEE_BASE_DATA.length > 0){
+    actualBaseData = FREEE_BASE_DATA;
+  } else {
+    // デモデータ
+    var baseRevenue = 5000000;
+    var season = [0.85,0.90,1.20,0.95,0.90,1.00,0.95,0.85,1.05,1.10,1.15,1.10];
+    for(var i=0;i<12;i++){
+      var rev = Math.round(baseRevenue * season[i]);
+      actualBaseData.push({ month:(i+1)+'月', revenue:rev, cogs:Math.round(rev*0.45), fixed:1800000, variable:Math.round(rev*0.10), employees:5, depreciation:150000, debt:10000000, totalAssets:30000000, netAssets:12000000 });
+    }
+  }
+
+  // ===== 計画ベースデータ準備（KPI目標を月次按分） =====
+  if(KPI_TARGET && KPI_TARGET.targetRevenue > 0){
+    var monthlyRev = Math.round(KPI_TARGET.targetRevenue / 12);
+    var monthlyProfit = Math.round(KPI_TARGET.targetProfit / 12);
+    // 利益から逆算: 売上 - 原価 - 固定費 = 利益 → 固定費 = 売上 - 原価 - 利益
+    var planMargin = KPI_TARGET.targetMargin || 0;
+    // 実績の原価率を参考にする
+    var actTotalRev = actualBaseData.reduce(function(s,d){return s+(d.revenue||0)},0);
+    var actTotalCogs = actualBaseData.reduce(function(s,d){return s+(d.cogs||0)},0);
+    var refCogsRatio = (actTotalRev > 0 && actTotalCogs > 0) ? actTotalCogs/actTotalRev : 0;
+    var planCogs = Math.round(monthlyRev * refCogsRatio);
+    var planFixed = monthlyRev - planCogs - monthlyProfit;
+    if(planFixed < 0) planFixed = 0;
+
+    planBaseData = [];
+    for(var i=0;i<12;i++){
+      planBaseData.push({
+        month:(i+1)+'月',
+        revenue: monthlyRev,
+        cogs: planCogs,
+        fixed: planFixed,
+        variable: 0,
+        employees: KPI_TARGET.employeeCount || 1,
+        depreciation: 0,
+        debt: 0,
+        totalAssets: 0,
+        netAssets: 0,
+      });
+    }
+  }
+
+  // ロカベン業種プルダウン初期化
+  initLocaben();
+
+  // 初期モードは実績ベース
+  switchSimMode('actual');
+
+  // Chart.js 初期化
+  var ctx = document.getElementById('simChart').getContext('2d');
+  simChart = new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels: baseData.map(function(d){return d.month}),
+      datasets:[
+        { label:'現状 売上', data:[], backgroundColor:'rgba(156,163,175,0.3)', order:2 },
+        { label:'シミュ 売上', data:[], backgroundColor:'rgba(59,130,246,0.5)', order:2 },
+        { label:'現状 利益', data:[], type:'line', borderColor:'#9ca3af', borderDash:[4,4], pointRadius:2, fill:false, order:1 },
+        { label:'シミュ 利益', data:[], type:'line', borderColor:'#10b981', borderWidth:2, pointRadius:3, fill:false, order:1 }
+      ]
+    },
+    options:{
+      responsive:true,
+      plugins:{
+        legend:{position:'top',labels:{font:{size:11}}},
+        tooltip:{callbacks:{label:function(ctx){return ctx.dataset.label+': '+Math.round(ctx.raw).toLocaleString()+'万'}}}
+      },
+      scales:{
+        y:{ticks:{callback:function(v){return v+'万'}}}
+      }
+    }
+  });
+
+  runSimulation();
+}
+
+// グローバルユーティリティ
+function fMan(n){ if(isNaN(n)||n===null||n===undefined) n=0; return Math.round(n/10000).toLocaleString()+'万'; }
+
+function runSimulation(){
+  try {
+  var results = [];
+  var baseResults = [];
+  for(var i=0;i<baseData.length;i++){
+    var b = baseData[i];
+    var bRev = b.revenue || 0;
+    var bCogs = b.cogs || 0;
+    var bFixed = b.fixed || 0;
+    var bVar = b.variable || 0;
+    var bDepr = b.depreciation || 0;
+
+    // ベース利益 = 売上 - 原価 - 固定費(販管費) - 変動費 - 減価償却
+    var bProfit = bRev - bCogs - bFixed - bVar - bDepr;
+    baseResults.push({ revenue:bRev, profit:bProfit, cf:bProfit+bDepr });
+
+    // シミュレーション
+    var rev = Math.round(bRev * (1 + simParams.revenueGrowth/100));
+    var cogs = Math.round(rev * simParams.cogsRatio/100);
+    var fixed = Math.round(bFixed * (1 + simParams.fixedCostChange/100));
+    var varRatio = (bRev > 0 && bVar > 0) ? (bVar / bRev) : 0;
+    var varCost = Math.round(rev * varRatio);
+    var emp = Math.max(1, (b.employees || 1) + simParams.employeeChange);
+    var addDepr = Math.round(simParams.investment * 10000 / 60);
+    var depr = bDepr + addDepr;
+    var gross = rev - cogs;
+    var profit = gross - fixed - varCost - depr;
+    var monthlyRepay = Math.round(simParams.repayment * 10000 / 12);
+    var cf = profit + depr - monthlyRepay;
+    var margin = rev > 0 ? (profit/rev*100) : 0;
+    if(isNaN(margin)) margin = 0;
+    results.push({ month:b.month, revenue:rev, cogs:cogs, gross:gross, fixed:fixed, varCost:varCost, profit:profit, margin:margin, cf:cf, emp:emp, repayment:monthlyRepay });
+  }
+
+  // KPIカード更新
+  var totalRevBase = baseResults.reduce(function(s,r){return s+r.revenue},0);
+  var totalRevSim = results.reduce(function(s,r){return s+r.revenue},0);
+  var totalProfBase = baseResults.reduce(function(s,r){return s+r.profit},0);
+  var totalProfSim = results.reduce(function(s,r){return s+r.profit},0);
+  var avgMarginSim = totalRevSim>0 ? (totalProfSim/totalRevSim*100) : 0;
+  var totalCfSim = results.reduce(function(s,r){return s+r.cf},0);
+
+  function setKpi(id,val,diff){
+    var el=document.getElementById(id);
+    if(!el) return;
+    el.querySelector('.sim-kpi-value').textContent=val;
+    var d=el.querySelector('.sim-kpi-diff');
+    d.textContent=diff;
+    d.style.color=(typeof diff==='string' && diff.startsWith('-'))?'#ef4444':'#10b981';
+  }
+  setKpi('kpi-revenue', fMan(totalRevSim), (totalRevSim>=totalRevBase?'+':'')+fMan(totalRevSim-totalRevBase));
+  setKpi('kpi-profit', fMan(totalProfSim), (totalProfSim>=totalProfBase?'+':'')+fMan(totalProfSim-totalProfBase));
+  setKpi('kpi-margin', avgMarginSim.toFixed(1)+'%', (avgMarginSim>=0?'+':'')+avgMarginSim.toFixed(1)+'%');
+  setKpi('kpi-cf', fMan(totalCfSim), '年間CF');
+
+  // グラフ更新
+  if(simChart){
+    simChart.data.datasets[0].data = baseResults.map(function(r){return Math.round(r.revenue/10000)});
+    simChart.data.datasets[1].data = results.map(function(r){return Math.round(r.revenue/10000)});
+    simChart.data.datasets[2].data = baseResults.map(function(r){return Math.round(r.profit/10000)});
+    simChart.data.datasets[3].data = results.map(function(r){return Math.round(r.profit/10000)});
+    simChart.update();
+  }
+
+  // テーブル更新
+  var tbody = document.getElementById('simTableBody');
+  if(tbody){
+    var html = '';
+    for(var i=0;i<results.length;i++){
+      var r = results[i];
+      var mc = r.profit>=0 ? 'color:#10b981' : 'color:#ef4444';
+      html += '<tr><td style="font-weight:600">'+r.month+'</td><td style="text-align:right">'+fMan(r.revenue)+'</td><td style="text-align:right;color:#9ca3af">'+fMan(r.cogs)+'</td><td style="text-align:right">'+fMan(r.gross)+'</td><td style="text-align:right;color:#9ca3af">'+fMan(r.fixed)+'</td><td style="text-align:right;font-weight:600;'+mc+'">'+fMan(r.profit)+'</td><td style="text-align:right;'+mc+'">'+r.margin.toFixed(1)+'%</td><td style="text-align:right;color:#3b82f6">'+fMan(r.cf)+'</td></tr>';
+    }
+    // 合計行
+    html += '<tr style="border-top:2px solid var(--border);font-weight:700;background:var(--bg)"><td>年間合計</td><td style="text-align:right">'+fMan(totalRevSim)+'</td><td></td><td></td><td></td><td style="text-align:right;'+(totalProfSim>=0?'color:#10b981':'color:#ef4444')+'">'+fMan(totalProfSim)+'</td><td style="text-align:right">'+avgMarginSim.toFixed(1)+'%</td><td style="text-align:right;color:#3b82f6">'+fMan(totalCfSim)+'</td></tr>';
+    tbody.innerHTML = html;
+  }
+
+  // 銀行格付更新
+  updateBankRating();
+  // ロカベン更新（業種選択済みなら）
+  if(document.getElementById('locaMinor').value) updateLocaBenchmark();
+  } catch(e) { console.error('シミュレーションエラー:', e); }
+}
+
+function updateSimParam(key, val){
+  simParams[key] = Number(val);
+  document.getElementById('val-'+key).textContent = val;
+  runSimulation();
+}
+
+// --- ロカベン業種別ベンチマーク ---
+function initLocaben(){
+  var sel = document.getElementById('locaMajor');
+  if(!sel || !LOCABEN.categories) return;
+  LOCABEN.categories.forEach(function(cat){
+    var opt = document.createElement('option');
+    opt.value = cat.major;
+    opt.textContent = cat.major.replace(/^\d+_/,'');
+    sel.appendChild(opt);
+  });
+}
+
+function updateLocaMinor(){
+  var major = document.getElementById('locaMajor').value;
+  var sel = document.getElementById('locaMinor');
+  sel.innerHTML = '<option value="">-- 小分類を選択 --</option>';
+  if(!major) return;
+  var cat = LOCABEN.categories.find(function(c){return c.major===major});
+  if(!cat) return;
+  cat.minors.forEach(function(m){
+    var opt = document.createElement('option');
+    opt.value = m;
+    opt.textContent = m.replace(/^\d+_/,'');
+    sel.appendChild(opt);
+  });
+  // 小分類が1つなら自動選択
+  if(cat.minors.length === 1){
+    sel.value = cat.minors[0];
+    updateLocaBenchmark();
+  }
+}
+
+function updateLocaBenchmark(){
+  var minor = document.getElementById('locaMinor').value;
+  var scale = document.getElementById('locaScale').value;
+  var container = document.getElementById('locabenResult');
+  if(!minor || !scale){ container.innerHTML=''; return; }
+
+  var bkey = minor + '_' + scale;
+  var bm = LOCABEN.benchmarks[bkey];
+  if(!bm){ container.innerHTML='<p style="color:#9ca3af">この業種・規模のデータがありません</p>'; return; }
+
+  // 現在のシミュレーション値を取得
+  var simVals = getSimAnnualValues();
+
+  var indicators = [
+    { key:'revenueGrowth', label:'売上増加率', unit:'%', simVal:simVals.revenueGrowth, reverse:false },
+    { key:'operatingMargin', label:'営業利益率', unit:'%', simVal:simVals.operatingMargin, reverse:false },
+    { key:'laborProductivity', label:'労働生産性', unit:'千円', simVal:simVals.laborProductivity, reverse:false },
+    { key:'ebitdaRatio', label:'EBITDA有利子負債倍率', unit:'倍', simVal:null, reverse:true },
+    { key:'workingCapitalTurnover', label:'営業運転資本回転期間', unit:'ヶ月', simVal:null, reverse:true },
+    { key:'equityRatio', label:'自己資本比率', unit:'%', simVal:simVals.equityRatio, reverse:false },
+  ];
+
+  var html = '<div class="locaben-grid">';
+  indicators.forEach(function(ind){
+    var data = bm[ind.key];
+    if(!data) return;
+    var ranks = data.ranks;
+    var val = ind.simVal;
+    var rank = '-';
+    var rankColor = '#9ca3af';
+
+    if(val !== null){
+      if(ind.reverse){
+        // 低いほど良い指標
+        if(val <= ranks.A) { rank='A'; rankColor='#10b981'; }
+        else if(val <= ranks.B) { rank='B'; rankColor='#3b82f6'; }
+        else if(val <= ranks.C) { rank='C'; rankColor='#f59e0b'; }
+        else if(val <= ranks.D) { rank='D'; rankColor='#f97316'; }
+        else { rank='E'; rankColor='#ef4444'; }
+      } else {
+        // 高いほど良い指標
+        if(val >= ranks.A) { rank='A'; rankColor='#10b981'; }
+        else if(val >= ranks.B) { rank='B'; rankColor='#3b82f6'; }
+        else if(val >= ranks.C) { rank='C'; rankColor='#f59e0b'; }
+        else if(val >= ranks.D) { rank='D'; rankColor='#f97316'; }
+        else { rank='E'; rankColor='#ef4444'; }
+      }
+    }
+
+    html += '<div class="locaben-card">';
+    html += '<div class="locaben-card-header"><span class="locaben-label">'+ind.label+'</span>';
+    html += '<span class="locaben-rank" style="color:'+rankColor+';border-color:'+rankColor+'">'+rank+'</span></div>';
+    html += '<div class="locaben-bars">';
+    // ランクバー
+    var labels = ['E','D','C','B','A'];
+    var colors = ['#ef4444','#f97316','#f59e0b','#3b82f6','#10b981'];
+    html += '<div class="locaben-rank-bar">';
+    for(var j=0;j<5;j++){
+      var active = labels[j] === rank;
+      html += '<div class="locaben-rank-seg'+(active?' active':'')+'" style="background:'+(active?colors[j]:colors[j]+'20')+'">';
+      html += '<span>'+labels[j]+'</span></div>';
+    }
+    html += '</div>';
+    html += '</div>';
+    // 数値
+    html += '<div class="locaben-values">';
+    html += '<div><span class="locaben-val-label">シミュ値</span><span class="locaben-val">'+(val!==null? (typeof val==='number'?val.toFixed(1):val)+ind.unit : '---')+'</span></div>';
+    html += '<div><span class="locaben-val-label">業種中央値</span><span class="locaben-val">'+data.median.toFixed(1)+ind.unit+'</span></div>';
+    html += '<div><span class="locaben-val-label">上位(A)</span><span class="locaben-val" style="color:#10b981">'+ranks.A.toFixed(1)+ind.unit+'</span></div>';
+    html += '</div>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  container.innerHTML = html;
+}
+
+// --- 銀行格付シミュレーション（129点満点ベース）---
+function updateBankRating(){
+  var sv = getSimAnnualValues();
+  var container = document.getElementById('bankRatingResult');
+  if(!container) return;
+
+  // freee実績からBS情報を取得（あれば）
+  var lastB = baseData[baseData.length-1] || {};
+  var totalAssets = lastB.totalAssets || 0;
+  var netAssets = lastB.netAssets || 0;
+  var debt = lastB.debt || 0;
+  var totalRev = 0, totalProfit = 0;
+  for(var i=0;i<baseData.length;i++){
+    var b=baseData[i];
+    var rev=Math.round((b.revenue||0)*(1+simParams.revenueGrowth/100));
+    var cogs=Math.round(rev*simParams.cogsRatio/100);
+    var fixed=Math.round((b.fixed||0)*(1+simParams.fixedCostChange/100));
+    var varR=(b.revenue>0&&b.variable>0)?b.variable/b.revenue:0;
+    var varC=Math.round(rev*varR);
+    var depr=(b.depreciation||0)+Math.round(simParams.investment*10000/60);
+    totalRev+=rev; totalProfit+=(rev-cogs-fixed-varC-depr);
+  }
+  var cf = totalProfit + baseData.reduce(function(s,d){return s+(d.depreciation||0)},0);
+
+  // 13指標のうちシミュレーションで算出可能なものを評価
+  var metrics = [];
+
+  // 1. 自己資本比率（/10点）
+  var eqR = totalAssets>0 ? netAssets/totalAssets*100 : 0;
+  if(eqR>=60) metrics.push({name:'自己資本比率',val:eqR.toFixed(1)+'%',score:10,max:10,lv:'excellent'});
+  else if(eqR>=40) metrics.push({name:'自己資本比率',val:eqR.toFixed(1)+'%',score:8,max:10,lv:'good'});
+  else if(eqR>=20) metrics.push({name:'自己資本比率',val:eqR.toFixed(1)+'%',score:6,max:10,lv:'fair'});
+  else if(eqR>=10) metrics.push({name:'自己資本比率',val:eqR.toFixed(1)+'%',score:3,max:10,lv:'warning'});
+  else metrics.push({name:'自己資本比率',val:eqR.toFixed(1)+'%',score:1,max:10,lv:'danger'});
+
+  // 2. ギアリング比率（/10点）
+  var gear = netAssets>0 ? debt/netAssets*100 : 999;
+  if(gear<=30) metrics.push({name:'ギアリング比率',val:gear.toFixed(0)+'%',score:10,max:10,lv:'excellent'});
+  else if(gear<=50) metrics.push({name:'ギアリング比率',val:gear.toFixed(0)+'%',score:8,max:10,lv:'good'});
+  else if(gear<=100) metrics.push({name:'ギアリング比率',val:gear.toFixed(0)+'%',score:6,max:10,lv:'fair'});
+  else if(gear<=250) metrics.push({name:'ギアリング比率',val:gear.toFixed(0)+'%',score:3,max:10,lv:'warning'});
+  else metrics.push({name:'ギアリング比率',val:gear.toFixed(0)+'%',score:1,max:10,lv:'danger'});
+
+  // 3. 売上高経常利益率（/7点）→営業利益率で代用
+  var pm = sv.operatingMargin;
+  if(pm>=10) metrics.push({name:'売上高利益率',val:pm.toFixed(1)+'%',score:7,max:7,lv:'excellent'});
+  else if(pm>=5) metrics.push({name:'売上高利益率',val:pm.toFixed(1)+'%',score:5,max:7,lv:'good'});
+  else if(pm>=2) metrics.push({name:'売上高利益率',val:pm.toFixed(1)+'%',score:3,max:7,lv:'fair'});
+  else if(pm>=0) metrics.push({name:'売上高利益率',val:pm.toFixed(1)+'%',score:1,max:7,lv:'warning'});
+  else metrics.push({name:'売上高利益率',val:pm.toFixed(1)+'%',score:0,max:7,lv:'danger'});
+
+  // 4. ROA（/7点）
+  var roa = totalAssets>0 ? totalProfit/totalAssets*100 : 0;
+  if(roa>=10) metrics.push({name:'ROA',val:roa.toFixed(1)+'%',score:7,max:7,lv:'excellent'});
+  else if(roa>=5) metrics.push({name:'ROA',val:roa.toFixed(1)+'%',score:5,max:7,lv:'good'});
+  else if(roa>=2) metrics.push({name:'ROA',val:roa.toFixed(1)+'%',score:3,max:7,lv:'fair'});
+  else if(roa>=0) metrics.push({name:'ROA',val:roa.toFixed(1)+'%',score:1,max:7,lv:'warning'});
+  else metrics.push({name:'ROA',val:roa.toFixed(1)+'%',score:0,max:7,lv:'danger'});
+
+  // 5. 自己資本額（/15点）
+  if(netAssets>=500000000) metrics.push({name:'自己資本額',val:fMan(netAssets),score:15,max:15,lv:'excellent'});
+  else if(netAssets>=100000000) metrics.push({name:'自己資本額',val:fMan(netAssets),score:12,max:15,lv:'good'});
+  else if(netAssets>=30000000) metrics.push({name:'自己資本額',val:fMan(netAssets),score:9,max:15,lv:'good'});
+  else if(netAssets>=10000000) metrics.push({name:'自己資本額',val:fMan(netAssets),score:6,max:15,lv:'fair'});
+  else if(netAssets>0) metrics.push({name:'自己資本額',val:fMan(netAssets),score:3,max:15,lv:'warning'});
+  else metrics.push({name:'自己資本額',val:fMan(netAssets),score:0,max:15,lv:'danger'});
+
+  // 6. 売上高（/8点）
+  if(totalRev>=1000000000) metrics.push({name:'売上高',val:fMan(totalRev),score:8,max:8,lv:'excellent'});
+  else if(totalRev>=500000000) metrics.push({name:'売上高',val:fMan(totalRev),score:7,max:8,lv:'good'});
+  else if(totalRev>=100000000) metrics.push({name:'売上高',val:fMan(totalRev),score:5,max:8,lv:'good'});
+  else if(totalRev>=50000000) metrics.push({name:'売上高',val:fMan(totalRev),score:3,max:8,lv:'fair'});
+  else metrics.push({name:'売上高',val:fMan(totalRev),score:1,max:8,lv:'warning'});
+
+  // 7. 債務償還年数（/10点）
+  var debtYrs = cf>0 ? debt/cf : null;
+  if(debtYrs===null) metrics.push({name:'債務償還年数',val:'算出不可',score:0,max:10,lv:'danger'});
+  else if(debtYrs<=3) metrics.push({name:'債務償還年数',val:debtYrs.toFixed(1)+'年',score:10,max:10,lv:'excellent'});
+  else if(debtYrs<=5) metrics.push({name:'債務償還年数',val:debtYrs.toFixed(1)+'年',score:8,max:10,lv:'good'});
+  else if(debtYrs<=10) metrics.push({name:'債務償還年数',val:debtYrs.toFixed(1)+'年',score:5,max:10,lv:'fair'});
+  else if(debtYrs<=20) metrics.push({name:'債務償還年数',val:debtYrs.toFixed(1)+'年',score:2,max:10,lv:'warning'});
+  else metrics.push({name:'債務償還年数',val:debtYrs.toFixed(1)+'年',score:0,max:10,lv:'danger'});
+
+  // 8. CF額（/20点）
+  if(cf>=50000000) metrics.push({name:'キャッシュフロー額',val:fMan(cf),score:20,max:20,lv:'excellent'});
+  else if(cf>=20000000) metrics.push({name:'キャッシュフロー額',val:fMan(cf),score:16,max:20,lv:'good'});
+  else if(cf>=10000000) metrics.push({name:'キャッシュフロー額',val:fMan(cf),score:12,max:20,lv:'good'});
+  else if(cf>=5000000) metrics.push({name:'キャッシュフロー額',val:fMan(cf),score:8,max:20,lv:'fair'});
+  else if(cf>0) metrics.push({name:'キャッシュフロー額',val:fMan(cf),score:4,max:20,lv:'warning'});
+  else metrics.push({name:'キャッシュフロー額',val:fMan(cf),score:0,max:20,lv:'danger'});
+
+  // スコア集計
+  var totalScore = metrics.reduce(function(s,m){return s+m.score},0);
+  var maxScore = metrics.reduce(function(s,m){return s+m.max},0);
+  var fullMax = 129;
+
+  // 算出可能な指標からの推定（全129点に換算）
+  var estimatedTotal = maxScore>0 ? Math.round(totalScore / maxScore * fullMax) : 0;
+
+  var rank, rankLabel, rankColor;
+  if(estimatedTotal>=100){rank='A';rankLabel='優良（正常先）';rankColor='#10b981';}
+  else if(estimatedTotal>=80){rank='B';rankLabel='良好（正常先）';rankColor='#3b82f6';}
+  else if(estimatedTotal>=60){rank='C';rankLabel='普通（要注意先予備）';rankColor='#f59e0b';}
+  else if(estimatedTotal>=40){rank='D';rankLabel='要注意（要管理先）';rankColor='#f97316';}
+  else{rank='E';rankLabel='危険（破綻懸念先）';rankColor='#ef4444';}
+
+  var levelColors = {excellent:'#10b981',good:'#3b82f6',fair:'#f59e0b',warning:'#f97316',danger:'#ef4444'};
+
+  var html = '<div class="bank-rating-header">';
+  html += '<div class="bank-rank-circle" style="border-color:'+rankColor+';color:'+rankColor+'">'+rank+'</div>';
+  html += '<div class="bank-rank-info"><div class="bank-rank-label" style="color:'+rankColor+'">'+rankLabel+'</div>';
+  html += '<div class="bank-rank-score">推定スコア: '+estimatedTotal+' / '+fullMax+'点</div>';
+  html += '<div class="bank-rank-note">※シミュレーション値からの簡易算出（'+metrics.length+'/13指標）</div></div></div>';
+
+  // カテゴリ別
+  var cats = [
+    {label:'安全性',items:metrics.filter(function(m){return m.name==='自己資本比率'||m.name==='ギアリング比率'})},
+    {label:'収益性',items:metrics.filter(function(m){return m.name==='売上高利益率'||m.name==='ROA'})},
+    {label:'規模・成長性',items:metrics.filter(function(m){return m.name==='自己資本額'||m.name==='売上高'})},
+    {label:'返済能力',items:metrics.filter(function(m){return m.name==='債務償還年数'||m.name==='キャッシュフロー額'})},
+  ];
+
+  html += '<div class="bank-metrics-grid">';
+  cats.forEach(function(cat){
+    html += '<div class="bank-cat"><div class="bank-cat-label">'+cat.label+'</div>';
+    cat.items.forEach(function(m){
+      var c = levelColors[m.lv];
+      var pct = m.max>0 ? Math.round(m.score/m.max*100) : 0;
+      html += '<div class="bank-metric-row">';
+      html += '<span class="bank-metric-name">'+m.name+'</span>';
+      html += '<span class="bank-metric-val">'+m.val+'</span>';
+      html += '<div class="bank-metric-bar"><div class="bank-metric-fill" style="width:'+pct+'%;background:'+c+'"></div></div>';
+      html += '<span class="bank-metric-score" style="color:'+c+'">'+m.score+'/'+m.max+'</span>';
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+  html += '</div>';
+
+  container.innerHTML = html;
+}
+
+function getSimAnnualValues(){
+  // 現在のシミュレーション結果から年間指標を算出
+  var totalRev=0, totalProfit=0, emp=1;
+  for(var i=0;i<baseData.length;i++){
+    var b = baseData[i];
+    var bRev = b.revenue||0;
+    var rev = Math.round(bRev * (1 + simParams.revenueGrowth/100));
+    var cogs = Math.round(rev * simParams.cogsRatio/100);
+    var fixed = Math.round((b.fixed||0) * (1 + simParams.fixedCostChange/100));
+    var varR = (bRev>0 && b.variable>0) ? b.variable/bRev : 0;
+    var varCost = Math.round(rev * varR);
+    var depr = (b.depreciation||0) + Math.round(simParams.investment*10000/60);
+    var profit = rev - cogs - fixed - varCost - depr;
+    totalRev += rev;
+    totalProfit += profit;
+    emp = Math.max(1, (b.employees||1) + simParams.employeeChange);
+  }
+  // ベースの年間売上
+  var baseTotalRev = baseData.reduce(function(s,d){return s+(d.revenue||0)},0);
+  var revenueGrowth = baseTotalRev>0 ? ((totalRev-baseTotalRev)/baseTotalRev*100) : 0;
+  var margin = totalRev>0 ? (totalProfit/totalRev*100) : 0;
+  var productivity = totalRev / emp / 1000; // 千円単位
+  // 自己資本比率（簡易: 最終月のnetAssets/totalAssets）
+  var lastB = baseData[baseData.length-1];
+  var eqRatio = (lastB.totalAssets>0 && lastB.netAssets>0) ? (lastB.netAssets/lastB.totalAssets*100) : 0;
+
+  return {
+    revenueGrowth: Math.round(revenueGrowth*10)/10,
+    operatingMargin: Math.round(margin*10)/10,
+    laborProductivity: Math.round(productivity*10)/10,
+    equityRatio: Math.round(eqRatio*10)/10,
+  };
+}
+
+function applySimToKpi(){
+  if(!confirm('シミュレーション結果をKPI目標に反映しますか？\\n既存の目標値が上書きされます。')) return;
+
+  // 現在のシミュレーション結果を集計
+  var results = [];
+  for(var i=0;i<12;i++){
+    var b = baseData[i];
+    var rev = Math.round(b.revenue * (1 + simParams.revenueGrowth/100));
+    var cogs = Math.round(rev * simParams.cogsRatio/100);
+    var fixed = Math.round(b.fixed * (1 + simParams.fixedCostChange/100));
+    var varCost = Math.round(rev * (b.variable / b.revenue || 0));
+    var emp = Math.max(1, b.employees + simParams.employeeChange);
+    var addDepr = Math.round(simParams.investment * 10000 / 60);
+    var depr = b.depreciation + addDepr;
+    var profit = rev - cogs - fixed - varCost - depr;
+    results.push({ revenue:rev, profit:profit, emp:emp });
+  }
+
+  var totalRev = results.reduce(function(s,r){return s+r.revenue},0);
+  var totalProfit = results.reduce(function(s,r){return s+r.profit},0);
+  var avgMargin = totalRev > 0 ? (totalProfit / totalRev * 100) : 0;
+  var avgEmp = results[0].emp;
+  var productivity = totalRev / avgEmp / 10000;
+
+  var body = {
+    fiscalYear: KPI_TARGET.fiscalYear,
+    targetRevenue: totalRev,
+    targetProfit: totalProfit,
+    targetMargin: Math.round(avgMargin * 10) / 10,
+    targetEquityRatio: KPI_TARGET.targetEquityRatio,
+    targetProductivity: Math.round(productivity * 10) / 10,
+    employeeCount: avgEmp,
+  };
+
+  fetch('/api/plan/kpi', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+    .then(function(r){ return r.json() })
+    .then(function(){
+      alert('KPI目標に反映しました。\\n\\n売上: ' + Math.round(totalRev/10000).toLocaleString() + '万円\\n利益: ' + Math.round(totalProfit/10000).toLocaleString() + '万円\\n利益率: ' + avgMargin.toFixed(1) + '%');
+      location.reload();
+    })
+    .catch(function(e){ alert('反映に失敗しました: ' + e.message); });
+}
+
+function resetSimParams(){
+  simParams = { revenueGrowth:0, cogsRatio:45, fixedCostChange:0, employeeChange:0, investment:0, repayment:0 };
+  document.getElementById('sl-revenueGrowth').value=0; document.getElementById('val-revenueGrowth').textContent='0';
+  document.getElementById('sl-cogsRatio').value=45; document.getElementById('val-cogsRatio').textContent='45';
+  document.getElementById('sl-fixedCostChange').value=0; document.getElementById('val-fixedCostChange').textContent='0';
+  document.getElementById('sl-employeeChange').value=0; document.getElementById('val-employeeChange').textContent='0';
+  document.getElementById('sl-investment').value=0; document.getElementById('val-investment').textContent='0';
+  document.getElementById('sl-repayment').value=0; document.getElementById('val-repayment').textContent='0';
+  runSimulation();
+}
+
 function saveKpi(){
   var customKpis=[];
   document.querySelectorAll('.custom-kpi-row').forEach(function(row){
@@ -835,4 +1626,62 @@ const PLAN_CSS = `
 .mt-input::placeholder{color:#ccc}
 .btn-clear-row{display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:4px;border:none;background:transparent;color:#d1d5db;cursor:pointer;transition:all .15s;padding:0}
 .btn-clear-row:hover{background:#fee2e2;color:#ef4444}
+.plan-tabs{display:flex;gap:8px;margin-bottom:24px}
+.plan-tab{padding:10px 20px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--text2);font-size:14px;font-weight:600;cursor:pointer;transition:all .2s}
+.plan-tab:hover{border-color:var(--primary);color:var(--text)}
+.plan-tab.active{background:var(--primary);color:#fff;border-color:var(--primary);box-shadow:0 2px 8px rgba(34,152,174,0.3)}
+.sim-kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.sim-kpi-card{padding:16px;border-radius:10px;border:1px solid var(--border);background:#fff}
+.sim-kpi-label{font-size:11px;color:var(--text2);font-weight:600;margin-bottom:4px}
+.sim-kpi-value{font-size:22px;font-weight:800;color:var(--text)}
+.sim-kpi-diff{font-size:12px;font-weight:600;margin-top:4px}
+.grid-sim{display:grid;grid-template-columns:320px 1fr;gap:20px}
+.sim-slider{margin-bottom:18px}
+.sim-slider-header{display:flex;align-items:center;gap:4px;font-size:13px;color:var(--text2);margin-bottom:6px}
+.sim-slider-val{font-weight:700;color:var(--primary);margin-left:auto}
+.sim-slider input[type=range]{width:100%;height:6px;border-radius:3px;appearance:none;background:#e5e7eb;outline:none;cursor:pointer}
+.sim-slider input[type=range]::-webkit-slider-thumb{appearance:none;width:18px;height:18px;border-radius:50%;background:var(--primary);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,0.2)}
+.sim-slider-range{display:flex;justify-content:space-between;font-size:10px;color:#9ca3af;margin-top:2px}
+.sim-source-bar{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-radius:8px;background:var(--bg);border:1px solid var(--border);margin-bottom:16px;font-size:12px;color:var(--text2);flex-wrap:wrap;gap:8px}
+.sim-mode-toggle{display:flex;gap:4px;background:#f1f5f9;border-radius:8px;padding:3px}
+.sim-mode-btn{padding:6px 14px;border-radius:6px;border:none;background:transparent;color:var(--text2);font-size:12px;font-weight:600;cursor:pointer;transition:all .2s}
+.sim-mode-btn.active{background:#fff;color:var(--primary);box-shadow:0 1px 3px rgba(0,0,0,0.1)}
+.sim-mode-btn:hover:not(.active){color:var(--text)}
+.sim-source-label{font-weight:600;margin-right:6px}
+.sim-apply-bar{display:flex;justify-content:space-between;align-items:center;padding:20px;border-radius:12px;background:linear-gradient(135deg,rgba(34,152,174,0.08),rgba(34,152,174,0.02));border:1px solid var(--primary);margin-top:20px}
+.sim-apply-info strong{font-size:14px;color:var(--text);display:block;margin-bottom:4px}
+.sim-apply-info p{font-size:12px;color:var(--text2);margin:0}
+.sim-apply-bar .btn-primary{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.locaben-select-row{display:grid;grid-template-columns:1fr 1fr 160px;gap:12px}
+.locaben-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.locaben-card{padding:14px;border:1px solid var(--border);border-radius:10px;background:#fff}
+.locaben-card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.locaben-label{font-size:12px;font-weight:700;color:var(--text)}
+.locaben-rank{font-size:18px;font-weight:800;border:2px solid;border-radius:8px;width:36px;height:36px;display:flex;align-items:center;justify-content:center}
+.locaben-rank-bar{display:flex;gap:2px;margin-bottom:8px}
+.locaben-rank-seg{flex:1;height:6px;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:0;transition:all .2s}
+.locaben-rank-seg.active{height:14px;font-size:9px;font-weight:700;color:#fff}
+.locaben-values{display:flex;flex-direction:column;gap:4px}
+.locaben-val-label{font-size:10px;color:var(--text2);margin-right:6px}
+.locaben-val{font-size:12px;font-weight:600;color:var(--text)}
+.locaben-summary{display:flex;gap:24px;margin-top:16px;padding:16px;border-radius:10px;background:linear-gradient(135deg,rgba(34,152,174,0.08),rgba(34,152,174,0.02));border:1px solid var(--primary)}
+.locaben-score,.locaben-bank{display:flex;flex-direction:column;gap:4px}
+.locaben-score-label,.locaben-bank-label{font-size:11px;color:var(--text2);font-weight:600}
+.locaben-score-val{font-size:20px;font-weight:800;color:var(--text)}
+.locaben-bank-val{font-size:20px;font-weight:800}
+.bank-rating-header{display:flex;align-items:center;gap:20px;margin-bottom:20px;padding:16px;border-radius:12px;background:var(--bg)}
+.bank-rank-circle{width:64px;height:64px;border-radius:50%;border:3px solid;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:900;flex-shrink:0}
+.bank-rank-label{font-size:16px;font-weight:700;margin-bottom:2px}
+.bank-rank-score{font-size:14px;font-weight:600;color:var(--text)}
+.bank-rank-note{font-size:11px;color:var(--text2);margin-top:2px}
+.bank-metrics-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.bank-cat{padding:12px;border:1px solid var(--border);border-radius:10px}
+.bank-cat-label{font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px}
+.bank-metric-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px}
+.bank-metric-name{width:100px;flex-shrink:0;color:var(--text);font-weight:600}
+.bank-metric-val{width:70px;flex-shrink:0;text-align:right;color:var(--text2)}
+.bank-metric-bar{flex:1;height:6px;border-radius:3px;background:#f1f5f9;overflow:hidden}
+.bank-metric-fill{height:100%;border-radius:3px;transition:width .3s}
+.bank-metric-score{width:40px;flex-shrink:0;text-align:right;font-weight:700;font-size:11px}
+@media(max-width:768px){.sim-kpi-grid{grid-template-columns:1fr 1fr}.grid-sim{grid-template-columns:1fr}.sim-apply-bar{flex-direction:column;gap:12px;text-align:center}.sim-source-bar{flex-direction:column;gap:4px}.locaben-grid{grid-template-columns:1fr 1fr}.locaben-select-row{grid-template-columns:1fr}.bank-metrics-grid{grid-template-columns:1fr}}
 `;

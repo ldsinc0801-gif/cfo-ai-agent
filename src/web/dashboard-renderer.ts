@@ -123,7 +123,7 @@ ${renderSidebar('dashboard', meta.companyName)}
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
         <span class="usage-text-val">--</span>
       </div>
-      <span class="pill pill--${es.overallAssessment}">${levelJP(es.overallAssessment)}</span>
+      <!-- 経営状態バッジ非表示 -->
       <div class="report-dropdown">
         <button class="btn-report" onclick="this.parentElement.classList.toggle('open')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
@@ -615,6 +615,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","H
 .nav-item.nav-disabled{opacity:0.4;pointer-events:none}
 .sidebar-footer{padding:16px 20px;border-top:1px solid rgba(255,255,255,0.15)}
 .sidebar-company{font-size:13px;color:#fff;font-weight:600}
+.sidebar-user{display:flex;align-items:center;gap:8px;margin-top:10px;padding:8px 0}
+.sidebar-user-avatar{width:28px;height:28px;border-radius:50%;flex-shrink:0}
+.sidebar-user-avatar-placeholder{width:28px;height:28px;border-radius:50%;background:#475569;flex-shrink:0}
+.sidebar-user-info{flex:1;min-width:0}
+.sidebar-user-name{font-size:12px;color:#e2e8f0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sidebar-user-email{font-size:10px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sidebar-logout-btn{background:none;border:none;color:#94a3b8;cursor:pointer;padding:4px;border-radius:4px;flex-shrink:0}
+.sidebar-logout-btn:hover{color:#ef4444;background:rgba(239,68,68,0.1)}
 .sidebar-version{font-size:11px;color:#68b3be;margin-top:2px}
 
 /* === Main === */

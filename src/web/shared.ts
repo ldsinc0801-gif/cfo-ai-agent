@@ -4,6 +4,15 @@
 import fs from 'fs';
 import path from 'path';
 
+// リクエストごとのユーザー情報（ミドルウェアでセット）
+let _currentUser: SidebarUser | undefined;
+export function setCurrentUser(user: SidebarUser | undefined): void {
+  _currentUser = user;
+}
+export function getCurrentUser(): SidebarUser | undefined {
+  return _currentUser;
+}
+
 /** トークンファイルから選択中の事業所名を取得 */
 function getCompanyNameFromToken(): string {
   try {
@@ -31,7 +40,15 @@ function getDemoModeInfo(): { enabled: boolean; companyName: string } {
   return { enabled: false, companyName: '' };
 }
 
-export function renderSidebar(active: string, companyName?: string): string {
+export interface SidebarUser {
+  id: string;
+  email: string;
+  name: string;
+  picture: string;
+}
+
+export function renderSidebar(active: string, companyName?: string, user?: SidebarUser): string {
+  const sidebarUser = user || _currentUser;
   const demo = getDemoModeInfo();
   const displayName = demo.enabled ? demo.companyName : (companyName || getCompanyNameFromToken() || 'AI CFO');
   const menu = [
@@ -59,9 +76,9 @@ export function renderSidebar(active: string, companyName?: string): string {
   <div class="sidebar-brand">
     <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
     <span>AI CFO</span>
-    ${demo.enabled ? '<span style="font-size:9px;background:#f59e0b;color:#fff;padding:2px 6px;border-radius:4px;margin-left:4px;font-weight:700">DEMO</span>' : ''}
+    ${demo.enabled ? '<span style="font-size:9px;background:rgba(255,255,255,0.2);color:#fff;padding:2px 6px;border-radius:4px;margin-left:4px;font-weight:700">DEMO</span>' : ''}
   </div>
-  ${demo.enabled ? `<div style="padding:4px 16px 8px;font-size:11px;color:#f59e0b;font-weight:600">${esc(displayName)}</div>` : ''}
+  ${demo.enabled ? `<div style="padding:4px 16px 8px;font-size:11px;color:#fff;font-weight:600">${esc(displayName)}</div>` : ''}
   <nav class="sidebar-nav">
     <div class="nav-section">メニュー</div>
 ${menu.map(i => navItem(i, active)).join('\n')}
@@ -72,6 +89,19 @@ ${settings.map(i => navItem(i, active)).join('\n')}
   </nav>
   <div class="sidebar-footer">
     <div class="sidebar-company">${esc(displayName)}</div>
+    ${sidebarUser ? `
+    <div class="sidebar-user">
+      ${sidebarUser.picture ? `<img src="${esc(sidebarUser.picture)}" alt="" class="sidebar-user-avatar" referrerpolicy="no-referrer">` : '<div class="sidebar-user-avatar-placeholder"></div>'}
+      <div class="sidebar-user-info">
+        <div class="sidebar-user-name">${esc(sidebarUser.name)}</div>
+        <div class="sidebar-user-email">${esc(sidebarUser.email)}</div>
+      </div>
+      <form method="POST" action="/logout" style="margin:0">
+        <button type="submit" class="sidebar-logout-btn" title="ログアウト">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        </button>
+      </form>
+    </div>` : ''}
     <div class="sidebar-version">v0.1.0</div>
   </div>
 </aside>`;
@@ -108,6 +138,7 @@ export function agentPageShell(opts: {
   active: string;
   title: string;
   companyName?: string;
+  user?: SidebarUser;
   bodyHTML: string;
 }): string {
   return `<!DOCTYPE html>
@@ -120,7 +151,7 @@ export function agentPageShell(opts: {
 <style>${SHARED_CSS}</style>
 </head>
 <body>
-${renderSidebar(opts.active, opts.companyName)}
+${renderSidebar(opts.active, opts.companyName, opts.user)}
 <div class="main">
   <header class="header">
     <button class="menu-toggle" onclick="document.getElementById('sidebar').classList.toggle('open')">
@@ -243,6 +274,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","H
 .nav-item.nav-disabled{opacity:0.4;pointer-events:none}
 .sidebar-footer{padding:16px 20px;border-top:1px solid rgba(255,255,255,0.15)}
 .sidebar-company{font-size:13px;color:#d1d5db;font-weight:600}
+.sidebar-user{display:flex;align-items:center;gap:8px;margin-top:10px;padding:8px 0}
+.sidebar-user-avatar{width:28px;height:28px;border-radius:50%;flex-shrink:0}
+.sidebar-user-avatar-placeholder{width:28px;height:28px;border-radius:50%;background:#475569;flex-shrink:0}
+.sidebar-user-info{flex:1;min-width:0}
+.sidebar-user-name{font-size:12px;color:#e2e8f0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sidebar-user-email{font-size:10px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sidebar-logout-btn{background:none;border:none;color:#94a3b8;cursor:pointer;padding:4px;border-radius:4px;flex-shrink:0}
+.sidebar-logout-btn:hover{color:#ef4444;background:rgba(239,68,68,0.1)}
 .sidebar-version{font-size:11px;color:#68b3be;margin-top:2px}
 
 .main{margin-left:var(--sidebar-w)}

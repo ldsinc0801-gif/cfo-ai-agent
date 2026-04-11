@@ -221,3 +221,55 @@ export async function getPlanAnalyses(): Promise<any[]> {
   if (error) throw new Error(`分析履歴の取得に失敗: ${error.message}`);
   return data || [];
 }
+
+// ========== ユーザー管理 ==========
+
+export interface UserRecord {
+  id: string;
+  email: string;
+  name: string | null;
+  picture: string | null;
+  created_at: string;
+  last_login_at: string;
+}
+
+export async function upsertUser(email: string, name: string, picture: string): Promise<UserRecord> {
+  const { data, error } = await getSupabase()
+    .from('users')
+    .upsert({
+      email,
+      name,
+      picture,
+      last_login_at: new Date().toISOString(),
+    }, { onConflict: 'email' })
+    .select()
+    .single();
+
+  if (error) throw new Error(`ユーザーの保存に失敗: ${error.message}`);
+  logger.info(`ユーザーを保存: ${email}`);
+  return data;
+}
+
+export async function getUserByEmail(email: string): Promise<UserRecord | null> {
+  const { data, error } = await getSupabase()
+    .from('users')
+    .select('*')
+    .eq('email', email)
+    .single();
+
+  if (error) {
+    if (error.code === 'PGRST116') return null; // not found
+    throw new Error(`ユーザーの取得に失敗: ${error.message}`);
+  }
+  return data;
+}
+
+export async function listUsers(): Promise<UserRecord[]> {
+  const { data, error } = await getSupabase()
+    .from('users')
+    .select('*')
+    .order('last_login_at', { ascending: false });
+
+  if (error) throw new Error(`ユーザー一覧の取得に失敗: ${error.message}`);
+  return data || [];
+}

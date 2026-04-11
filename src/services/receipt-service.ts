@@ -17,6 +17,9 @@ export interface JournalEntry {
   description: string;    // 摘要
   partnerName: string;    // 取引先名
   receiptType: string;    // 領収書 / レシート / 請求書
+  receiptFilePath?: string;   // アップロードされたレシートのファイルパス
+  receiptFileName?: string;   // 元のファイル名
+  receiptMimeType?: string;   // MIMEタイプ
 }
 
 /** 領収書解析結果 */
@@ -144,6 +147,36 @@ ${prompt}` },
     const result = await model.generateContent(parts);
     const text = result.response.text();
     this.recordUsage(result, '複数画像解析(Gemini)');
+    return this.parseResponse(text);
+  }
+
+  /**
+   * CSV（カード明細・銀行取引明細）から仕訳データを生成
+   */
+  async analyzeCSV(csvText: string, fileName: string, industry?: string): Promise<ReceiptAnalysis> {
+    if (!this.genAI) throw new Error('GEMINI_API_KEYが未設定です');
+
+    logger.info(`CSV明細を解析中（Gemini）: ${fileName}`);
+
+    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
+    const basePrompt = await this.buildPrompt(industry);
+
+    const result = await model.generateContent([
+      { text: `以下はクレジットカード明細または銀行取引明細のCSVデータです。
+各取引行を読み取り、仕訳データを生成してください。
+- 貸方（creditAccount）はカード明細なら「未払金」、銀行明細なら「普通預金」としてください
+- CSVのヘッダー行がある場合は自動判別してください
+- 日付、金額、取引先名、摘要をCSVから正確に読み取ってください
+
+=== CSVデータ（${fileName}）===
+${csvText}
+===
+
+${basePrompt}` },
+    ]);
+
+    const text = result.response.text();
+    this.recordUsage(result, 'CSV明細解析(Gemini)');
     return this.parseResponse(text);
   }
 

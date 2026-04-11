@@ -3,6 +3,8 @@ dotenv.config();
 
 import axios from 'axios';
 import express from 'express';
+import session from 'express-session';
+import crypto from 'crypto';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
@@ -34,6 +36,15 @@ import { isSupabaseAvailable } from '../clients/supabase.js';
 import * as repo from '../repositories/supabase-repository.js';
 import { learningService } from '../services/learning-service.js';
 import { seedDemoData } from '../demo-data.js';
+import { renderLoginHTML } from './login-page.js';
+import { setCurrentUser } from './shared.js';
+
+// セッションにユーザー情報を保持するための型拡張
+declare module 'express-session' {
+  interface SessionData {
+    user?: { id: string; email: string; name: string; picture: string };
+  }
+}
 
 // デモデータの初期化
 seedDemoData();
@@ -67,6 +78,122 @@ function clearCache(): void {
 app.use((_req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', 'Content-Type');
+  next();
+});
+
+// セッション管理
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+app.use(session({
+  secret: SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7日間
+    httpOnly: true,
+    secure: false, // 本番ではtrue（HTTPS）
+    sameSite: 'lax',
+  },
+}));
+
+// === 認証ルート（ミドルウェアの前に定義） ===
+
+// ログインページ
+app.get('/login', (req, res) => {
+  if (req.session.user) { res.redirect('/'); return; }
+  const error = req.query.error as string | undefined;
+  res.send(renderLoginHTML(error));
+});
+
+// Google OAuth開始（ログイン用）
+const GOOGLE_LOGIN_REDIRECT_URI = process.env.GOOGLE_LOGIN_REDIRECT_URI || 'http://localhost:3000/auth/login/google/callback';
+app.get('/auth/login/google', (_req, res) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  if (!clientId) {
+    res.redirect('/login?error=' + encodeURIComponent('Google OAuth未設定です。.envにGOOGLE_CLIENT_IDを設定してください。'));
+    return;
+  }
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: GOOGLE_LOGIN_REDIRECT_URI,
+    response_type: 'code',
+    scope: 'openid email profile',
+    access_type: 'online',
+    prompt: 'select_account',
+  });
+  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+});
+
+// Google OAuthコールバック（ログイン用）
+app.get('/auth/login/google/callback', async (req, res) => {
+  try {
+    const code = req.query.code as string;
+    if (!code) {
+      res.redirect('/login?error=' + encodeURIComponent('認可コードが取得できませんでした'));
+      return;
+    }
+
+    // アクセストークン取得
+    const tokenRes = await axios.post('https://oauth2.googleapis.com/token', {
+      code,
+      client_id: process.env.GOOGLE_CLIENT_ID,
+      client_secret: process.env.GOOGLE_CLIENT_SECRET,
+      redirect_uri: GOOGLE_LOGIN_REDIRECT_URI,
+      grant_type: 'authorization_code',
+    });
+    const accessToken = tokenRes.data.access_token;
+
+    // ユーザー情報取得
+    const userRes = await axios.get('https://www.googleapis.com/oauth2/v2/userinfo', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    const email = userRes.data.email;
+    const name = userRes.data.name || email;
+    const picture = userRes.data.picture || '';
+
+    // Supabaseにユーザーを登録/更新
+    let userId = '';
+    if (isSupabaseAvailable()) {
+      try {
+        const user = await repo.upsertUser(email, name, picture);
+        userId = user.id;
+      } catch (e) {
+        logger.warn('Supabaseユーザー登録失敗（ログインは継続）', e);
+      }
+    }
+
+    req.session.user = { id: userId, email, name, picture };
+
+    logger.info(`ログイン: ${email}${userId ? ` (ID: ${userId})` : ''}`);
+    res.redirect('/');
+  } catch (error: any) {
+    logger.error('Googleログインエラー', error);
+    res.redirect('/login?error=' + encodeURIComponent('Googleログインに失敗しました'));
+  }
+});
+
+// ログアウト
+app.post('/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.redirect('/login');
+  });
+});
+
+// 認証ミドルウェア（上記ルート以外に適用）
+app.use((req, res, next) => {
+  // サイドバー用にユーザー情報をセット
+  setCurrentUser(req.session.user);
+
+  // 認証不要パス
+  const path = req.path;
+  if (path === '/login' || path.startsWith('/auth/login/') || path.startsWith('/api/')) {
+    next();
+    return;
+  }
+  if (!req.session.user) {
+    res.redirect('/login');
+    return;
+  }
   next();
 });
 
@@ -1090,20 +1217,33 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
       const file = files[0];
       const ext = path.extname(file.originalname).toLowerCase();
       const buffer = fs.readFileSync(file.path);
+      const mimeMap: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
 
       let analysis;
-      if (ext === '.pdf') {
+      if (ext === '.csv') {
+        const csvText = fs.readFileSync(file.path, 'utf-8');
+        analysis = await receiptService.analyzeCSV(csvText, file.originalname, industry);
+      } else if (ext === '.pdf') {
         analysis = await receiptService.analyzeReceiptPDF(buffer, file.originalname, industry);
       } else {
-        const mimeMap: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
         const mimeType = mimeMap[ext] || 'image/jpeg';
         analysis = await receiptService.analyzeReceiptImage(buffer, mimeType, file.originalname, industry);
+      }
+      // レシートファイル情報を仕訳データに付与（freee添付用）
+      for (const entry of analysis.entries) {
+        entry.receiptFilePath = file.path;
+        entry.receiptFileName = file.originalname;
+        entry.receiptMimeType = mimeMap[ext] || 'application/octet-stream';
       }
       res.send(renderAccountingPageHTML({ aiAvailable: true, analysis }));
     } else {
       // 複数ファイルの場合
-      const imageFiles = files.filter(f => !f.originalname.toLowerCase().endsWith('.pdf'));
+      const imageFiles = files.filter(f => {
+        const e = path.extname(f.originalname).toLowerCase();
+        return e !== '.pdf' && e !== '.csv';
+      });
       const pdfFiles = files.filter(f => f.originalname.toLowerCase().endsWith('.pdf'));
+      const csvFiles = files.filter(f => f.originalname.toLowerCase().endsWith('.csv'));
 
       const allEntries: JournalEntry[] = [];
       const allNotes: string[] = [];
@@ -1127,6 +1267,14 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
         );
         allEntries.push(...pdfAnalysis.entries);
         allNotes.push(...pdfAnalysis.notes);
+      }
+
+      // CSVは1件ずつ解析して結果をマージ
+      for (const csvFile of csvFiles) {
+        const csvText = fs.readFileSync(csvFile.path, 'utf-8');
+        const csvAnalysis = await receiptService.analyzeCSV(csvText, csvFile.originalname, industry);
+        allEntries.push(...csvAnalysis.entries);
+        allNotes.push(...csvAnalysis.notes);
       }
 
       const analysis: import('../services/receipt-service.js').ReceiptAnalysis = {
@@ -1338,7 +1486,7 @@ app.post('/agent/accounting/send-freee', express.urlencoded({ extended: true }),
         date: entry.date,
       }] : undefined;
 
-      await apiClient.createDeal(companyId, {
+      const dealResponse = await apiClient.createDeal(companyId, {
         issue_date: entry.date,
         type: dealType,
         details: [{
@@ -1350,8 +1498,31 @@ app.post('/agent/accounting/send-freee', express.urlencoded({ extended: true }),
         payments,
       });
 
+      // レシート画像をfreeeに添付
+      let receiptStatus = '';
+      const dealId = dealResponse?.deal?.id;
+      if (dealId && entry.receiptFilePath) {
+        try {
+          const receiptBuffer = fs.readFileSync(entry.receiptFilePath);
+          const receiptId = await apiClient.uploadReceipt(
+            companyId,
+            receiptBuffer,
+            entry.receiptFileName || 'receipt.jpg',
+            entry.receiptMimeType || 'image/jpeg'
+          );
+          await apiClient.linkReceiptToDeal(companyId, dealId, receiptId);
+          receiptStatus = ' [レシート添付済]';
+        } catch (receiptErr: any) {
+          const errMsg = receiptErr?.message || String(receiptErr);
+          logger.warn('レシート添付に失敗:', errMsg);
+          receiptStatus = errMsg.includes('上限') || errMsg.includes('有料プラン')
+            ? ' [レシート添付失敗: freeeファイルボックスの上限超過。有料プランへの変更または既存ファイルの削除が必要です]'
+            : ` [レシート添付失敗: ${errMsg}]`;
+        }
+      }
+
       const paymentStatus = wallet ? `→ ${entry.creditAccount}で決済済み` : '→ 未決済（口座未設定）';
-      results.push(`[送信完了] ${entry.date} ${entry.debitAccount} ${entry.amount}円 ${paymentStatus} - ${entry.description}`);
+      results.push(`[送信完了] ${entry.date} ${entry.debitAccount} ${entry.amount}円 ${paymentStatus} - ${entry.description}${receiptStatus}`);
     }
 
     res.send(renderAccountingPageHTML({

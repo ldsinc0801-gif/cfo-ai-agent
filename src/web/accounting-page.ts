@@ -45,12 +45,12 @@ ${options.success ? `<div class="acc-success">${esc(options.success)}</div>` : '
             <polyline points="17 8 12 3 7 8"/>
             <line x1="12" y1="3" x2="12" y2="15"/>
           </svg>
-          <p class="drop-main">領収書をドラッグ＆ドロップ</p>
+          <p class="drop-main">領収書・カード明細をドラッグ＆ドロップ</p>
           <label class="btn-upload">
             ファイルを選択
-            <input type="file" name="file" accept="image/*,.pdf" hidden id="receiptFile" multiple/>
+            <input type="file" name="file" accept="image/*,.pdf,.csv" hidden id="receiptFile" multiple/>
           </label>
-          <p class="drop-hint">JPEG, PNG, PDF 対応・複数ファイル可</p>
+          <p class="drop-hint">JPEG, PNG, PDF, CSV 対応・カード明細も可・複数ファイル可</p>
         </div>
         <div class="file-confirm" id="fileConfirm" style="display:none">
           <div class="file-info" id="fileInfo"></div>

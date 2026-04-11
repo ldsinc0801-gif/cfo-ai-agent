@@ -294,6 +294,66 @@ export class FreeeApiClient {
   }
 
   /**
+   * レシート画像をファイルボックスにアップロード
+   *
+   * freee API: POST /api/1/receipts
+   * multipart/form-data でファイルを送信
+   */
+  async uploadReceipt(
+    companyId: number,
+    fileBuffer: Buffer,
+    fileName: string,
+    mimeType: string
+  ): Promise<number> {
+    return this.requestWithRetry(async () => {
+      logger.info(`レシートをアップロード中... (${fileName})`);
+
+      const FormData = (await import('form-data')).default;
+      const form = new FormData();
+      form.append('company_id', String(companyId));
+      form.append('receipt', fileBuffer, {
+        filename: fileName,
+        contentType: mimeType,
+      });
+
+      const response = await this.client.post('/api/1/receipts', form, {
+        headers: {
+          ...form.getHeaders(),
+          Authorization: `Bearer ${this.auth.getAccessToken()}`,
+        },
+      });
+
+      const receiptId = response.data?.receipt?.id;
+      if (!receiptId) {
+        throw new Error('レシートIDが取得できませんでした');
+      }
+      logger.info(`レシートアップロード完了 (receipt_id: ${receiptId})`);
+      return receiptId;
+    });
+  }
+
+  /**
+   * レシートを取引に紐付け
+   *
+   * freee API: PUT /api/1/deals/{id}
+   * receipt_ids で紐付け
+   */
+  async linkReceiptToDeal(
+    companyId: number,
+    dealId: number,
+    receiptId: number
+  ): Promise<void> {
+    return this.requestWithRetry(async () => {
+      logger.info(`レシートを取引に紐付け中... (deal_id: ${dealId}, receipt_id: ${receiptId})`);
+      await this.client.put(`/api/1/deals/${dealId}`, {
+        company_id: companyId,
+        receipt_ids: [receiptId],
+      });
+      logger.info('レシート紐付け完了');
+    });
+  }
+
+  /**
    * 勘定科目名からIDを検索
    */
   async findAccountItemId(companyId: number, accountName: string): Promise<number | null> {
