@@ -172,6 +172,22 @@ app.get('/auth/login/google/callback', async (req, res) => {
   }
 });
 
+// デモモードログイン（認証不要）
+app.get('/auth/demo', async (req, res) => {
+  // デモ用のセッションを作成
+  req.session.user = {
+    id: 'demo-user',
+    email: 'demo@ai-cfo.example.com',
+    name: 'デモユーザー',
+    picture: '',
+  };
+  // デモモードを有効化（IT業プロファイル）
+  const { enableDemoMode: enableDemo } = await import('../services/demo-mode.js');
+  enableDemo('consulting');
+  logger.info('デモモードでログイン');
+  res.redirect('/');
+});
+
 // ログアウト
 app.post('/logout', (req, res) => {
   req.session.destroy(() => {
@@ -186,7 +202,7 @@ app.use((req, res, next) => {
 
   // 認証不要パス
   const path = req.path;
-  if (path === '/login' || path.startsWith('/auth/login/') || path.startsWith('/api/')) {
+  if (path === '/login' || path.startsWith('/auth/login/') || path === '/auth/demo' || path.startsWith('/api/')) {
     next();
     return;
   }

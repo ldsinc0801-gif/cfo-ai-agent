@@ -103,6 +103,49 @@ export function renderLoginHTML(error?: string): string {
       font-size: 13px;
       margin-bottom: 20px;
     }
+    .demo-section {
+      margin-top: 24px;
+    }
+    .demo-divider {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 20px;
+      color: #475569;
+      font-size: 12px;
+    }
+    .demo-divider::before, .demo-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: rgba(148, 163, 184, 0.2);
+    }
+    .demo-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 32px;
+      background: transparent;
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s;
+      font-family: inherit;
+    }
+    .demo-btn:hover {
+      background: rgba(56, 189, 248, 0.1);
+      border-color: #38bdf8;
+      transform: translateY(-1px);
+    }
+    .demo-note {
+      margin-top: 10px;
+      font-size: 11px;
+      color: #64748b;
+    }
     .login-footer {
       margin-top: 32px;
       font-size: 12px;
@@ -136,6 +179,17 @@ export function renderLoginHTML(error?: string): string {
         </svg>
         Googleでログイン
       </a>
+    </div>
+
+    <div class="demo-section">
+      <div class="demo-divider"><span>または</span></div>
+      <a href="/auth/demo" class="demo-btn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="5 3 19 12 5 21 5 3"/>
+        </svg>
+        デモ版を試す（ログイン不要）
+      </a>
+      <p class="demo-note">サンプルデータで全機能をお試しいただけます</p>
     </div>
 
     <div class="login-footer">
