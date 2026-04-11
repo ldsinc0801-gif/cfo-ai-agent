@@ -576,7 +576,7 @@ ${(kpi.customKpis || []).filter(ck => ck.scope === 'monthly').map(ck =>
         <div class="card">
           <div class="card-header"><h3>売上・利益シミュレーション</h3></div>
           <div class="card-body">
-            <canvas id="simChart" height="280"></canvas>
+            <div style="position:relative;height:350px"><canvas id="simChart"></canvas></div>
           </div>
         </div>
       </div>
@@ -1002,6 +1002,7 @@ function initSimulator(){
     },
     options:{
       responsive:true,
+      maintainAspectRatio:false,
       plugins:{
         legend:{position:'top',labels:{font:{size:11}}},
         tooltip:{callbacks:{label:function(ctx){return ctx.dataset.label+': '+Math.round(ctx.raw).toLocaleString()+'万'}}}
