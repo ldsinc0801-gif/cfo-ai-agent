@@ -73,7 +73,7 @@ export interface RatingPageOptions {
   savedAt?: string;
 }
 
-/** 分析中ローディング画面（Flourish Japan パーティクルアニメーション） */
+/** 分析中ローディング画面（パーティクルアニメーション） */
 export function renderAnalysisLoadingHTML(source: string): string {
   const label = source === 'freee' ? 'freeeデータ' : source === 'demo' ? 'デモデータ' : '決算書';
   const apiUrl = `/api/finance/${source}`;
@@ -133,7 +133,7 @@ canvas#particleCanvas {
 <div class="loading-overlay" id="loadingOverlay">
   <canvas id="particleCanvas"></canvas>
   <div class="loading-content">
-    <div class="loading-logo">Flourish Japan</div>
+    <div class="loading-logo">AI CFO</div>
     <div class="loading-dots"><span></span><span></span><span></span></div>
     <div class="loading-title" id="loadingStatus">財務データを分析中...</div>
     <div class="loading-sub">${esc(label)}からAIが格付分析を実行しています</div>
