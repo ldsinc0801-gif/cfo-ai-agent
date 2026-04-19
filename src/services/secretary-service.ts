@@ -227,13 +227,12 @@ export class SecretaryService {
       createdAt: new Date().toISOString(),
     };
 
-    // ファイルシステムにも保存（PDF生成用、MID-Bで廃止予定）
+    // ファイルシステムにも保存（PDF生成時のワーク用）
     fs.writeFileSync(path.join(dir, 'metadata.json'), JSON.stringify(template, null, 2));
 
-    // Supabaseにメタデータ保存
+    // Supabaseにメタデータ + ファイルをアップロード
     if (isSupabaseAvailable() && this.tenantId) {
       try {
-        // layout.jsonがあれば読み込み
         const layoutPath = path.join(dir, 'layout.json');
         const layout = fs.existsSync(layoutPath) ? JSON.parse(fs.readFileSync(layoutPath, 'utf-8')) : null;
         await getSupabase().from('secretary_templates').insert({
@@ -241,6 +240,34 @@ export class SecretaryService {
           template_file: template.templateFile, fields: template.fields, layout,
         });
       } catch (e) { logger.warn('テンプレートDB保存失敗:', e); }
+
+      // テンプレートファイルをStorageにアップロード
+      if (isStorageAvailable()) {
+        const admin = getSupabaseAdmin()!;
+        const prefix = `${this.tenantId}/templates/${template.id}`;
+        // 元ファイル
+        if (templateFile && fs.existsSync(path.join(dir, templateFile))) {
+          const ext = path.extname(templateFile);
+          try {
+            await admin.storage.from(STORAGE_BUCKET).upload(`${prefix}/original${ext}`, fs.readFileSync(path.join(dir, templateFile)), { contentType: 'application/octet-stream', upsert: true });
+          } catch (e) { logger.warn('テンプレート元ファイル Storage upload失敗:', e); }
+        }
+        // converted.pdf
+        const convertedPath = path.join(dir, 'converted.pdf');
+        if (fs.existsSync(convertedPath)) {
+          try {
+            await admin.storage.from(STORAGE_BUCKET).upload(`${prefix}/converted.pdf`, fs.readFileSync(convertedPath), { contentType: 'application/pdf', upsert: true });
+          } catch (e) { logger.warn('converted.pdf Storage upload失敗:', e); }
+        }
+        // preview.png
+        const previewPath = path.join(dir, 'preview.png');
+        if (fs.existsSync(previewPath)) {
+          try {
+            await admin.storage.from(STORAGE_BUCKET).upload(`${prefix}/preview.png`, fs.readFileSync(previewPath), { contentType: 'image/png', upsert: true });
+          } catch (e) { logger.warn('preview.png Storage upload失敗:', e); }
+        }
+        logger.info(`テンプレートファイルをStorageにアップロード: ${prefix}`);
+      }
     }
 
     logger.info(`テンプレート作成: ${name} (${type})`);
@@ -573,13 +600,28 @@ export class SecretaryService {
   /** PDF生成 */
   async generatePDF(template: DocumentTemplate, data: Record<string, any>): Promise<GeneratedDocument> {
     const docId = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    if (!fs.existsSync(DOCUMENTS_DIR)) fs.mkdirSync(DOCUMENTS_DIR, { recursive: true });
     const pdfPath = path.join(DOCUMENTS_DIR, `${docId}.pdf`);
 
     const templateDir = path.join(TEMPLATES_DIR, template.id);
+    if (!fs.existsSync(templateDir)) fs.mkdirSync(templateDir, { recursive: true });
+
+    // Storageからテンプレートファイルを復元（Railway再デプロイ後の復旧）
+    await this.restoreTemplateFromStorage(template.id, templateDir);
+
     const origExt = path.extname(template.templateFile).toLowerCase();
 
-    // layout.jsonがある → HTML完全生成方式（フォント統一）
+    // layout.jsonの復元: DBから取得してファイルに書き出す
     const layoutPath = path.join(templateDir, 'layout.json');
+    if (!fs.existsSync(layoutPath) && isSupabaseAvailable()) {
+      try {
+        const { data: tpl } = await getSupabase().from('secretary_templates').select('layout').eq('id', template.id).single();
+        if (tpl?.layout) {
+          fs.writeFileSync(layoutPath, JSON.stringify(tpl.layout, null, 2));
+        }
+      } catch { /* ignore */ }
+    }
+
     const convertedPdf = path.join(templateDir, 'converted.pdf');
     if (fs.existsSync(layoutPath) || fs.existsSync(convertedPdf)) {
       await this.generateFromHTMLFull(templateDir, template, data, pdfPath);
@@ -1214,6 +1256,34 @@ body { font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Noto Sans JP', sa
       } catch { /* ignore */ }
     }
     return [];
+  }
+
+  /** Storageからテンプレートファイルをローカルに復元（再デプロイ後の復旧用） */
+  private async restoreTemplateFromStorage(templateId: string, templateDir: string): Promise<void> {
+    if (!isStorageAvailable() || !this.tenantId) return;
+    // converted.pdf がローカルに存在しなければStorageから取得
+    const convertedLocal = path.join(templateDir, 'converted.pdf');
+    if (!fs.existsSync(convertedLocal)) {
+      const storagePath = `${this.tenantId}/templates/${templateId}/converted.pdf`;
+      try {
+        const { data } = await getSupabaseAdmin()!.storage.from(STORAGE_BUCKET).download(storagePath);
+        if (data) {
+          fs.writeFileSync(convertedLocal, Buffer.from(await data.arrayBuffer()));
+          logger.info(`テンプレート復元: ${storagePath} → ${convertedLocal}`);
+        }
+      } catch { /* not in storage */ }
+    }
+    // preview.png
+    const previewLocal = path.join(templateDir, 'preview.png');
+    if (!fs.existsSync(previewLocal)) {
+      const storagePath = `${this.tenantId}/templates/${templateId}/preview.png`;
+      try {
+        const { data } = await getSupabaseAdmin()!.storage.from(STORAGE_BUCKET).download(storagePath);
+        if (data) {
+          fs.writeFileSync(previewLocal, Buffer.from(await data.arrayBuffer()));
+        }
+      } catch { /* not in storage */ }
+    }
   }
 
   /** StorageからPDFをダウンロード（署名付きURL、有効期限1時間） */

@@ -1987,7 +1987,7 @@ app.get('/agent/secretary/create/:templateId', async (req, res) => {
   if (!template) { res.redirect('/agent/secretary'); return; }
 
   const customerName = (req.query.customer as string) || '';
-  const billingConfig = customerName ? getBillingConfig(customerName) : null;
+  const billingConfig = customerName ? await getBillingConfig(customerName) : null;
   const serviceList = getServiceList();
 
   let invoiceDate: string | undefined;

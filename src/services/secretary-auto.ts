@@ -95,8 +95,8 @@ export async function loadBillingConfigs(): Promise<CustomerBilling[]> {
 }
 
 /** 顧客名で設定を検索 */
-export function getBillingConfig(customerName: string): CustomerBilling | null {
-  const configs = loadBillingConfigs();
+export async function getBillingConfig(customerName: string): Promise<CustomerBilling | null> {
+  const configs = await loadBillingConfigs();
   return configs.find(c => customerName.includes(c.customerName) || c.customerName.includes(customerName)) || null;
 }
 
