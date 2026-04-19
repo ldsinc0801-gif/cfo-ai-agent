@@ -38,7 +38,7 @@ import { learningService } from '../services/learning-service.js';
 import { seedDemoData } from '../demo-data.js';
 import { renderLoginHTML, renderChangePasswordHTML } from './login-page.js';
 import { renderUsersHTML } from './users-page.js';
-import { setCurrentUser } from './shared.js';
+import { setCurrentUser, renderSidebar, SHARED_CSS, agentPageShell } from './shared.js';
 
 import { authService } from '../services/auth-service.js';
 import { validatePassword, hashPassword, generateInitialPassword } from '../utils/password.js';
@@ -548,10 +548,10 @@ function isFreeeConnected(): boolean {
   return getFreeeToken() !== null;
 }
 
-/** レポートデータを生成（freee接続時は実データ、未接続時はモック） */
-async function buildReport(year?: number, month?: number) {
-  // デモモード: デモプロファイルのデータでレポート生成
-  const demoProfile = getDemoProfile();
+/** レポートデータを生成（freee接続時は実データ、デモモード時はデモデータ、それ以外はnull） */
+async function buildReport(year?: number, month?: number, isDemo: boolean = false) {
+  // デモモード: セッションがデモユーザーの場合のみデモデータを使用
+  const demoProfile = isDemo ? getDemoProfile() : null;
   if (demoProfile) {
     logger.info(`デモモード: ${demoProfile.companyName}のレポート`);
     const builder = new ReportBuilder();
@@ -603,17 +603,15 @@ async function buildReport(year?: number, month?: number) {
     }
   }
 
-  // モックデータ
-  logger.info('モックデータでレポート生成');
-  const rawData = createMockRawData();
-  const builder = new ReportBuilder();
-  return builder.build(rawData, targetYear, targetMonth);
+  // freee未接続・デモモードOFF → データなしを返す（モックは表示しない）
+  logger.info('freee未接続: データなし');
+  return null;
 }
 
 /** トレンドデータを生成（freee接続時は実データ、未接続時はモック） */
-async function buildTrendData(endYear?: number, endMonth?: number, monthCount: number = 6): Promise<import('../types/trend.js').TrendData> {
-  // デモモード: 即座にデモデータを返す（freee APIをスキップ）
-  const demoProfileEarly = getDemoProfile();
+async function buildTrendData(endYear?: number, endMonth?: number, monthCount: number = 6, isDemo: boolean = false): Promise<import('../types/trend.js').TrendData> {
+  // デモモード: セッションがデモユーザーの場合のみ
+  const demoProfileEarly = isDemo ? getDemoProfile() : null;
   if (demoProfileEarly) {
     logger.info(`デモモード: ${demoProfileEarly.companyName}のトレンドデータ`);
     const plan = planAnalysisService.getPlan();
@@ -677,13 +675,9 @@ async function buildTrendData(endYear?: number, endMonth?: number, monthCount: n
     }
   }
 
-  logger.info('モックデータでトレンド生成');
-  const mock = createMockTrendData();
-  const plan = planAnalysisService.getPlan();
-  if (plan.targets.length > 0) {
-    mock.targets = plan.targets;
-  }
-  return mock;
+  // freee未接続・デモモードOFF → データなしを返す
+  logger.info('freee未接続: トレンドデータなし');
+  return { months: [], targets: [] };
 }
 
 /** アップロード済みファイル一覧 */
@@ -848,7 +842,14 @@ app.get('/', async (req, res) => {
       const [y, m] = selectedDate.split('-').map(Number);
       if (y && m) { reportYear = y; reportMonth = m; }
     }
-    const report = await buildReport(reportYear, reportMonth);
+    const isDemo = req.session.user?.id === 'demo-user';
+    const report = await buildReport(reportYear, reportMonth, isDemo);
+
+    // freee未接続・デモモードOFFの場合、データなしページを表示
+    if (!report) {
+      res.send(renderNoDataDashboard());
+      return;
+    }
 
     // from/to指定時は期間に合わせた月数でトレンドデータを取得
     let trendMonthCount = 6; // デフォルト
@@ -860,7 +861,7 @@ app.get('/', async (req, res) => {
       const [ty, tm] = toMonth.split('-').map(Number);
       if (ty && tm) { trendEndYear = ty; trendEndMonth = tm; }
     }
-    const trend = await buildTrendData(trendEndYear, trendEndMonth, trendMonthCount);
+    const trend = await buildTrendData(trendEndYear, trendEndMonth, trendMonthCount, isDemo);
 
     // 期間合計を算出（KPIカード用）
     const periodTotals = trend.months.length > 0 ? {
@@ -891,9 +892,10 @@ function monthDiff(from: string, to: string): number {
 }
 
 // 月次レポート（HTML表示）
-app.get('/report', async (_req, res) => {
+app.get('/report', async (req, res) => {
   try {
-    const report = await buildReport();
+    const report = await buildReport(undefined, undefined, req.session.user?.id === 'demo-user');
+    if (!report) { res.send(renderNoDataPage('月次レポート', 'freee APIと連携してデータを取得してください。')); return; }
     res.send(renderReportHTML(report));
   } catch (error) {
     logger.error('レポート生成エラー', error);
@@ -902,9 +904,10 @@ app.get('/report', async (_req, res) => {
 });
 
 // 月次レポート（PDFダウンロード）
-app.get('/report/pdf', async (_req, res) => {
+app.get('/report/pdf', async (req, res) => {
   try {
-    const report = await buildReport();
+    const report = await buildReport(undefined, undefined, req.session.user?.id === 'demo-user');
+    if (!report) { res.status(400).send('データがありません'); return; }
     const html = renderReportHTML(report);
 
     logger.info('PDF生成を開始...');
@@ -974,9 +977,9 @@ app.get('/report/pdf', async (_req, res) => {
 });
 
 // 事業計画AIエージェント
-app.get('/plan', async (_req, res) => {
+app.get('/plan', async (req, res) => {
   try {
-    const trend = await buildTrendData();
+    const trend = await buildTrendData(undefined, undefined, 6, req.session.user?.id === 'demo-user');
     const files = getUploadedFiles();
     res.send(renderPlanHTML(trend, files));
   } catch (error) {
@@ -1101,7 +1104,7 @@ app.post('/api/plan/analyze', express.json(), async (req, res) => {
       return;
     }
 
-    const trend = await buildTrendData();
+    const trend = await buildTrendData(undefined, undefined, 6, req.session.user?.id === 'demo-user');
     const plan = planAnalysisService.getPlan();
 
     if (plan.targets.length === 0) {
@@ -1200,18 +1203,11 @@ app.get('/agent/finance', async (_req, res) => {
       res.redirect('/agent/finance/freee');
       return;
     }
-    // 未接続時はモックデータ
-    const input = createMockRatingInput();
-    const rating = calculateBankRating(input);
-    const additional = calculateAdditionalMetrics(input);
-    const aiAvailable = anthropicService.isAvailable();
-    res.send(renderRatingHTML(rating, additional, { aiAvailable, aiCommentary: null, source: 'mock' }));
+    // freee未接続・デモモードOFF → データなしメッセージ
+    res.send(renderNoDataPage('財務分析AI', '財務分析を行うには、freee APIとの連携が必要です。'));
   } catch (error) {
     logger.error('財務分析ページエラー', error);
-    const input = createMockRatingInput();
-    const rating = calculateBankRating(input);
-    const additional = calculateAdditionalMetrics(input);
-    res.send(renderRatingHTML(rating, additional, { aiAvailable: false, aiCommentary: null, source: 'mock' }));
+    res.send(renderNoDataPage('財務分析AI', '財務分析の読み込み中にエラーが発生しました。'));
   }
 });
 
@@ -2173,9 +2169,9 @@ app.post('/agent/secretary/gmail-draft', express.urlencoded({ extended: true }),
 });
 
 // API（JSON）
-app.get('/api/report', async (_req, res) => {
+app.get('/api/report', async (req, res) => {
   try {
-    const report = await buildReport();
+    const report = await buildReport(undefined, undefined, req.session.user?.id === 'demo-user');
     res.json(report);
   } catch (error) {
     logger.error('API エラー', error);
@@ -2718,6 +2714,43 @@ app.get('/api/usage', (_req, res) => {
 
 // === 404 / 500 エラーハンドラ ===
 import { renderErrorHTML } from './error-page.js';
+
+/** freee未接続・デモモードOFF時のダッシュボード */
+function renderNoDataDashboard(): string {
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI CFO</title><style>${SHARED_CSS}</style></head><body>
+${renderSidebar('dashboard')}
+<div class="main"><div class="content" style="display:flex;align-items:center;justify-content:center;min-height:calc(100vh - 80px)">
+  <div style="text-align:center;max-width:500px;padding:40px">
+    <div style="font-size:48px;margin-bottom:16px">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+    </div>
+    <h2 style="font-size:20px;font-weight:700;margin-bottom:8px">データがまだありません</h2>
+    <p style="color:#6b7280;font-size:14px;line-height:1.7;margin-bottom:24px">
+      ダッシュボードを表示するには、freee APIと連携して会計データを取得するか、デモモードでサンプルデータをお試しください。
+    </p>
+    <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+      <a href="/settings/company" class="btn-primary">freee事業所設定</a>
+      <a href="/auth/demo" class="btn-secondary">デモモードで試す</a>
+    </div>
+  </div>
+</div></div></body></html>`;
+}
+
+/** 汎用「データなし」ページ（各AIエージェント用） */
+function renderNoDataPage(title: string, message: string): string {
+  return agentPageShell({
+    active: '',
+    title,
+    bodyHTML: '<div style="text-align:center;padding:60px 20px">' +
+      '<div style="font-size:48px;margin-bottom:16px"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>' +
+      '<h2 style="font-size:20px;font-weight:700;margin-bottom:8px">' + title + '</h2>' +
+      '<p style="color:#6b7280;font-size:14px;line-height:1.7;margin-bottom:24px">' + message + '</p>' +
+      '<div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">' +
+      '<a href="/settings/company" class="btn-primary">freee事業所設定</a>' +
+      '<a href="/auth/demo" class="btn-secondary">デモモードで試す</a>' +
+      '</div></div>',
+  });
+}
 
 app.use((_req, res) => {
   res.status(404).send(renderErrorHTML(404));
