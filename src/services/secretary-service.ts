@@ -630,6 +630,12 @@ export class SecretaryService {
 
   /** PDF生成 */
   async generatePDF(tenantId: TenantId, template: DocumentTemplate, data: Record<string, any>): Promise<GeneratedDocument> {
+    // 会社情報の事前チェック（undefinedが出力に混入するのを防止）
+    const companyCheck = await loadCompanySettings(tenantId);
+    if (!companyCheck || !companyCheck.companyName) {
+      throw new Error('会社情報が設定されていません。秘書AI → 会社情報設定から登録してください。');
+    }
+
     const docId = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     if (!fs.existsSync(DOCUMENTS_DIR)) fs.mkdirSync(DOCUMENTS_DIR, { recursive: true });
     const pdfPath = path.join(DOCUMENTS_DIR, `${docId}.pdf`);

@@ -32,7 +32,7 @@ function getDemoModeInfo(): { enabled: boolean; companyName: string } {
       const data = JSON.parse(fs.readFileSync(demoPath, 'utf-8'));
       if (data.enabled && data.profileId) {
         // プロファイル名を簡易取得
-        const names: Record<string, string> = { consulting: '株式会社フローリッシュ', restaurant: '株式会社さくら食堂', construction: '大和建設株式会社' };
+        const names: Record<string, string> = { consulting: 'デモ企業A（ITコンサル）', restaurant: '株式会社さくら食堂', construction: '大和建設株式会社' };
         return { enabled: true, companyName: names[data.profileId] || 'デモ' };
       }
     }

@@ -16,7 +16,7 @@ import { googleTasksClient } from '../clients/google-tasks.js';
 import { secretaryService } from './secretary-service.js';
 
 // 企業AI OSのパス
-const ENTERPRISE_OS_PATH = path.resolve(process.env.ENTERPRISE_OS_PATH || '/Users/kawaguchinaoto/Desktop/企業AI OS/企業AI_OS');
+const ENTERPRISE_OS_PATH = path.resolve(process.env.ENTERPRISE_OS_PATH || '/tmp/enterprise-os');
 
 /** 企業AI OSから事業一覧を取得 */
 export function getServiceList(): string[] {

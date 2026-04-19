@@ -81,9 +81,9 @@ export function enableDemoMode(profileId: string): void {
     if (!fs.existsSync(settingsDir)) fs.mkdirSync(settingsDir, { recursive: true });
     const demoCompanySettings: Record<string, any> = {
       consulting: {
-        companyName: '株式会社フローリッシュ', postalCode: '100-0005', address: '東京都千代田区丸の内1-8-3',
-        representative: '川口 直人', registrationNumber: 'T1234567890123',
-        bankName: '三菱UFJ銀行', branchName: '丸の内支店', accountType: '普通預金', accountNumber: '1234567', accountHolder: 'カ）フローリッシュ',
+        companyName: 'デモ企業A（ITコンサル）', postalCode: '100-0005', address: '東京都千代田区丸の内1-8-3',
+        representative: 'デモ太郎', registrationNumber: 'T1234567890123',
+        bankName: '三菱UFJ銀行', branchName: '丸の内支店', accountType: '普通預金', accountNumber: '1234567', accountHolder: 'デモキギョウA',
       },
       restaurant: {
         companyName: '株式会社さくら食堂', postalCode: '150-0001', address: '東京都渋谷区神宮前3-15-8',
@@ -145,7 +145,7 @@ const DEMO_PROFILES: DemoProfile[] = [
   // --- 1. コンサルティング会社 ---
   {
     id: 'consulting',
-    companyName: '株式会社フローリッシュ',
+    companyName: 'デモ企業A（ITコンサル）',
     industry: '経営コンサルティング',
     description: '中小企業向け財務コンサル・AI活用支援',
     employees: 8,
@@ -189,7 +189,7 @@ const DEMO_PROFILES: DemoProfile[] = [
     aiCommentary: `## AI財務コメンタリー
 
 ### 総合評価
-株式会社フローリッシュは、銀行格付92点（B+ランク）と中小企業として非常に優秀な財務状態にあります。特に**収益性**と**返済能力**が際立っており、金融機関からの信用力は高い水準です。
+デモ企業A（ITコンサル）は、銀行格付92点（B+ランク）と中小企業として非常に優秀な財務状態にあります。特に**収益性**と**返済能力**が際立っており、金融機関からの信用力は高い水準です。
 
 ### 強み
 - **高い利益率**: 売上高経常利益率11.5%は業界平均を大きく上回ります

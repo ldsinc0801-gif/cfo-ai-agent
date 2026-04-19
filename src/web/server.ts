@@ -1863,16 +1863,16 @@ app.get('/agent/secretary', async (req, res) => {
     if (!cs || !cs.companyName) {
       const demoProfile = getDemoProfile();
       await saveCompanySettings({
-        companyName: demoProfile?.companyName || '株式会社フローリッシュ',
+        companyName: demoProfile?.companyName || 'デモ企業A（ITコンサル）',
         postalCode: '100-0001',
         address: '東京都千代田区千代田1-1',
-        representative: '川口 直人',
+        representative: 'デモ代表者',
         registrationNumber: 'T1234567890123',
         bankName: '三菱UFJ銀行',
         branchName: '東京営業部',
         accountType: '普通預金',
         accountNumber: '1234567',
-        accountHolder: 'カ）フローリッシュ',
+        accountHolder: 'デモ企業A',
       }, getActiveTenantId(req) || undefined);
     }
     // デモ用請求設定
