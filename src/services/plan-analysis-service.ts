@@ -3,7 +3,10 @@ import path from 'path';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { usageTracker } from './usage-tracker.js';
+import { getSupabase } from '../clients/supabase.js';
+import { isSupabaseAvailable } from '../clients/supabase.js';
 import type { MonthlyTarget, MonthlySnapshot } from '../types/trend.js';
+import type { TenantId } from '../types/auth.js';
 
 const PLAN_DIR = path.resolve('data/plans');
 const PLAN_FILE = path.join(PLAN_DIR, 'monthly-targets.json');
@@ -53,6 +56,9 @@ export interface PlanAnalysisResult {
  */
 export class PlanAnalysisService {
   private ai: any = null;
+  private tenantId: TenantId | null = null;
+
+  setTenantId(id: TenantId | null): void { this.tenantId = id; }
 
   constructor() {
     const project = config.ai.gcpProject;
@@ -71,24 +77,52 @@ export class PlanAnalysisService {
 
   // ========== 計画データ管理 ==========
 
-  /** 計画データを取得 */
-  getPlan(): PlanData {
-    if (fs.existsSync(PLAN_FILE)) {
+  /** 計画データを取得（Supabase優先、フォールバックはファイル） */
+  async getPlan(): Promise<PlanData> {
+    if (isSupabaseAvailable() && this.tenantId) {
+      try {
+        const { data } = await getSupabase().from('monthly_targets').select('*').eq('tenant_id', this.tenantId).order('year').order('month');
+        if (data && data.length > 0) {
+          return {
+            targets: data.map((r: any) => ({ year: r.year, month: r.month, revenue: r.revenue, grossProfit: r.gross_profit, ordinaryIncome: r.ordinary_income })),
+            updatedAt: data[0].updated_at || '', notes: '',
+          };
+        }
+      } catch (e) { logger.warn('Supabase計画取得失敗'); }
+    }
+    // Supabase未接続時のみファイルフォールバック
+    if (!isSupabaseAvailable() && fs.existsSync(PLAN_FILE)) {
       return JSON.parse(fs.readFileSync(PLAN_FILE, 'utf-8'));
     }
     return { targets: [], updatedAt: '', notes: '' };
   }
 
   /** 計画データを保存 */
-  savePlan(data: PlanData): void {
+  async savePlan(data: PlanData): Promise<void> {
     data.updatedAt = new Date().toISOString();
-    fs.writeFileSync(PLAN_FILE, JSON.stringify(data, null, 2), 'utf-8');
-    logger.info(`計画データを保存しました (${data.targets.length}か月分)`);
+    if (isSupabaseAvailable() && this.tenantId) {
+      try {
+        for (const t of data.targets) {
+          await getSupabase().from('monthly_targets').upsert({
+            tenant_id: this.tenantId, year: t.year, month: t.month,
+            revenue: t.revenue, gross_profit: t.grossProfit, ordinary_income: t.ordinaryIncome,
+            updated_at: data.updatedAt,
+          }, { onConflict: 'tenant_id,year,month' });
+        }
+        logger.info(`計画データを保存しました (${data.targets.length}か月分)`);
+        return;
+      } catch (e) { logger.warn('Supabase計画保存失敗'); }
+    }
+    if (!isSupabaseAvailable()) {
+      if (!fs.existsSync(PLAN_DIR)) fs.mkdirSync(PLAN_DIR, { recursive: true });
+      fs.writeFileSync(PLAN_FILE, JSON.stringify(data, null, 2), 'utf-8');
+      logger.info(`計画データを保存しました (${data.targets.length}か月分)`);
+    }
   }
 
   /** 月次目標を個別に設定/更新 */
-  setTarget(target: MonthlyTarget): void {
-    const plan = this.getPlan();
+  async setTarget(target: MonthlyTarget): Promise<void> {
+    const plan = await this.getPlan();
     const idx = plan.targets.findIndex(t => t.year === target.year && t.month === target.month);
     if (idx >= 0) {
       plan.targets[idx] = target;
@@ -96,7 +130,7 @@ export class PlanAnalysisService {
       plan.targets.push(target);
     }
     plan.targets.sort((a, b) => a.year * 100 + a.month - (b.year * 100 + b.month));
-    this.savePlan(plan);
+    await this.savePlan(plan);
   }
 
   // ========== 差分計算 ==========
@@ -174,7 +208,7 @@ export class PlanAnalysisService {
     }
 
     // 過去の分析履歴を読み込み（学習のため）
-    const history = this.getAnalysisHistory();
+    const history = await this.getAnalysisHistory();
     let historyText = '';
     if (history.length > 0) {
       historyText = '\n【過去の分析で判明したパターン】\n';
@@ -258,7 +292,7 @@ ${historyText}
     };
 
     // 分析履歴に保存（学習用）
-    this.saveAnalysisHistory(result);
+    await this.saveAnalysisHistory(result);
 
     logger.info(`計画分析完了: ${result.analysis.patterns.length}パターン検出, ${result.analysis.revisedTargets.length}か月分の修正案`);
     return result;
@@ -267,33 +301,39 @@ ${historyText}
   /**
    * 分析結果の修正計画を計画データに反映する
    */
-  applyRevisedTargets(revisedTargets: MonthlyTarget[]): void {
+  async applyRevisedTargets(revisedTargets: MonthlyTarget[]): Promise<void> {
     for (const target of revisedTargets) {
-      this.setTarget(target);
+      await this.setTarget(target);
     }
     logger.info(`修正計画を反映しました (${revisedTargets.length}か月分)`);
   }
 
   // ========== 分析履歴管理（学習用） ==========
 
-  private getAnalysisHistory(): PlanAnalysisResult[] {
-    if (fs.existsSync(ANALYSIS_HISTORY_FILE)) {
-      return JSON.parse(fs.readFileSync(ANALYSIS_HISTORY_FILE, 'utf-8'));
+  private async getAnalysisHistory(): Promise<PlanAnalysisResult[]> {
+    if (isSupabaseAvailable() && this.tenantId) {
+      try {
+        const { data } = await getSupabase().from('plan_history').select('*').eq('tenant_id', this.tenantId).order('created_at', { ascending: false }).limit(10);
+        return (data || []).map((r: any) => ({ id: r.id, createdAt: r.created_at, variances: r.variances, analysis: r.analysis }));
+      } catch (e) { logger.warn('Supabase分析履歴取得失敗'); }
     }
     return [];
   }
 
-  private saveAnalysisHistory(result: PlanAnalysisResult): void {
-    const history = this.getAnalysisHistory();
-    history.push(result);
-    // 直近10件のみ保持
-    const trimmed = history.slice(-10);
-    fs.writeFileSync(ANALYSIS_HISTORY_FILE, JSON.stringify(trimmed, null, 2), 'utf-8');
+  private async saveAnalysisHistory(result: PlanAnalysisResult): Promise<void> {
+    if (isSupabaseAvailable() && this.tenantId) {
+      try {
+        await getSupabase().from('plan_history').insert({
+          id: result.id, tenant_id: this.tenantId, variances: result.variances, analysis: result.analysis,
+        });
+        return;
+      } catch (e) { logger.warn('Supabase分析履歴保存失敗'); }
+    }
   }
 
   /** 分析履歴を取得（UI表示用） */
-  getHistory(): PlanAnalysisResult[] {
-    return this.getAnalysisHistory();
+  async getHistory(): Promise<PlanAnalysisResult[]> {
+    return await this.getAnalysisHistory();
   }
 }
 

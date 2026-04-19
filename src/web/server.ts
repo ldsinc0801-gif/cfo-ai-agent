@@ -253,6 +253,12 @@ app.use((req, res, next) => {
     tenantRole: req.session.activeTenantRole || '',
   } : undefined);
 
+  // サービスにテナントIDを設定
+  const currentTid = getActiveTenantId(req);
+  taskService.setTenantId(currentTid);
+  planAnalysisService.setTenantId(currentTid);
+  analysisStore.setTenantId(currentTid);
+
   // 認証不要パス
   const p = req.path;
   if (p === '/login' || p.startsWith('/auth/') || p.startsWith('/api/')) {
@@ -610,7 +616,7 @@ async function buildTrendData(endYear?: number, endMonth?: number, monthCount: n
   const demoProfileEarly = isDemo ? getDemoProfile() : null;
   if (demoProfileEarly) {
     logger.info(`デモモード: ${demoProfileEarly.companyName}のトレンドデータ`);
-    const plan = planAnalysisService.getPlan();
+    const plan = await planAnalysisService.getPlan();
     return {
       months: demoProfileEarly.trendMonths,
       targets: plan.targets.length > 0 ? plan.targets : demoProfileEarly.targets,
@@ -650,7 +656,7 @@ async function buildTrendData(endYear?: number, endMonth?: number, monthCount: n
       const trend = await freeeService.fetchTrendData(companyId, targetYear, targetMonth, monthCount);
 
       // 保存済みの月次目標をマージ
-      const plan = planAnalysisService.getPlan();
+      const plan = await planAnalysisService.getPlan();
       if (plan.targets.length > 0) {
         trend.targets = plan.targets;
       }
@@ -1047,7 +1053,7 @@ app.post('/plan/analyze-file', express.json(), async (req, res) => {
 });
 
 // ファイル削除
-app.post('/plan/delete', express.json(), (req, res) => {
+app.post('/plan/delete', express.json(), async (req, res) => {
   const filename = req.body.filename;
   if (!filename || filename.includes('..') || filename.includes('/')) {
     res.status(400).json({ error: '不正なファイル名' });
@@ -1076,23 +1082,23 @@ app.post('/plan/delete-all', (_req, res) => {
 import { planAnalysisService } from '../services/plan-analysis-service.js';
 
 // 計画データ取得
-app.get('/api/plan', (_req, res) => {
-  res.json(planAnalysisService.getPlan());
+app.get('/api/plan', async (_req, res) => {
+  res.json(await planAnalysisService.getPlan());
 });
 
 // 月次目標を設定/更新
-app.post('/api/plan/targets', express.json(), (req, res) => {
+app.post('/api/plan/targets', express.json(), async (req, res) => {
   const targets: Array<{ year: number; month: number; revenue: number; grossProfit: number; ordinaryIncome: number }> = req.body.targets || [];
   for (const t of targets) {
-    planAnalysisService.setTarget(t);
+    await planAnalysisService.setTarget(t);
   }
   clearCache();
   res.json({ ok: true, count: targets.length });
 });
 
 // 月次目標を全クリア
-app.post('/api/plan/targets/clear', (_req, res) => {
-  planAnalysisService.savePlan({ targets: [], updatedAt: '', notes: '' });
+app.post('/api/plan/targets/clear', async (_req, res) => {
+  await planAnalysisService.savePlan({ targets: [], updatedAt: '', notes: '' });
   clearCache();
   logger.info('月次目標を全クリアしました');
   res.json({ ok: true });
@@ -1107,7 +1113,7 @@ app.post('/api/plan/analyze', express.json(), async (req, res) => {
     }
 
     const trend = await buildTrendData(undefined, undefined, 6, req.session.user?.id === 'demo-user');
-    const plan = planAnalysisService.getPlan();
+    const plan = await planAnalysisService.getPlan();
 
     if (plan.targets.length === 0) {
       res.status(400).json({ error: '計画データが未設定です。先に月次目標を入力してください。' });
@@ -1129,9 +1135,9 @@ app.post('/api/plan/analyze', express.json(), async (req, res) => {
 });
 
 // 修正計画を反映
-app.post('/api/plan/apply', express.json(), (req, res) => {
+app.post('/api/plan/apply', express.json(), async (req, res) => {
   const targets = req.body.targets || [];
-  planAnalysisService.applyRevisedTargets(targets);
+  await planAnalysisService.applyRevisedTargets(targets);
   res.json({ ok: true, count: targets.length });
 });
 
@@ -1142,7 +1148,7 @@ app.get('/api/plan/kpi', (_req, res) => {
   res.json(loadAnnualKpi());
 });
 
-app.post('/api/plan/kpi', express.json(), (req, res) => {
+app.post('/api/plan/kpi', express.json(), async (req, res) => {
   const kpi = {
     fiscalYear: req.body.fiscalYear || '',
     targetRevenue: Number(req.body.targetRevenue) || 0,
@@ -1159,8 +1165,8 @@ app.post('/api/plan/kpi', express.json(), (req, res) => {
 });
 
 // 分析履歴
-app.get('/api/plan/history', (_req, res) => {
-  res.json(planAnalysisService.getHistory());
+app.get('/api/plan/history', async (_req, res) => {
+  res.json(await planAnalysisService.getHistory());
 });
 
 // === 学習ループAPI ===
@@ -1263,7 +1269,7 @@ app.post('/agent/finance/analyze', upload.single('file'), async (req, res) => {
     }
 
     // 分析結果を保存
-    const analysisId = analysisStore.save({
+    const analysisId = await analysisStore.save({
       fileName,
       source: 'upload',
       ratingInput,
@@ -1275,7 +1281,7 @@ app.post('/agent/finance/analyze', upload.single('file'), async (req, res) => {
 
     // 改善アクションからタスクを自動生成
     if (rating.actions.length > 0) {
-      taskService.generateFromAnalysis(analysisId, rating.actions);
+      await taskService.generateFromAnalysis(analysisId, rating.actions);
       logger.info(`分析結果から${rating.actions.length}件のタスクを自動生成しました`);
     }
 
@@ -1400,7 +1406,7 @@ app.get('/api/finance/freee', async (_req, res) => {
       }
     }
 
-    const analysisId = analysisStore.save({
+    const analysisId = await analysisStore.save({
       fileName: null,
       source: 'freee',
       ratingInput: input,
@@ -1424,14 +1430,14 @@ app.get('/api/finance/freee', async (_req, res) => {
 });
 
 // 分析履歴一覧
-app.get('/agent/finance/history', (_req, res) => {
-  const analyses = analysisStore.list();
+app.get('/agent/finance/history', async (_req, res) => {
+  const analyses = await analysisStore.list();
   res.send(renderHistoryHTML(analyses));
 });
 
 // 保存済み分析の詳細表示
-app.get('/agent/finance/history/:id', (req, res) => {
-  const analysis = analysisStore.get(req.params.id);
+app.get('/agent/finance/history/:id', async (req, res) => {
+  const analysis = await analysisStore.get(req.params.id);
   if (!analysis) {
     res.status(404).send('分析結果が見つかりません');
     return;
@@ -1448,23 +1454,23 @@ app.get('/agent/finance/history/:id', (req, res) => {
 });
 
 // 分析結果の削除
-app.post('/agent/finance/history/:id/delete', (req, res) => {
-  analysisStore.delete(req.params.id);
+app.post('/agent/finance/history/:id/delete', async (req, res) => {
+  await analysisStore.delete(req.params.id);
   res.redirect('/agent/finance/history');
 });
 
-app.post('/agent/finance/history/delete-all', (_req, res) => {
-  const all = analysisStore.list();
+app.post('/agent/finance/history/delete-all', async (_req, res) => {
+  const all = await analysisStore.list();
   for (const a of all) {
-    analysisStore.delete(a.id);
+    await analysisStore.delete(a.id);
   }
   logger.info(`分析履歴を全件削除: ${all.length}件`);
   res.redirect('/agent/finance/history');
 });
 
 // 分析結果のJSONダウンロード
-app.get('/agent/finance/history/:id/json', (req, res) => {
-  const analysis = analysisStore.get(req.params.id);
+app.get('/agent/finance/history/:id/json', async (req, res) => {
+  const analysis = await analysisStore.get(req.params.id);
   if (!analysis) {
     res.status(404).json({ error: 'not found' });
     return;
@@ -1897,7 +1903,7 @@ app.get('/agent/secretary', async (_req, res) => {
 });
 
 // 秘書AI：会社情報・振込先設定の保存
-app.post('/agent/secretary/company-settings', express.urlencoded({ extended: true }), (req, res) => {
+app.post('/agent/secretary/company-settings', express.urlencoded({ extended: true }), async (req, res) => {
   const settings: CompanySettings = {
     companyName: req.body.companyName || '',
     postalCode: req.body.postalCode || '',
@@ -1956,7 +1962,7 @@ app.post('/agent/secretary/documents/delete-all', (_req, res) => {
 });
 
 // 秘書AI：顧客別請求設定の保存
-app.post('/agent/secretary/billing-config', express.urlencoded({ extended: true }), (req, res) => {
+app.post('/agent/secretary/billing-config', express.urlencoded({ extended: true }), async (req, res) => {
   const names = Array.isArray(req.body.cfg_name) ? req.body.cfg_name : [req.body.cfg_name].filter(Boolean);
   const closings = Array.isArray(req.body.cfg_closing) ? req.body.cfg_closing : [req.body.cfg_closing].filter(Boolean);
   const invoices = Array.isArray(req.body.cfg_invoice) ? req.body.cfg_invoice : [req.body.cfg_invoice].filter(Boolean);
@@ -2189,7 +2195,7 @@ const freeeAuth = new FreeeAuthClient();
 // === デモモード ===
 import { isDemoMode, getDemoProfile, enableDemoMode, disableDemoMode, DEMO_PROFILES } from '../services/demo-mode.js';
 
-app.post('/settings/demo', express.urlencoded({ extended: true }), (req, res) => {
+app.post('/settings/demo', express.urlencoded({ extended: true }), async (req, res) => {
   const profileId = req.body.profileId;
   if (profileId === 'off') {
     disableDemoMode();
@@ -2358,7 +2364,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","H
   }
 });
 
-app.post('/settings/company', express.urlencoded({ extended: true }), (req, res) => {
+app.post('/settings/company', express.urlencoded({ extended: true }), async (req, res) => {
   const companyId = parseInt(req.body.companyId, 10);
   const companyName = req.body.companyName || '';
   if (!companyId) {
@@ -2388,7 +2394,7 @@ app.post('/chat/send', express.json(), async (req, res) => {
     if (taskMatch) {
       const title = taskMatch[1]?.trim() || message.replace(/タスクにして|タスク追加|TODO/g, '').trim();
       if (title) {
-        taskService.addFromChat(title);
+        await taskService.addFromChat(title);
         res.json({ reply: `タスクを追加しました：「${title}」\n\nタスクボードで確認できます。` });
         return;
       }
@@ -2516,9 +2522,9 @@ app.post('/chat/save-to-os', express.json(), async (req, res) => {
 });
 
 // === タスクボード ===
-app.get('/tasks', (req, res) => {
-  const tasks = taskService.list();
-  const summary = taskService.getSummary();
+app.get('/tasks', async (req, res) => {
+  const tasks = await taskService.list();
+  const summary = await taskService.getSummary();
   const googleParam = req.query.google as string | undefined;
   const countParam = req.query.count as string | undefined;
   res.send(renderTaskPageHTML(tasks, summary, {
@@ -2527,8 +2533,8 @@ app.get('/tasks', (req, res) => {
   }));
 });
 
-app.post('/tasks/add', express.urlencoded({ extended: true }), (req, res) => {
-  taskService.add({
+app.post('/tasks/add', express.urlencoded({ extended: true }), async (req, res) => {
+  await taskService.add({
     title: req.body.title,
     description: '',
     priority: req.body.priority || 'medium',
@@ -2540,8 +2546,8 @@ app.post('/tasks/add', express.urlencoded({ extended: true }), (req, res) => {
 });
 
 app.post('/tasks/:id/status', express.urlencoded({ extended: true }), async (req, res) => {
-  const task = taskService.get(req.params.id);
-  taskService.update(req.params.id, { status: req.body.status });
+  const task = await taskService.get(req.params.id);
+  await taskService.update(req.params.id, { status: req.body.status });
 
   // Google Tasks連携: 完了時に同期
   if (task && req.body.status === 'done' && googleTasksClient.isAuthenticated()) {
@@ -2563,8 +2569,8 @@ app.post('/tasks/:id/status', express.urlencoded({ extended: true }), async (req
   res.redirect('/tasks');
 });
 
-app.post('/tasks/:id/edit', express.urlencoded({ extended: true }), (req, res) => {
-  taskService.update(req.params.id, {
+app.post('/tasks/:id/edit', express.urlencoded({ extended: true }), async (req, res) => {
+  await taskService.update(req.params.id, {
     title: req.body.title,
     description: req.body.description,
     priority: req.body.priority,
@@ -2574,17 +2580,17 @@ app.post('/tasks/:id/edit', express.urlencoded({ extended: true }), (req, res) =
   res.redirect('/tasks');
 });
 
-app.post('/tasks/:id/delete', (_req, res) => {
-  taskService.delete(_req.params.id);
+app.post('/tasks/:id/delete', async (_req, res) => {
+  await taskService.delete(_req.params.id);
   res.redirect('/tasks');
 });
 
 // 月次タスクの一括生成
-app.post('/tasks/generate-monthly', express.urlencoded({ extended: true }), (req, res) => {
+app.post('/tasks/generate-monthly', express.urlencoded({ extended: true }), async (req, res) => {
   const [year, month] = (req.body.month || '').split('-').map(Number);
   if (!year || !month) { res.redirect('/tasks'); return; }
   const tasks = generateMonthlyTasks(year, month);
-  taskService.addBatch(tasks);
+  await taskService.addBatch(tasks);
   logger.info(`${year}年${month}月の定型タスク${tasks.length}件を生成しました`);
   res.redirect('/tasks');
 });
@@ -2655,7 +2661,7 @@ app.post('/tasks/sync-google', express.urlencoded({ extended: true }), async (re
 
     let syncCount = 0;
     for (const id of taskIds) {
-      const task = taskService.get(id);
+      const task = await taskService.get(id);
       if (!task) continue;
 
       const catLabel = ({ finance: '【財務】', accounting: '【会計】', cashflow: '【資金繰り】', plan: '【事業計画】', general: '' } as Record<string, string>)[task.category] || '';
@@ -2683,13 +2689,13 @@ app.post('/tasks/sync-google', express.urlencoded({ extended: true }), async (re
 
 // === 秘書AI連携API ===
 // タスク一覧（秘書AIが取得）
-app.get('/api/tasks', (_req, res) => {
-  res.json(taskService.exportForAssistant());
+app.get('/api/tasks', async (_req, res) => {
+  res.json(await taskService.exportForAssistant());
 });
 
 // タスク追加（秘書AIが追加）
-app.post('/api/tasks', express.json(), (req, res) => {
-  const task = taskService.add({
+app.post('/api/tasks', express.json(), async (req, res) => {
+  const task = await taskService.add({
     title: req.body.title,
     description: req.body.description || '',
     priority: req.body.priority || 'medium',
@@ -2701,8 +2707,8 @@ app.post('/api/tasks', express.json(), (req, res) => {
 });
 
 // タスク更新（秘書AIがステータス変更）
-app.patch('/api/tasks/:id', express.json(), (req, res) => {
-  const task = taskService.update(req.params.id, req.body);
+app.patch('/api/tasks/:id', express.json(), async (req, res) => {
+  const task = await taskService.update(req.params.id, req.body);
   if (!task) { res.status(404).json({ error: 'not found' }); return; }
   res.json(task);
 });
@@ -2710,7 +2716,7 @@ app.patch('/api/tasks/:id', express.json(), (req, res) => {
 // 会社情報（秘書AIが参照）
 app.get('/api/company', async (req, res) => {
   const memory = await chatService.getMemory(getActiveTenantId(req) || undefined);
-  const analyses = analysisStore.list();
+  const analyses = await analysisStore.list();
   res.json({ company: memory, latestAnalyses: analyses.slice(0, 5) });
 });
 

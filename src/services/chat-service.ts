@@ -164,8 +164,8 @@ export class ChatService {
     const memory = await this.getMemory(tenantId);
     const history = await this.getHistory(tenantId);
 
-    const analyses = analysisStore.list();
-    const latestAnalysis = analyses.length > 0 ? analysisStore.get(analyses[0].id) : null;
+    const analyses = await analysisStore.list();
+    const latestAnalysis = analyses.length > 0 ? await analysisStore.get(analyses[0].id) : null;
 
     const systemPrompt = await this.buildSystemPrompt(memory, latestAnalysis, tenantId);
 

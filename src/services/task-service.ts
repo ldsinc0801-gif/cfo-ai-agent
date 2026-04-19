@@ -1,8 +1,7 @@
-import fs from 'fs';
-import path from 'path';
+import { getSupabase } from '../clients/supabase.js';
+import { isSupabaseAvailable } from '../clients/supabase.js';
 import { logger } from '../utils/logger.js';
-
-const TASKS_FILE = path.resolve('data/tasks/tasks.json');
+import type { TenantId } from '../types/auth.js';
 
 export interface Task {
   id: string;
@@ -12,8 +11,8 @@ export interface Task {
   status: 'todo' | 'in_progress' | 'done';
   category: 'finance' | 'accounting' | 'cashflow' | 'plan' | 'general';
   source: 'ai_analysis' | 'chat' | 'manual';
-  sourceId?: string;        // 分析IDやチャットメッセージID
-  dueDate?: string;         // YYYY-MM-DD
+  sourceId?: string;
+  dueDate?: string;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -28,104 +27,89 @@ export interface TaskSummary {
 }
 
 /**
- * タスク管理サービス
- *
- * AIが生成したタスクやユーザーが手動で追加したタスクを管理する。
- * 将来的に秘書AIや外部システムへの連携用APIを提供。
+ * タスク管理サービス（Supabase永続化、テナント分離）
  */
 class TaskService {
-  private tasks: Task[] = [];
+  private tenantId: TenantId | null = null;
 
-  constructor() {
-    this.load();
+  setTenantId(id: TenantId | null): void {
+    this.tenantId = id;
   }
 
-  private load(): void {
-    if (fs.existsSync(TASKS_FILE)) {
-      this.tasks = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf-8'));
-    }
-  }
-
-  private save(): void {
-    const dir = path.dirname(TASKS_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(TASKS_FILE, JSON.stringify(this.tasks, null, 2), 'utf-8');
-  }
-
-  /** タスク追加 */
-  add(task: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>): Task {
+  async add(task: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>): Promise<Task> {
     const now = new Date().toISOString();
-    const newTask: Task = {
-      ...task,
-      id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.tasks.push(newTask);
-    this.save();
+    const id = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const newTask: Task = { ...task, id, createdAt: now, updatedAt: now };
+
+    if (isSupabaseAvailable() && this.tenantId) {
+      const { error } = await getSupabase().from('tasks').insert({
+        id, tenant_id: this.tenantId, title: task.title, description: task.description || '',
+        priority: task.priority, status: task.status, category: task.category,
+        source: task.source, source_id: task.sourceId || null, due_date: task.dueDate || null,
+      });
+      if (error) logger.warn('タスク保存失敗:', error.message);
+    }
     logger.info(`タスク追加: ${newTask.title}`);
     return newTask;
   }
 
-  /** 複数タスクを一括追加 */
-  addBatch(tasks: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>[]): Task[] {
-    return tasks.map(t => this.add(t));
+  async addBatch(tasks: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>[]): Promise<Task[]> {
+    const results: Task[] = [];
+    for (const t of tasks) results.push(await this.add(t));
+    return results;
   }
 
-  /** 全タスク取得（新しい順） */
-  list(filter?: { status?: string; category?: string }): Task[] {
-    let result = [...this.tasks];
-    if (filter?.status) result = result.filter(t => t.status === filter.status);
-    if (filter?.category) result = result.filter(t => t.category === filter.category);
-    return result.sort((a, b) => {
-      // 期日順（期日なしは後ろ） → 優先度順
-      const aDate = a.dueDate || '9999-12-31';
-      const bDate = b.dueDate || '9999-12-31';
-      if (aDate !== bDate) return aDate.localeCompare(bDate);
-      const pOrder = { high: 0, medium: 1, low: 2 };
-      return pOrder[a.priority] - pOrder[b.priority];
-    });
+  async list(filter?: { status?: string; category?: string }): Promise<Task[]> {
+    if (!isSupabaseAvailable() || !this.tenantId) return [];
+    let query = getSupabase().from('tasks').select('*').eq('tenant_id', this.tenantId);
+    if (filter?.status) query = query.eq('status', filter.status);
+    if (filter?.category) query = query.eq('category', filter.category);
+    const { data, error } = await query.order('created_at', { ascending: false });
+    if (error) { logger.warn('タスク取得失敗:', error.message); return []; }
+    return (data || []).map(mapTask);
   }
 
-  /** タスク取得 */
-  get(id: string): Task | null {
-    return this.tasks.find(t => t.id === id) || null;
+  async get(id: string): Promise<Task | null> {
+    if (!isSupabaseAvailable()) return null;
+    const { data, error } = await getSupabase().from('tasks').select('*').eq('id', id).single();
+    if (error) return null;
+    return mapTask(data);
   }
 
-  /** タスク更新 */
-  update(id: string, updates: Partial<Pick<Task, 'title' | 'description' | 'priority' | 'status' | 'category' | 'dueDate'>>): Task | null {
-    const task = this.tasks.find(t => t.id === id);
-    if (!task) return null;
-    Object.assign(task, updates, { updatedAt: new Date().toISOString() });
-    if (updates.status === 'done') task.completedAt = new Date().toISOString();
-    this.save();
-    return task;
+  async update(id: string, updates: Partial<Pick<Task, 'title' | 'description' | 'priority' | 'status' | 'category' | 'dueDate'>>): Promise<Task | null> {
+    if (!isSupabaseAvailable()) return null;
+    const dbUpdates: any = { updated_at: new Date().toISOString() };
+    if (updates.title !== undefined) dbUpdates.title = updates.title;
+    if (updates.description !== undefined) dbUpdates.description = updates.description;
+    if (updates.priority !== undefined) dbUpdates.priority = updates.priority;
+    if (updates.status !== undefined) dbUpdates.status = updates.status;
+    if (updates.category !== undefined) dbUpdates.category = updates.category;
+    if (updates.dueDate !== undefined) dbUpdates.due_date = updates.dueDate;
+    if (updates.status === 'done') dbUpdates.completed_at = new Date().toISOString();
+
+    const { data, error } = await getSupabase().from('tasks').update(dbUpdates).eq('id', id).select().single();
+    if (error) { logger.warn('タスク更新失敗:', error.message); return null; }
+    return mapTask(data);
   }
 
-  /** タスク削除 */
-  delete(id: string): boolean {
-    const idx = this.tasks.findIndex(t => t.id === id);
-    if (idx === -1) return false;
-    this.tasks.splice(idx, 1);
-    this.save();
-    return true;
+  async delete(id: string): Promise<boolean> {
+    if (!isSupabaseAvailable()) return false;
+    const { error } = await getSupabase().from('tasks').delete().eq('id', id);
+    return !error;
   }
 
-  /** サマリー */
-  getSummary(): TaskSummary {
+  async getSummary(): Promise<TaskSummary> {
+    const tasks = await this.list();
     return {
-      total: this.tasks.length,
-      todo: this.tasks.filter(t => t.status === 'todo').length,
-      inProgress: this.tasks.filter(t => t.status === 'in_progress').length,
-      done: this.tasks.filter(t => t.status === 'done').length,
-      highPriority: this.tasks.filter(t => t.priority === 'high' && t.status !== 'done').length,
+      total: tasks.length,
+      todo: tasks.filter(t => t.status === 'todo').length,
+      inProgress: tasks.filter(t => t.status === 'in_progress').length,
+      done: tasks.filter(t => t.status === 'done').length,
+      highPriority: tasks.filter(t => t.priority === 'high' && t.status !== 'done').length,
     };
   }
 
-  /**
-   * 財務分析結果からタスクを自動生成
-   */
-  generateFromAnalysis(analysisId: string, actions: { priority: string; content: string; effect: string; timeframe: string }[]): Task[] {
+  async generateFromAnalysis(analysisId: string, actions: { priority: string; content: string; effect: string; timeframe: string }[]): Promise<Task[]> {
     const priorityMap: Record<string, 'high' | 'medium' | 'low'> = { high: 'high', medium: 'medium', low: 'low' };
     const newTasks = actions.map(a => ({
       title: a.content,
@@ -139,34 +123,29 @@ class TaskService {
     return this.addBatch(newTasks);
   }
 
-  /**
-   * チャットからタスクを追加
-   */
-  addFromChat(title: string, description: string = ''): Task {
+  async addFromChat(title: string, description: string = ''): Promise<Task> {
     return this.add({
-      title,
-      description,
-      priority: 'medium',
-      status: 'todo',
-      category: 'general',
-      source: 'chat',
+      title, description, priority: 'medium', status: 'todo', category: 'general', source: 'chat',
     });
   }
 
-  /**
-   * 秘書AI連携用：全タスクをエクスポート
-   */
-  exportForAssistant(): {
-    summary: TaskSummary;
-    activeTasks: Task[];
-    completedTasks: Task[];
-  } {
+  async exportForAssistant(): Promise<{ summary: TaskSummary; activeTasks: Task[]; completedTasks: Task[] }> {
+    const tasks = await this.list();
     return {
-      summary: this.getSummary(),
-      activeTasks: this.tasks.filter(t => t.status !== 'done'),
-      completedTasks: this.tasks.filter(t => t.status === 'done'),
+      summary: await this.getSummary(),
+      activeTasks: tasks.filter(t => t.status !== 'done'),
+      completedTasks: tasks.filter(t => t.status === 'done'),
     };
   }
+}
+
+function mapTask(r: any): Task {
+  return {
+    id: r.id, title: r.title, description: r.description || '',
+    priority: r.priority, status: r.status, category: r.category,
+    source: r.source, sourceId: r.source_id, dueDate: r.due_date,
+    createdAt: r.created_at, updatedAt: r.updated_at, completedAt: r.completed_at,
+  };
 }
 
 export const taskService = new TaskService();

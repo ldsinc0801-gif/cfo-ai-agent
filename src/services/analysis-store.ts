@@ -1,9 +1,8 @@
-import fs from 'fs';
-import path from 'path';
+import { getSupabase } from '../clients/supabase.js';
+import { isSupabaseAvailable } from '../clients/supabase.js';
 import { logger } from '../utils/logger.js';
 import type { BankRatingResult, AdditionalMetrics, RatingInput } from '../types/bank-rating.js';
-
-const STORE_DIR = path.resolve('data/analyses');
+import type { TenantId } from '../types/auth.js';
 
 export interface SavedAnalysis {
   id: string;
@@ -30,71 +29,59 @@ export interface AnalysisSummary {
 }
 
 /**
- * 分析結果の保存・読み込み
+ * 分析結果の保存・読み込み（Supabase永続化、テナント分離）
  */
 export class AnalysisStore {
-  constructor() {
-    if (!fs.existsSync(STORE_DIR)) {
-      fs.mkdirSync(STORE_DIR, { recursive: true });
-    }
-  }
+  private tenantId: TenantId | null = null;
 
-  /** 分析結果を保存し、IDを返す */
-  save(data: Omit<SavedAnalysis, 'id' | 'createdAt'>): string {
+  setTenantId(id: TenantId | null): void { this.tenantId = id; }
+
+  async save(data: Omit<SavedAnalysis, 'id' | 'createdAt'>): Promise<string> {
     const id = `analysis-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const record: SavedAnalysis = {
-      id,
-      createdAt: new Date().toISOString(),
-      ...data,
-    };
-
-    const filePath = path.join(STORE_DIR, `${id}.json`);
-    fs.writeFileSync(filePath, JSON.stringify(record, null, 2), 'utf-8');
-    logger.info(`分析結果を保存しました: ${id}`);
+    if (isSupabaseAvailable() && this.tenantId) {
+      try {
+        await getSupabase().from('financial_analyses').insert({
+          id, tenant_id: this.tenantId, file_name: data.fileName, source: data.source,
+          rating_input: data.ratingInput, rating: data.rating, additional: data.additional,
+          ai_commentary: data.aiCommentary,
+        });
+        logger.info(`分析結果を保存しました: ${id}`);
+        return id;
+      } catch (e) { logger.warn('Supabase分析保存失敗:', e); }
+    }
+    logger.info(`分析結果を保存しました（メモリのみ）: ${id}`);
     return id;
   }
 
-  /** IDで分析結果を取得 */
-  get(id: string): SavedAnalysis | null {
-    const filePath = path.join(STORE_DIR, `${id}.json`);
-    if (!fs.existsSync(filePath)) return null;
-    const data = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(data);
+  async get(id: string): Promise<SavedAnalysis | null> {
+    if (!isSupabaseAvailable()) return null;
+    const { data, error } = await getSupabase().from('financial_analyses').select('*').eq('id', id).single();
+    if (error || !data) return null;
+    return {
+      id: data.id, createdAt: data.created_at, fileName: data.file_name, source: data.source,
+      ratingInput: data.rating_input, rating: data.rating, additional: data.additional,
+      aiCommentary: data.ai_commentary, extractionNotes: [],
+    };
   }
 
-  /** 全分析結果の一覧（新しい順） */
-  list(): AnalysisSummary[] {
-    const files = fs.readdirSync(STORE_DIR)
-      .filter(f => f.endsWith('.json'))
-      .sort().reverse();
-
-    return files.map(f => {
-      try {
-        const data: SavedAnalysis = JSON.parse(fs.readFileSync(path.join(STORE_DIR, f), 'utf-8'));
-        return {
-          id: data.id,
-          createdAt: data.createdAt,
-          fileName: data.fileName,
-          source: data.source,
-          totalScore: data.rating.totalScore,
-          rank: data.rating.rank,
-          rankLabel: data.rating.rankLabel,
-          revenue: data.ratingInput.revenue,
-          ordinaryIncome: data.ratingInput.ordinaryIncome,
-        };
-      } catch {
-        return null;
-      }
-    }).filter((s): s is AnalysisSummary => s !== null);
+  async list(): Promise<AnalysisSummary[]> {
+    if (!isSupabaseAvailable() || !this.tenantId) return [];
+    const { data, error } = await getSupabase().from('financial_analyses').select('*')
+      .eq('tenant_id', this.tenantId).order('created_at', { ascending: false }).limit(20);
+    if (error || !data) return [];
+    return data.map((d: any) => ({
+      id: d.id, createdAt: d.created_at, fileName: d.file_name, source: d.source,
+      totalScore: d.rating?.totalScore || 0, rank: d.rating?.rank || '',
+      rankLabel: d.rating?.rankLabel || '', revenue: d.rating_input?.revenue || 0,
+      ordinaryIncome: d.rating_input?.ordinaryIncome || 0,
+    }));
   }
 
-  /** 削除 */
-  delete(id: string): boolean {
-    const filePath = path.join(STORE_DIR, `${id}.json`);
-    if (!fs.existsSync(filePath)) return false;
-    fs.unlinkSync(filePath);
-    logger.info(`分析結果を削除しました: ${id}`);
-    return true;
+  async delete(id: string): Promise<boolean> {
+    if (!isSupabaseAvailable()) return false;
+    const { error } = await getSupabase().from('financial_analyses').delete().eq('id', id);
+    if (!error) logger.info(`分析結果を削除しました: ${id}`);
+    return !error;
   }
 }
 
