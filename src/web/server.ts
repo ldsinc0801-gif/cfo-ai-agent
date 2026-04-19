@@ -1946,8 +1946,8 @@ app.post('/agent/secretary/template/upload', upload.single('template'), async (r
 });
 
 // 秘書AI：テンプレート削除
-app.post('/agent/secretary/template/:id/delete', (req, res) => {
-  secretaryService.deleteTemplate(req.params.id);
+app.post('/agent/secretary/template/:id/delete', async (req, res) => {
+  await secretaryService.deleteTemplate(req.params.id as string);
   res.redirect('/agent/secretary');
 });
 

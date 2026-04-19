@@ -498,23 +498,48 @@ export class SecretaryService {
   }
 
   /** テンプレート削除 */
-  deleteTemplate(id: string): void {
+  async deleteTemplate(id: string): Promise<void> {
+    // ローカルファイル削除
     const dir = path.join(TEMPLATES_DIR, id);
     if (fs.existsSync(dir)) {
       fs.rmSync(dir, { recursive: true });
-      logger.info(`テンプレート削除: ${id}`);
     }
+    // DB削除
+    if (isSupabaseAvailable()) {
+      try {
+        await getSupabase().from('secretary_templates').delete().eq('id', id);
+      } catch (e) { logger.warn('テンプレートDB削除失敗:', e); }
+    }
+    // Storage削除
+    if (isStorageAvailable() && this.tenantId) {
+      const prefix = `${this.tenantId}/templates/${id}`;
+      try {
+        const admin = getSupabaseAdmin()!;
+        const { data: files } = await admin.storage.from(STORAGE_BUCKET).list(prefix);
+        if (files && files.length > 0) {
+          await admin.storage.from(STORAGE_BUCKET).remove(files.map(f => `${prefix}/${f.name}`));
+        }
+      } catch (e) { logger.warn('テンプレートStorage削除失敗:', e); }
+    }
+    logger.info(`テンプレート削除: ${id}`);
   }
 
   /** フィールド位置を更新 */
-  updateFields(id: string, fields: TemplateField[]): void {
-    const template = this.getTemplate(id);
+  async updateFields(id: string, fields: TemplateField[]): Promise<void> {
+    const template = await this.getTemplate(id);
     if (!template) return;
     template.fields = fields;
-    fs.writeFileSync(
-      path.join(TEMPLATES_DIR, id, 'metadata.json'),
-      JSON.stringify(template, null, 2),
-    );
+    // ローカル
+    const metaPath = path.join(TEMPLATES_DIR, id, 'metadata.json');
+    if (fs.existsSync(path.dirname(metaPath))) {
+      fs.writeFileSync(metaPath, JSON.stringify(template, null, 2));
+    }
+    // DB
+    if (isSupabaseAvailable()) {
+      try {
+        await getSupabase().from('secretary_templates').update({ fields }).eq('id', id);
+      } catch (e) { logger.warn('フィールド更新DB失敗:', e); }
+    }
   }
 
   /** テンプレートファイルのパスを取得 */
