@@ -7,11 +7,14 @@ let supabaseAdmin: SupabaseClient | null = null;
 
 export function getSupabase(): SupabaseClient {
   if (!supabase) {
-    if (!config.supabase.url || !config.supabase.anonKey) {
-      throw new Error('SUPABASE_URL と SUPABASE_ANON_KEY を .env に設定してください');
+    // service_role key を優先使用（RLSバイパス、サーバーサイド専用）
+    // anon key はフォールバック（RLS有効時は制限あり）
+    const key = config.supabase.serviceRoleKey || config.supabase.anonKey;
+    if (!config.supabase.url || !key) {
+      throw new Error('SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY（または SUPABASE_ANON_KEY）を .env に設定してください');
     }
-    supabase = createClient(config.supabase.url, config.supabase.anonKey);
-    logger.info('Supabaseクライアントを初期化しました');
+    supabase = createClient(config.supabase.url, key);
+    logger.info(`Supabaseクライアントを初期化しました (${config.supabase.serviceRoleKey ? 'service_role' : 'anon'})`);
   }
   return supabase;
 }
@@ -25,7 +28,7 @@ export function getSupabaseAdmin(): SupabaseClient | null {
 }
 
 export function isSupabaseAvailable(): boolean {
-  return !!(config.supabase.url && config.supabase.anonKey);
+  return !!(config.supabase.url && (config.supabase.serviceRoleKey || config.supabase.anonKey));
 }
 
 export function isStorageAvailable(): boolean {
