@@ -6,3 +6,9 @@ output/
 .DS_Store
 data/
 uploads/
+
+# GCPサービスアカウントキー（絶対にコミットしない）
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json

@@ -1,3 +1,10 @@
+// TODO: Migrate to Vertex AI Claude Sonnet 4.6 after quota approval.
+//   - Current: Anthropic direct API, model "claude-sonnet-4-20250514" (Claude 4)
+//   - Target: Vertex AI, model "claude-sonnet-4-6" (Claude 4.6, 2026 release)
+//   - Model ID: publishers/anthropic/models/claude-sonnet-4-6
+//   - Version: claude-sonnet-4-6@default
+//   - Region: us-east5
+//   - SDK: @anthropic-ai/vertex-sdk
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';

@@ -1,44 +1,43 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+// TODO: Rename this file to reflect its actual content (Gemini-based).
+// Consider renaming to financial-analysis-service.ts in a future refactor.
+
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { usageTracker } from './usage-tracker.js';
 import type { RatingInput } from '../types/bank-rating.js';
 
 /**
- * Gemini APIを使った財務分析サービス
+ * Gemini APIを使った財務分析サービス（Vertex AI経由）
  *
  * PDF/CSVから抽出したテキストや、freeeの数値データを
  * Gemini APIに渡して分析・解釈を行う。
  * 画像・PDF・動画のマルチモーダル入力に対応。
  */
 export class AnthropicAnalysisService {
-  private genAI: GoogleGenerativeAI | null = null;
+  private ai: any = null;
 
   constructor() {
-    const apiKey = config.ai.geminiApiKey;
-    if (apiKey) {
-      this.genAI = new GoogleGenerativeAI(apiKey);
-      logger.info('Gemini API分析クライアントを初期化しました');
+    const project = config.ai.gcpProject;
+    if (project) {
+      import('@google/genai').then(({ GoogleGenAI }) => {
+        this.ai = new GoogleGenAI({ vertexai: true, project, location: config.ai.geminiRegion });
+        logger.info('Gemini API分析クライアント (Vertex AI) を初期化しました');
+      }).catch(e => logger.error('Gemini SDK初期化失敗:', e));
     } else {
-      logger.warn('GEMINI_API_KEYが未設定です。AI分析機能は利用できません。');
+      logger.warn('GOOGLE_CLOUD_PROJECTが未設定です。AI分析機能は利用できません。');
     }
   }
 
   isAvailable(): boolean {
-    return this.genAI !== null;
+    return this.ai !== null;
   }
 
-  /**
-   * PDF/CSVのテキストから決算データを抽出し、RatingInputに変換する
-   */
   async extractFinancialData(documentText: string, fileName: string): Promise<{
     ratingInput: RatingInput;
     extractionNotes: string[];
     rawResponse: string;
   }> {
-    if (!this.genAI) {
-      throw new Error('Gemini APIキーが設定されていません。.envファイルを確認してください。');
-    }
+    if (!this.ai) throw new Error('Gemini APIが初期化されていません。GOOGLE_CLOUD_PROJECTを確認してください。');
 
     const prompt = `あなたは財務データ抽出の専門家です。
 以下の決算書データから、銀行格付に必要な財務数値を抽出してJSON形式で返してください。
@@ -82,19 +81,18 @@ JSONのみを返してください。説明文は不要です。`;
 
     logger.info(`Gemini APIで財務データを抽出中... (${fileName})`);
 
-    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
-    this.recordUsage(result, '財務データ抽出(Gemini)');
+    const response = await this.ai.models.generateContent({
+      model: config.ai.geminiModel,
+      contents: prompt,
+    });
+    const text = response.text || '';
+    this.recordUsage(response, '財務データ抽出(Gemini)');
     logger.info('Gemini APIからレスポンスを受信しました');
 
-    // JSONを抽出
     const jsonBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
     const jsonStr = jsonBlockMatch ? jsonBlockMatch[1] : text;
     const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error('AIからの応答から財務データを解析できませんでした');
-    }
+    if (!jsonMatch) throw new Error('AIからの応答から財務データを解析できませんでした');
 
     const parsed = JSON.parse(jsonMatch[0]);
     const notes: string[] = parsed.extractionNotes || [];
@@ -126,16 +124,8 @@ JSONのみを返してください。説明文は不要です。`;
     return { ratingInput, extractionNotes: notes, rawResponse: text };
   }
 
-  /**
-   * 財務指標と格付結果をもとに、経営者向けAI解説を生成する
-   */
-  async generateAnalysisCommentary(
-    ratingJson: string,
-    additionalJson: string,
-  ): Promise<string> {
-    if (!this.genAI) {
-      throw new Error('Gemini APIキーが設定されていません');
-    }
+  async generateAnalysisCommentary(ratingJson: string, additionalJson: string): Promise<string> {
+    if (!this.ai) throw new Error('Gemini APIが初期化されていません');
 
     const prompt = `あなたは中小企業専門の財務コンサルタントです。
 以下の銀行格付分析結果をもとに、経営者向けの構造化された分析レポートをJSON形式で生成してください。
@@ -158,63 +148,38 @@ ${additionalJson}
   "headline": "一言で表す総合判定（15文字以内）",
   "summary": "経営者が最初に読む3行の総評文",
   "overallGrade": "A〜Eの格付",
-  "strengths": [
-    {"title": "強みの名称", "detail": "具体的な説明（数値を含む）", "icon": "適切な絵文字1つ"}
-  ],
-  "weaknesses": [
-    {"title": "弱みの名称", "detail": "具体的な説明（数値を含む）", "icon": "適切な絵文字1つ"}
-  ],
-  "bankView": {
-    "overallComment": "銀行がこの企業をどう見るかの総合コメント（2〜3文）",
-    "positives": ["銀行目線でのプラス要因"],
-    "concerns": ["銀行目線での懸念事項"],
-    "lendingImpact": "融資への具体的な影響（金利・限度額・条件への言及）"
-  },
-  "keyMetrics": [
-    {"name": "指標名", "value": "値（単位付き）", "benchmark": "業界平均や基準値", "assessment": "excellent/good/fair/warning/danger", "comment": "一言コメント"}
-  ],
-  "immediateActions": [
-    {"priority": 1, "action": "やるべきこと", "reason": "なぜ必要か", "expectedEffect": "期待される効果", "timeframe": "実施期間"}
-  ],
-  "mediumTermStrategy": [
-    {"theme": "テーマ名", "detail": "具体的な施策の説明", "timeframe": "期間"}
-  ],
-  "riskAlerts": [
-    {"level": "high/medium/low", "title": "リスク名", "detail": "詳細説明"}
-  ],
-  "industryComparison": {
-    "position": "同業他社と比較した総合ポジション",
-    "aboveAverage": ["業界平均を上回っている点"],
-    "belowAverage": ["業界平均を下回っている点"]
-  }
+  "strengths": [{"title": "強みの名称", "detail": "具体的な説明", "icon": "絵文字1つ"}],
+  "weaknesses": [{"title": "弱みの名称", "detail": "具体的な説明", "icon": "絵文字1つ"}],
+  "bankView": {"overallComment": "銀行目線の総合コメント", "positives": [], "concerns": [], "lendingImpact": "融資への影響"},
+  "keyMetrics": [{"name": "指標名", "value": "値", "benchmark": "基準値", "assessment": "excellent/good/fair/warning/danger", "comment": "一言"}],
+  "immediateActions": [{"priority": 1, "action": "施策", "reason": "理由", "expectedEffect": "効果", "timeframe": "期間"}],
+  "mediumTermStrategy": [{"theme": "テーマ", "detail": "施策", "timeframe": "期間"}],
+  "riskAlerts": [{"level": "high/medium/low", "title": "リスク名", "detail": "詳細"}],
+  "industryComparison": {"position": "ポジション", "aboveAverage": [], "belowAverage": []}
 }`;
 
     logger.info('Gemini APIで分析コメントを生成中...');
-
-    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
-    this.recordUsage(result, 'AI分析コメント生成(Gemini)');
+    const response = await this.ai.models.generateContent({
+      model: config.ai.geminiModel,
+      contents: prompt,
+    });
+    const text = response.text || '';
+    this.recordUsage(response, 'AI分析コメント生成(Gemini)');
     logger.info('AI分析コメント生成完了');
     return text;
   }
 
-  /**
-   * PDFファイルからテキストを抽出する（Gemini Vision使用）
-   */
   async extractTextFromPDF(pdfBuffer: Buffer, fileName: string): Promise<string> {
-    if (!this.genAI) {
-      throw new Error('Gemini APIキーが設定されていません');
-    }
+    if (!this.ai) throw new Error('Gemini APIが初期化されていません');
 
     const base64 = pdfBuffer.toString('base64');
-
     logger.info(`PDFからテキスト抽出中（Gemini）... (${fileName})`);
 
-    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
-    const result = await model.generateContent([
-      { inlineData: { mimeType: 'application/pdf', data: base64 } },
-      { text: `この決算書PDFから、全ての財務数値を正確にテキストとして抽出してください。
+    const response = await this.ai.models.generateContent({
+      model: config.ai.geminiModel,
+      contents: [{ role: 'user', parts: [
+        { inlineData: { mimeType: 'application/pdf', data: base64 } },
+        { text: `この決算書PDFから、全ての財務数値を正確にテキストとして抽出してください。
 特に以下の項目を漏れなく抽出してください：
 - 貸借対照表（BS）の全科目と金額
 - 損益計算書（PL）の全科目と金額
@@ -226,17 +191,18 @@ ${additionalJson}
 - 前期比較データがあれば前期の数値も
 
 表形式で科目名と金額を整理して出力してください。` },
-    ]);
+      ]}],
+    });
 
-    const text = result.response.text();
-    this.recordUsage(result, 'PDF読み取り(Gemini)');
+    const text = response.text || '';
+    this.recordUsage(response, 'PDF読み取り(Gemini)');
     logger.info(`PDFテキスト抽出完了 (${text.length}文字)`);
     return text;
   }
 
-  private recordUsage(result: any, purpose: string): void {
+  private recordUsage(response: any, purpose: string): void {
     try {
-      const usage = result.response.usageMetadata;
+      const usage = response.usageMetadata;
       if (usage) {
         usageTracker.record(
           config.ai.geminiModel,

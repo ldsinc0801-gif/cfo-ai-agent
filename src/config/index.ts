@@ -13,11 +13,14 @@ export const config = {
   },
   ai: {
     provider: (process.env.AI_PROVIDER || 'template') as 'template' | 'anthropic',
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
-    openaiApiKey: process.env.OPENAI_API_KEY || '',
-    chatModel: process.env.CHAT_MODEL || 'gpt-4o',
-    geminiApiKey: process.env.GEMINI_API_KEY || '',
+    // Vertex AI (Google Cloud)
+    gcpProject: process.env.GOOGLE_CLOUD_PROJECT || '',
+    geminiRegion: process.env.GEMINI_REGION || 'asia-northeast1',
+    claudeRegion: process.env.CLAUDE_REGION || 'us-east5',
     geminiModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+    claudeModel: process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',
+    // Legacy (Claude直接API用、Vertex AI quota承認後に廃止予定)
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
   },
   supabase: {
     url: process.env.SUPABASE_URL || '',

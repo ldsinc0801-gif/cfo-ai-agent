@@ -1,4 +1,3 @@
-import OpenAI from 'openai';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { usageTracker } from './usage-tracker.js';
@@ -83,15 +82,17 @@ export interface FreeeContextData {
  * データ保存はSupabase優先、未設定時はJSONファイルにフォールバック。
  */
 export class ChatService {
-  private client: OpenAI | null = null;
+  private ai: any = null;
   private freeeContext: FreeeContextData | null = null;
   private useSupabase: boolean;
 
   constructor() {
-    const apiKey = config.ai.openaiApiKey;
-    if (apiKey) {
-      this.client = new OpenAI({ apiKey });
-      logger.info('OpenAI APIクライアントを初期化しました');
+    const project = config.ai.gcpProject;
+    if (project) {
+      import('@google/genai').then(({ GoogleGenAI }) => {
+        this.ai = new GoogleGenAI({ vertexai: true, project, location: config.ai.geminiRegion });
+        logger.info('Gemini チャットクライアント (Vertex AI) を初期化しました');
+      }).catch(e => logger.error('Gemini SDK初期化失敗:', e));
     }
     this.useSupabase = isSupabaseAvailable();
     if (this.useSupabase) {
@@ -103,7 +104,7 @@ export class ChatService {
   }
 
   isAvailable(): boolean {
-    return this.client !== null;
+    return this.ai !== null;
   }
 
   setFreeeContext(data: FreeeContextData | null): void {
@@ -168,7 +169,7 @@ export class ChatService {
   // ========== チャット送信 ==========
 
   async sendMessage(userMessage: string, tenantId?: TenantId): Promise<ChatResponse> {
-    if (!this.client) throw new Error('OPENAI_API_KEYが未設定です');
+    if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     const memory = await this.getMemory(tenantId);
     const history = await this.getHistory(tenantId);
@@ -178,29 +179,33 @@ export class ChatService {
 
     const systemPrompt = await this.buildSystemPrompt(memory, latestAnalysis, tenantId);
 
-    const apiMessages: OpenAI.ChatCompletionMessageParam[] = [
-      { role: 'system', content: systemPrompt },
+    // OpenAI messages → Gemini contents 変換マッピング:
+    // - OpenAI system → Gemini systemInstruction
+    // - OpenAI user → Gemini { role: 'user', parts: [{ text }] }
+    // - OpenAI assistant → Gemini { role: 'model', parts: [{ text }] }
+    const contents = [
       ...history.slice(-20).map(m => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
+        role: m.role === 'assistant' ? 'model' as const : 'user' as const,
+        parts: [{ text: m.content }],
       })),
-      { role: 'user' as const, content: userMessage },
+      { role: 'user' as const, parts: [{ text: userMessage }] },
     ];
 
-    logger.info('チャットメッセージを送信中（GPT）...');
+    logger.info('チャットメッセージを送信中（Gemini Vertex AI）...');
 
-    const response = await this.client.chat.completions.create({
-      model: config.ai.chatModel,
-      max_tokens: 2048,
-      messages: apiMessages,
+    const response = await this.ai.models.generateContent({
+      model: config.ai.geminiModel,
+      systemInstruction: systemPrompt,
+      contents,
+      config: { maxOutputTokens: 2048 },
     });
 
-    const usage = response.usage;
+    const usage = response.usageMetadata;
     if (usage) {
-      usageTracker.record(response.model, usage.prompt_tokens, usage.completion_tokens, 'チャット(GPT)');
+      usageTracker.record(config.ai.geminiModel, usage.promptTokenCount || 0, usage.candidatesTokenCount || 0, 'チャット(Gemini)');
     }
 
-    const assistantMessage = response.choices[0]?.message?.content || '';
+    const assistantMessage = response.text || '';
 
     history.push(
       { role: 'user', content: userMessage, timestamp: new Date().toISOString() },
