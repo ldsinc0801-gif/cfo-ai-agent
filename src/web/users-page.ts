@@ -266,6 +266,7 @@ function loadTenants(){
         '<div class="t-card-actions">'+
           '<button class="btn-secondary btn-sm" onclick="showAddFA(\\''+id+'\\',\\''+nm+'\\')">財務管理者追加</button>'+
           '<button class="btn-secondary btn-sm" onclick="switchAndLoad(\\''+id+'\\')">このテナントを表示</button>'+
+          '<button class="act-btn danger" onclick="deleteTenant(\\''+id+'\\',\\''+nm+'\\')">削除</button>'+
         '</div></div>';
     }).join('');
   });
@@ -458,7 +459,7 @@ function loadFAUsers(){
     if(list.length===0){el.innerHTML='<tr><td colspan="4" class="muted">テナント財務管理者がいません</td></tr>';return;}
     el.innerHTML=list.map(function(fa){
       var tenantTags=fa.tenants.map(function(t){return '<span class="tenant-tag">'+t.name+'</span>'}).join(' ');
-      return '<tr><td>'+fa.email+'</td><td>'+(fa.name||'-')+'</td><td>'+(tenantTags||'<span class="muted">未紐付け</span>')+'</td><td><button class="act-btn" onclick="openLinkTenantModal(\\''+fa.userId+'\\',\\''+fa.email+'\\')">テナント紐付け</button></td></tr>';
+      return '<tr><td>'+fa.email+'</td><td>'+(fa.name||'-')+'</td><td>'+(tenantTags||'<span class="muted">未紐付け</span>')+'</td><td><button class="act-btn" onclick="openLinkTenantModal(\\''+fa.userId+'\\',\\''+fa.email+'\\')">テナント紐付け</button> <button class="act-btn danger" onclick="deleteFAUser(\\''+fa.userId+'\\',\\''+fa.email+'\\')">削除</button></td></tr>';
     }).join('');
   });
 }
@@ -522,6 +523,34 @@ function saveTenantLinks(){
       window.__toast('テナント紐付けを更新しました','success');
       loadFAUsers();
     });
+}
+
+// === 削除操作 ===
+function deleteFAUser(userId,email){
+  showConfirm('財務管理者を削除','「'+email+'」を全テナントの財務管理者から解除し、ユーザーを削除しますか？この操作は取り消せません。',function(){
+    // 全テナントからの紐付けを解除
+    fetch('/api/financial-admins/'+userId+'/tenants',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenantIds:[]})})
+      .then(function(){
+        // ユーザー自体を削除
+        return fetch('/api/users/'+userId,{method:'DELETE'});
+      })
+      .then(function(r){return r.json()}).then(function(d){
+        if(d.error){window.__toast(d.error,'error');return;}
+        window.__toast(email+' を削除しました','success');
+        loadFAUsers();
+      });
+  });
+}
+
+function deleteTenant(tid,name){
+  showConfirm('テナントを削除','「'+name+'」を削除しますか？テナントに紐づく全データ（メンバー、タスク、書類等）が削除されます。この操作は取り消せません。',function(){
+    fetch('/api/tenants/'+tid,{method:'DELETE'})
+      .then(function(r){return r.json()}).then(function(d){
+        if(d.error){window.__toast(d.error,'error');return;}
+        window.__toast(name+' を削除しました','success');
+        loadTenants();loadFAUsers();
+      });
+  });
 }
 
 loadTenants();loadMembers();loadFAUsers();

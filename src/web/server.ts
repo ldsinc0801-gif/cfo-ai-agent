@@ -470,6 +470,33 @@ app.post('/api/financial-admins/:userId/tenants', express.json(), requireSuperAd
   }
 });
 
+// ユーザー削除（超管理者のみ）
+app.delete('/api/users/:userId', requireSuperAdmin, async (req, res) => {
+  try {
+    const userId = req.params.userId as string;
+    // tenant_members は CASCADE で自動削除
+    const { error } = await getSupabase().from('users').delete().eq('id', userId);
+    if (error) throw error;
+    logger.info(`ユーザー削除: ${userId}`);
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// テナント削除（超管理者のみ、CASCADEで関連データも削除）
+app.delete('/api/tenants/:tenantId', requireSuperAdmin, async (req, res) => {
+  try {
+    const tenantId = req.params.tenantId as string;
+    const { error } = await getSupabase().from('tenants').delete().eq('id', tenantId);
+    if (error) throw error;
+    logger.info(`テナント削除: ${tenantId}`);
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // === メンバー管理API ===
 
 // テナント内メンバー招待（管理者→従業員追加、財務管理者→管理者招待）
