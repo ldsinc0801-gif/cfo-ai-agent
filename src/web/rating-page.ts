@@ -471,7 +471,7 @@ export function renderRatingHTML(
       <input type="file" name="file" accept=".pdf,.csv,.xlsx" hidden id="financeFileInput"/>
     </label>
     <p>PDF・CSV・Excelの決算書を財務分析AIエージェントが読み取り、自動で銀行格付を算出します</p>
-    ${!options.aiAvailable ? '<p style="color:var(--red);font-size:12px;margin-top:4px">ANTHROPIC_API_KEYが未設定のため、AI分析は利用できません</p>' : ''}
+    ${!options.aiAvailable ? '<p style="color:var(--red);font-size:12px;margin-top:4px">Vertex AI の認証が未設定のため、AI分析は利用できません</p>' : ''}
   </div>
 
   <!-- Step 2: ファイル確認 -->

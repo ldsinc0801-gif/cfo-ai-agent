@@ -111,7 +111,7 @@ ${history.length === 0 ? `
 
       <!-- Input -->
       <div class="chat-input-wrap">
-        ${!aiAvailable ? '<div class="chat-warn">ANTHROPIC_API_KEYが未設定のため利用できません</div>' : ''}
+        ${!aiAvailable ? '<div class="chat-warn">Vertex AI の認証が未設定のため利用できません</div>' : ''}
         <form id="chatForm" class="chat-input-form" onsubmit="sendChat(event)" onkeydown="if(event.key==='Enter'&&!event.shiftKey)event.preventDefault()">
           <textarea id="chatInput" class="chat-input" placeholder="経営に関する質問を入力..." rows="1" ${!aiAvailable ? 'disabled' : ''}></textarea>
           <button type="submit" class="chat-send" ${!aiAvailable ? 'disabled' : ''}>

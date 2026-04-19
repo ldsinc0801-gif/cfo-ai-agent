@@ -60,7 +60,7 @@ ${options.success ? `<div class="acc-success">${esc(options.success)}</div>` : '
           </div>
         </div>
       </form>
-      ${!options.aiAvailable ? '<p class="warn-msg">ANTHROPIC_API_KEYが未設定のため利用できません</p>' : ''}
+      ${!options.aiAvailable ? '<p class="warn-msg">Vertex AI の認証が未設定のため利用できません</p>' : ''}
     </div>
   </div>
 
