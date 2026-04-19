@@ -181,7 +181,7 @@ export class ChatService {
       { role: 'user' as const, parts: [{ text: userMessage }] },
     ];
 
-    logger.info('チャットメッセージを送信中（Gemini Vertex AI）...');
+    logger.info(`チャット送信: freeeContext=${this.freeeContext ? 'あり' : 'なし'}, memory=${memory.companyName || 'なし'}, history=${history.length}件`);
 
     const response = await this.ai.models.generateContent({
       model: config.ai.geminiModel,

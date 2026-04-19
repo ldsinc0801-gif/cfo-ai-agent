@@ -2551,9 +2551,11 @@ app.post('/chat/send', express.json(), async (req, res) => {
 async function loadFreeeContextForChat(tenantId?: TenantId): Promise<void> {
   const token = await getFreeeToken(tenantId);
   if (!token) {
+    logger.info(`チャット: freee未連携 (tenant: ${tenantId || 'none'})`);
     chatService.setFreeeContext(null);
     return;
   }
+  logger.info(`チャット: freeeトークン取得成功 (tenant: ${tenantId})`);
 
   const cacheKey = `chat-freee-context-${await getSelectedCompanyId(tenantId)}`;
   const cached = getCached<any>(cacheKey);
