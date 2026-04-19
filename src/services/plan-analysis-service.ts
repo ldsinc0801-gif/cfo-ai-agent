@@ -1,11 +1,3 @@
-// TODO: Migrate to Vertex AI Claude Sonnet 4.6 after quota approval.
-//   - Current: Anthropic direct API, model "claude-sonnet-4-20250514" (Claude 4)
-//   - Target: Vertex AI, model "claude-sonnet-4-6" (Claude 4.6, 2026 release)
-//   - Model ID: publishers/anthropic/models/claude-sonnet-4-6
-//   - Version: claude-sonnet-4-6@default
-//   - Region: us-east5
-//   - SDK: @anthropic-ai/vertex-sdk
-import Anthropic from '@anthropic-ai/sdk';
 import fs from 'fs';
 import path from 'path';
 import { config } from '../config/index.js';
@@ -38,7 +30,7 @@ export interface PlanVariance {
   ordinaryIncomeVarianceRate: number;
 }
 
-/** Claude分析結果 */
+/** AI分析結果 */
 export interface PlanAnalysisResult {
   id: string;
   createdAt: string;
@@ -54,25 +46,27 @@ export interface PlanAnalysisResult {
 }
 
 /**
- * 計画分析サービス（Claude API）
+ * 計画分析サービス（Gemini 2.5 Pro via Vertex AI）
  *
  * 現状の実績数値と計画数値の差分を分析し、
  * パターンを学習して計画に反映する。
  */
 export class PlanAnalysisService {
-  private client: Anthropic | null = null;
+  private ai: any = null;
 
   constructor() {
-    const apiKey = config.ai.anthropicApiKey;
-    if (apiKey) {
-      this.client = new Anthropic({ apiKey });
-      logger.info('Claude API（計画分析）クライアントを初期化しました');
+    const project = config.ai.gcpProject;
+    if (project) {
+      import('@google/genai').then(({ GoogleGenAI }) => {
+        this.ai = new GoogleGenAI({ vertexai: true, project, location: config.ai.geminiRegion });
+        logger.info('Gemini API（計画分析, 2.5 Pro）クライアントを初期化しました');
+      }).catch(e => logger.error('Gemini SDK初期化失敗:', e));
     }
     if (!fs.existsSync(PLAN_DIR)) fs.mkdirSync(PLAN_DIR, { recursive: true });
   }
 
   isAvailable(): boolean {
-    return this.client !== null;
+    return this.ai !== null;
   }
 
   // ========== 計画データ管理 ==========
@@ -132,17 +126,17 @@ export class PlanAnalysisService {
     return variances;
   }
 
-  // ========== Claude分析 ==========
+  // ========== Gemini分析 ==========
 
   /**
-   * 実績 vs 計画の差分をClaudeで分析し、計画修正を提案する
+   * 実績 vs 計画の差分をGemini 2.5 Proで分析し、計画修正を提案する
    */
   async analyzePlanVariance(
     actuals: MonthlySnapshot[],
     targets: MonthlyTarget[],
     futureMonths: number = 3,
   ): Promise<PlanAnalysisResult> {
-    if (!this.client) throw new Error('ANTHROPIC_API_KEYが未設定です');
+    if (!this.ai) throw new Error('Vertex AI の認証が未設定です');
 
     const variances = this.calculateVariances(actuals, targets);
     if (variances.length === 0) {
@@ -221,16 +215,19 @@ ${historyText}
   "confidenceLevel": "high/medium/low"
 }`;
 
-    logger.info('Claude APIで計画差分分析を実行中...');
+    logger.info('Gemini 2.5 Pro で計画差分分析を実行中...');
 
-    const response = await this.client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
-      messages: [{ role: 'user', content: prompt }],
+    const response = await this.ai.models.generateContent({
+      model: config.ai.geminiAnalysisModel,
+      contents: prompt,
+      config: { maxOutputTokens: 4096 },
     });
 
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
-    usageTracker.record(response.model, response.usage.input_tokens, response.usage.output_tokens, '計画差分分析(Claude)');
+    const text = response.text || '';
+    const usage = response.usageMetadata;
+    if (usage) {
+      usageTracker.record(config.ai.geminiAnalysisModel, usage.promptTokenCount || 0, usage.candidatesTokenCount || 0, '計画差分分析(Gemini Pro)');
+    }
 
     // JSONパース
     const jsonBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);

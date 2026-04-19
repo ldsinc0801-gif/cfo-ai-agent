@@ -12,15 +12,11 @@ export const config = {
     baseUrl: 'https://api.freee.co.jp',
   },
   ai: {
-    provider: (process.env.AI_PROVIDER || 'template') as 'template' | 'anthropic',
-    // Vertex AI (Google Cloud)
+    // Vertex AI (Google Cloud) — 全AI機能をGeminiに統一
     gcpProject: process.env.GOOGLE_CLOUD_PROJECT || '',
     geminiRegion: process.env.GEMINI_REGION || 'asia-northeast1',
-    claudeRegion: process.env.CLAUDE_REGION || 'us-east5',
     geminiModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
-    claudeModel: process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',
-    // Legacy (Claude直接API用、Vertex AI quota承認後に廃止予定)
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
+    geminiAnalysisModel: process.env.GEMINI_ANALYSIS_MODEL || 'gemini-2.5-pro',
   },
   supabase: {
     url: process.env.SUPABASE_URL || '',

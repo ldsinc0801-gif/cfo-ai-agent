@@ -1,11 +1,3 @@
-// TODO: Migrate to Vertex AI Claude Sonnet 4.6 after quota approval.
-//   - Current: Anthropic direct API, model "claude-sonnet-4-20250514" (Claude 4)
-//   - Target: Vertex AI, model "claude-sonnet-4-6" (Claude 4.6, 2026 release)
-//   - Model ID: publishers/anthropic/models/claude-sonnet-4-6
-//   - Version: claude-sonnet-4-6@default
-//   - Region: us-east5
-//   - SDK: @anthropic-ai/vertex-sdk
-import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { usageTracker } from './usage-tracker.js';
@@ -41,18 +33,20 @@ export interface LearningResult {
  * 学習結果はSupabase（利用可能な場合）またはJSONファイルに保存する。
  */
 class LearningService {
-  private client: Anthropic | null = null;
+  private ai: any = null;
 
   constructor() {
-    const apiKey = config.ai.anthropicApiKey;
-    if (apiKey) {
-      this.client = new Anthropic({ apiKey });
-      logger.info('学習サービス: Anthropic APIクライアントを初期化しました');
+    const project = config.ai.gcpProject;
+    if (project) {
+      import('@google/genai').then(({ GoogleGenAI }) => {
+        this.ai = new GoogleGenAI({ vertexai: true, project, location: config.ai.geminiRegion });
+        logger.info('学習サービス: Gemini API (2.5 Pro, Vertex AI) を初期化しました');
+      }).catch(e => logger.error('Gemini SDK初期化失敗:', e));
     }
   }
 
   isAvailable(): boolean {
-    return this.client !== null;
+    return this.ai !== null;
   }
 
   /**
@@ -64,8 +58,8 @@ class LearningService {
    * 4. 知見を保存
    */
   async runLearningCycle(tenantId?: TenantId): Promise<LearningResult> {
-    if (!this.client) {
-      throw new Error('ANTHROPIC_API_KEYが未設定です');
+    if (!this.ai) {
+      throw new Error('Vertex AI の認証が未設定です');
     }
 
     logger.info('学習サイクルを開始します...');
@@ -86,21 +80,21 @@ class LearningService {
     // 3. 既存の知見を取得
     const existingInsights = await this.getInsights();
 
-    // 4. Claude APIでパターン分析
+    // 4. Gemini 2.5 Pro でパターン分析
     const analysisPrompt = this.buildAnalysisPrompt(actuals, pastAnalyses, existingInsights);
 
-    const response = await this.client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
-      messages: [{ role: 'user', content: analysisPrompt }],
+    const response = await this.ai.models.generateContent({
+      model: config.ai.geminiAnalysisModel,
+      contents: analysisPrompt,
+      config: { maxOutputTokens: 4096 },
     });
 
-    const usage = response.usage;
+    const usage = response.usageMetadata;
     if (usage) {
-      usageTracker.record(response.model, usage.input_tokens, usage.output_tokens, '学習サイクル');
+      usageTracker.record(config.ai.geminiAnalysisModel, usage.promptTokenCount || 0, usage.candidatesTokenCount || 0, '学習サイクル(Gemini Pro)');
     }
 
-    const analysisText = response.content[0].type === 'text' ? response.content[0].text : '';
+    const analysisText = response.text || '';
 
     // 5. 応答をパースして知見を抽出
     const result = this.parseAnalysisResponse(analysisText, existingInsights);
@@ -168,7 +162,7 @@ class LearningService {
    * 条件: APIキー設定済み & 前回実行から7日以上経過 & 実績3ヶ月以上
    */
   async tryAutoLearn(tenantId?: TenantId): Promise<void> {
-    if (!this.client || !tenantId) return;
+    if (!this.ai || !tenantId) return;
 
     try {
       const insights = await this.getInsights();

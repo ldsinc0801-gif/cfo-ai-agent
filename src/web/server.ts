@@ -1104,10 +1104,8 @@ app.post('/api/plan/targets/clear', (_req, res) => {
 // 計画 vs 実績の差分分析を実行（Claude）
 app.post('/api/plan/analyze', express.json(), async (req, res) => {
   try {
-    // TODO: After Vertex AI Claude quota approval and migration,
-    //   update this message to check Vertex AI credentials instead of ANTHROPIC_API_KEY.
     if (!planAnalysisService.isAvailable()) {
-      res.status(400).json({ error: 'ANTHROPIC_API_KEYが未設定です' });
+      res.status(400).json({ error: 'Vertex AI の認証が未設定です' });
       return;
     }
 
@@ -1173,10 +1171,8 @@ app.get('/api/plan/history', (_req, res) => {
 // 学習実行
 app.post('/api/learn', async (_req, res) => {
   try {
-    // TODO: After Vertex AI Claude quota approval and migration,
-    //   update this message to check Vertex AI credentials instead of ANTHROPIC_API_KEY.
     if (!learningService.isAvailable()) {
-      res.status(400).json({ error: 'ANTHROPIC_API_KEYが未設定です' });
+      res.status(400).json({ error: 'Vertex AI の認証が未設定です' });
       return;
     }
     const result = await learningService.runLearningCycle();
