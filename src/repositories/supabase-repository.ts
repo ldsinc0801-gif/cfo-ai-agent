@@ -2,20 +2,22 @@ import { getSupabase } from '../clients/supabase.js';
 import { logger } from '../utils/logger.js';
 import type { MonthlySnapshot, MonthlyTarget } from '../types/trend.js';
 import type { ChatMessage, CompanyMemory } from '../services/chat-service.js';
+import type { TenantId } from '../types/auth.js';
 
 /**
  * Supabaseリポジトリ
  *
- * JSONファイル保存の代わりにSupabase(PostgreSQL)を使う。
- * 全てのデータ永続化をここに集約する。
+ * 全クエリに TenantId を必須パラメータとして要求する。
+ * TenantId は Branded Type であり、素の string を渡すとコンパイルエラーになる。
  */
 
 // ========== 月次実績 ==========
 
-export async function upsertMonthlyActual(data: MonthlySnapshot): Promise<void> {
+export async function upsertMonthlyActual(tenantId: TenantId, data: MonthlySnapshot): Promise<void> {
   const { error } = await getSupabase()
     .from('monthly_actuals')
     .upsert({
+      tenant_id: tenantId,
       year: data.year,
       month: data.month,
       revenue: data.revenue,
@@ -29,19 +31,20 @@ export async function upsertMonthlyActual(data: MonthlySnapshot): Promise<void> 
       current_liabilities: data.currentLiabilities,
       total_assets: data.totalAssets,
       net_assets: data.netAssets,
-    }, { onConflict: 'year,month' });
+    }, { onConflict: 'tenant_id,year,month' });
 
   if (error) throw new Error(`月次実績の保存に失敗: ${error.message}`);
   logger.info(`月次実績を保存: ${data.year}年${data.month}月`);
 }
 
-export async function getMonthlyActuals(fromYear: number, fromMonth: number, toYear: number, toMonth: number): Promise<MonthlySnapshot[]> {
+export async function getMonthlyActuals(tenantId: TenantId, fromYear: number, fromMonth: number, toYear: number, toMonth: number): Promise<MonthlySnapshot[]> {
   const from = fromYear * 100 + fromMonth;
   const to = toYear * 100 + toMonth;
 
   const { data, error } = await getSupabase()
     .from('monthly_actuals')
     .select('*')
+    .eq('tenant_id', tenantId)
     .order('year', { ascending: true })
     .order('month', { ascending: true });
 
@@ -49,33 +52,23 @@ export async function getMonthlyActuals(fromYear: number, fromMonth: number, toY
 
   return (data || [])
     .filter(r => (r.year * 100 + r.month) >= from && (r.year * 100 + r.month) <= to)
-    .map(r => ({
-      year: r.year,
-      month: r.month,
-      revenue: r.revenue,
-      costOfSales: r.cost_of_sales,
-      grossProfit: r.gross_profit,
-      sgaExpenses: r.sga_expenses,
-      operatingIncome: r.operating_income,
-      ordinaryIncome: r.ordinary_income,
-      cashAndDeposits: r.cash_and_deposits,
-      currentAssets: r.current_assets,
-      currentLiabilities: r.current_liabilities,
-      totalAssets: r.total_assets,
-      netAssets: r.net_assets,
-    }));
+    .map(mapSnapshot);
 }
 
-export async function getAllMonthlyActuals(): Promise<MonthlySnapshot[]> {
+export async function getAllMonthlyActuals(tenantId: TenantId): Promise<MonthlySnapshot[]> {
   const { data, error } = await getSupabase()
     .from('monthly_actuals')
     .select('*')
+    .eq('tenant_id', tenantId)
     .order('year', { ascending: true })
     .order('month', { ascending: true });
 
   if (error) throw new Error(`月次実績の取得に失敗: ${error.message}`);
+  return (data || []).map(mapSnapshot);
+}
 
-  return (data || []).map(r => ({
+function mapSnapshot(r: any): MonthlySnapshot {
+  return {
     year: r.year,
     month: r.month,
     revenue: r.revenue,
@@ -89,30 +82,32 @@ export async function getAllMonthlyActuals(): Promise<MonthlySnapshot[]> {
     currentLiabilities: r.current_liabilities,
     totalAssets: r.total_assets,
     netAssets: r.net_assets,
-  }));
+  };
 }
 
 // ========== 月次計画 ==========
 
-export async function upsertMonthlyTarget(target: MonthlyTarget): Promise<void> {
+export async function upsertMonthlyTarget(tenantId: TenantId, target: MonthlyTarget): Promise<void> {
   const { error } = await getSupabase()
     .from('monthly_targets')
     .upsert({
+      tenant_id: tenantId,
       year: target.year,
       month: target.month,
       revenue: target.revenue,
       gross_profit: target.grossProfit,
       ordinary_income: target.ordinaryIncome,
       updated_at: new Date().toISOString(),
-    }, { onConflict: 'year,month' });
+    }, { onConflict: 'tenant_id,year,month' });
 
   if (error) throw new Error(`月次計画の保存に失敗: ${error.message}`);
 }
 
-export async function getMonthlyTargets(): Promise<MonthlyTarget[]> {
+export async function getMonthlyTargets(tenantId: TenantId): Promise<MonthlyTarget[]> {
   const { data, error } = await getSupabase()
     .from('monthly_targets')
     .select('*')
+    .eq('tenant_id', tenantId)
     .order('year', { ascending: true })
     .order('month', { ascending: true });
 
@@ -129,18 +124,19 @@ export async function getMonthlyTargets(): Promise<MonthlyTarget[]> {
 
 // ========== チャット履歴 ==========
 
-export async function saveChatMessage(role: string, content: string): Promise<void> {
+export async function saveChatMessage(tenantId: TenantId, role: string, content: string): Promise<void> {
   const { error } = await getSupabase()
     .from('chat_messages')
-    .insert({ role, content });
+    .insert({ tenant_id: tenantId, role, content });
 
   if (error) throw new Error(`チャット保存に失敗: ${error.message}`);
 }
 
-export async function getChatHistory(limit: number = 50): Promise<ChatMessage[]> {
+export async function getChatHistory(tenantId: TenantId, limit: number = 50): Promise<ChatMessage[]> {
   const { data, error } = await getSupabase()
     .from('chat_messages')
     .select('*')
+    .eq('tenant_id', tenantId)
     .order('created_at', { ascending: false })
     .limit(limit);
 
@@ -153,22 +149,22 @@ export async function getChatHistory(limit: number = 50): Promise<ChatMessage[]>
   }));
 }
 
-export async function clearChatHistory(): Promise<void> {
+export async function clearChatHistory(tenantId: TenantId): Promise<void> {
   const { error } = await getSupabase()
     .from('chat_messages')
     .delete()
-    .neq('id', 0); // 全件削除
+    .eq('tenant_id', tenantId);
 
   if (error) throw new Error(`チャット履歴の削除に失敗: ${error.message}`);
 }
 
 // ========== 会社メモリ ==========
 
-export async function getCompanyMemory(): Promise<CompanyMemory> {
+export async function getCompanyMemory(tenantId: TenantId): Promise<CompanyMemory> {
   const { data, error } = await getSupabase()
     .from('company_memory')
     .select('*')
-    .eq('id', 1)
+    .eq('tenant_id', tenantId)
     .single();
 
   if (error || !data) {
@@ -185,36 +181,37 @@ export async function getCompanyMemory(): Promise<CompanyMemory> {
   };
 }
 
-export async function saveCompanyMemory(memory: CompanyMemory): Promise<void> {
+export async function saveCompanyMemory(tenantId: TenantId, memory: CompanyMemory): Promise<void> {
   const { error } = await getSupabase()
     .from('company_memory')
     .upsert({
-      id: 1,
+      tenant_id: tenantId,
       company_name: memory.companyName,
       industry: memory.industry,
       employee_count: memory.employeeCount,
       fiscal_year_end: memory.fiscalYearEnd,
       notes: memory.notes,
       updated_at: new Date().toISOString(),
-    });
+    }, { onConflict: 'tenant_id' });
 
   if (error) throw new Error(`会社メモリの保存に失敗: ${error.message}`);
 }
 
 // ========== 分析結果 ==========
 
-export async function savePlanAnalysis(id: string, variances: any, analysis: any): Promise<void> {
+export async function savePlanAnalysis(tenantId: TenantId, id: string, variances: any, analysis: any): Promise<void> {
   const { error } = await getSupabase()
     .from('plan_analyses')
-    .upsert({ id, variances, analysis });
+    .upsert({ tenant_id: tenantId, id, variances, analysis });
 
   if (error) throw new Error(`分析結果の保存に失敗: ${error.message}`);
 }
 
-export async function getPlanAnalyses(): Promise<any[]> {
+export async function getPlanAnalyses(tenantId: TenantId): Promise<any[]> {
   const { data, error } = await getSupabase()
     .from('plan_analyses')
     .select('*')
+    .eq('tenant_id', tenantId)
     .order('created_at', { ascending: false })
     .limit(10);
 
@@ -222,7 +219,7 @@ export async function getPlanAnalyses(): Promise<any[]> {
   return data || [];
 }
 
-// ========== ユーザー管理 ==========
+// ========== ユーザー管理（tenant_id不要） ==========
 
 export interface UserRecord {
   id: string;
@@ -233,23 +230,6 @@ export interface UserRecord {
   last_login_at: string;
 }
 
-export async function upsertUser(email: string, name: string, picture: string): Promise<UserRecord> {
-  const { data, error } = await getSupabase()
-    .from('users')
-    .upsert({
-      email,
-      name,
-      picture,
-      last_login_at: new Date().toISOString(),
-    }, { onConflict: 'email' })
-    .select()
-    .single();
-
-  if (error) throw new Error(`ユーザーの保存に失敗: ${error.message}`);
-  logger.info(`ユーザーを保存: ${email}`);
-  return data;
-}
-
 export async function getUserByEmail(email: string): Promise<UserRecord | null> {
   const { data, error } = await getSupabase()
     .from('users')
@@ -258,7 +238,7 @@ export async function getUserByEmail(email: string): Promise<UserRecord | null> 
     .single();
 
   if (error) {
-    if (error.code === 'PGRST116') return null; // not found
+    if (error.code === 'PGRST116') return null;
     throw new Error(`ユーザーの取得に失敗: ${error.message}`);
   }
   return data;

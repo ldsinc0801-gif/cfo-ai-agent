@@ -625,6 +625,24 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","H
 .sidebar-logout-btn:hover{color:#ef4444;background:rgba(239,68,68,0.1)}
 .sidebar-version{font-size:11px;color:#68b3be;margin-top:2px}
 
+.tenant-switcher{padding:8px 12px;position:relative}
+.tenant-switcher-btn{display:flex;align-items:center;gap:8px;width:100%;padding:8px 12px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);border-radius:8px;color:#e2e8f0;font-size:13px;font-weight:500;cursor:pointer;text-align:left;font-family:inherit;transition:all .15s}
+.tenant-switcher-btn:hover{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.2)}
+.tenant-panel{position:absolute;left:8px;right:8px;top:calc(100% + 2px);background:#1e293b;border:1px solid rgba(148,163,184,0.2);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.3);z-index:200;overflow:hidden}
+.tenant-search{width:100%;padding:10px 12px;background:transparent;border:none;border-bottom:1px solid rgba(148,163,184,0.15);color:#e2e8f0;font-size:13px;outline:none;font-family:inherit}
+.tenant-search::placeholder{color:#64748b}
+.tenant-list{max-height:240px;overflow-y:auto;padding:4px}
+.tenant-item{display:flex;align-items:center;justify-content:space-between;width:100%;padding:8px 12px;background:none;border:none;border-radius:6px;color:#cbd5e1;font-size:13px;cursor:pointer;text-align:left;font-family:inherit;transition:background .1s}
+.tenant-item:hover{background:rgba(255,255,255,0.06);color:#fff}
+.tenant-item.active{background:rgba(56,189,248,0.1);color:#38bdf8}
+
+.toast-container{position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{pointer-events:auto;padding:12px 20px;border-radius:10px;font-size:13px;font-weight:500;color:#fff;box-shadow:0 4px 16px rgba(0,0,0,0.15);animation:toastIn .3s ease;max-width:400px}
+.toast-error{background:#ef4444}
+.toast-success{background:#22c55e}
+.toast-info{background:#3b82f6}
+@keyframes toastIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+
 /* === Main === */
 .main{margin-left:var(--sidebar-w)}
 

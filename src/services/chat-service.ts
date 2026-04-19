@@ -7,6 +7,7 @@ import { buildOSContext } from './enterprise-os.js';
 import { isSupabaseAvailable } from '../clients/supabase.js';
 import * as repo from '../repositories/supabase-repository.js';
 import { learningService } from './learning-service.js';
+import type { TenantId } from '../types/auth.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -96,9 +97,9 @@ export class ChatService {
 
   // ========== メモリ ==========
 
-  async getMemory(): Promise<CompanyMemory> {
-    if (this.useSupabase) {
-      try { return await repo.getCompanyMemory(); } catch (e) { logger.warn('Supabaseメモリ取得失敗、ファイルにフォールバック'); }
+  async getMemory(tenantId?: TenantId): Promise<CompanyMemory> {
+    if (this.useSupabase && tenantId) {
+      try { return await repo.getCompanyMemory(tenantId); } catch (e) { logger.warn('Supabaseメモリ取得失敗、ファイルにフォールバック'); }
     }
     if (fs.existsSync(MEMORY_FILE)) {
       return JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf-8'));
@@ -106,10 +107,10 @@ export class ChatService {
     return { companyName: '', industry: '', employeeCount: '', fiscalYearEnd: '', notes: [], lastUpdated: '' };
   }
 
-  async saveMemory(memory: CompanyMemory): Promise<void> {
+  async saveMemory(memory: CompanyMemory, tenantId?: TenantId): Promise<void> {
     memory.lastUpdated = new Date().toISOString();
-    if (this.useSupabase) {
-      try { await repo.saveCompanyMemory(memory); return; } catch (e) { logger.warn('Supabaseメモリ保存失敗、ファイルにフォールバック'); }
+    if (this.useSupabase && tenantId) {
+      try { await repo.saveCompanyMemory(tenantId, memory); return; } catch (e) { logger.warn('Supabaseメモリ保存失敗、ファイルにフォールバック'); }
     }
     if (!fs.existsSync(CHAT_DIR)) fs.mkdirSync(CHAT_DIR, { recursive: true });
     fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2), 'utf-8');
@@ -117,9 +118,9 @@ export class ChatService {
 
   // ========== 履歴 ==========
 
-  async getHistory(): Promise<ChatMessage[]> {
-    if (this.useSupabase) {
-      try { return await repo.getChatHistory(50); } catch (e) { logger.warn('Supabase履歴取得失敗、ファイルにフォールバック'); }
+  async getHistory(tenantId?: TenantId): Promise<ChatMessage[]> {
+    if (this.useSupabase && tenantId) {
+      try { return await repo.getChatHistory(tenantId, 50); } catch (e) { logger.warn('Supabase履歴取得失敗、ファイルにフォールバック'); }
     }
     if (fs.existsSync(HISTORY_FILE)) {
       return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8'));
@@ -127,13 +128,12 @@ export class ChatService {
     return [];
   }
 
-  private async saveHistory(history: ChatMessage[]): Promise<void> {
-    if (this.useSupabase) {
-      // Supabaseは個別にinsertするので、最新の2件（user + assistant）を保存
+  private async saveHistory(history: ChatMessage[], tenantId?: TenantId): Promise<void> {
+    if (this.useSupabase && tenantId) {
       const latest = history.slice(-2);
       try {
         for (const m of latest) {
-          await repo.saveChatMessage(m.role, m.content);
+          await repo.saveChatMessage(tenantId, m.role, m.content);
         }
         return;
       } catch (e) { logger.warn('Supabase履歴保存失敗、ファイルにフォールバック'); }
@@ -143,20 +143,20 @@ export class ChatService {
     fs.writeFileSync(HISTORY_FILE, JSON.stringify(trimmed, null, 2), 'utf-8');
   }
 
-  async clearHistory(): Promise<void> {
-    if (this.useSupabase) {
-      try { await repo.clearChatHistory(); return; } catch (e) { logger.warn('Supabase履歴削除失敗'); }
+  async clearHistory(tenantId?: TenantId): Promise<void> {
+    if (this.useSupabase && tenantId) {
+      try { await repo.clearChatHistory(tenantId); return; } catch (e) { logger.warn('Supabase履歴削除失敗'); }
     }
     if (fs.existsSync(HISTORY_FILE)) fs.unlinkSync(HISTORY_FILE);
   }
 
   // ========== チャット送信 ==========
 
-  async sendMessage(userMessage: string): Promise<ChatResponse> {
+  async sendMessage(userMessage: string, tenantId?: TenantId): Promise<ChatResponse> {
     if (!this.client) throw new Error('OPENAI_API_KEYが未設定です');
 
-    const memory = await this.getMemory();
-    const history = await this.getHistory();
+    const memory = await this.getMemory(tenantId);
+    const history = await this.getHistory(tenantId);
 
     const analyses = analysisStore.list();
     const latestAnalysis = analyses.length > 0 ? analysisStore.get(analyses[0].id) : null;
@@ -191,9 +191,9 @@ export class ChatService {
       { role: 'user', content: userMessage, timestamp: new Date().toISOString() },
       { role: 'assistant', content: assistantMessage, timestamp: new Date().toISOString() },
     );
-    await this.saveHistory(history);
+    await this.saveHistory(history, tenantId);
 
-    await this.tryUpdateMemory(userMessage, assistantMessage, memory);
+    await this.tryUpdateMemory(userMessage, assistantMessage, memory, tenantId);
 
     return { reply: assistantMessage, proposals: [] };
   }
@@ -288,7 +288,7 @@ export class ChatService {
     return prompt;
   }
 
-  private async tryUpdateMemory(userMsg: string, _assistantMsg: string, memory: CompanyMemory): Promise<void> {
+  private async tryUpdateMemory(userMsg: string, _assistantMsg: string, memory: CompanyMemory, tenantId?: TenantId): Promise<void> {
     let updated = false;
 
     const companyMatch = userMsg.match(/(?:うちの会社は|弊社は|当社は|会社名は)(.+?)(?:です|だ|。|$)/);
@@ -304,7 +304,7 @@ export class ChatService {
     if (fyMatch && !memory.fiscalYearEnd) { memory.fiscalYearEnd = fyMatch[1] + '月'; updated = true; }
 
     if (updated) {
-      await this.saveMemory(memory);
+      await this.saveMemory(memory, tenantId);
       logger.info('会社情報メモリを更新しました');
     }
   }

@@ -5,6 +5,7 @@ import { usageTracker } from './usage-tracker.js';
 import { isSupabaseAvailable } from '../clients/supabase.js';
 import { getSupabase } from '../clients/supabase.js';
 import * as repo from '../repositories/supabase-repository.js';
+import type { TenantId } from '../types/auth.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -55,7 +56,7 @@ class LearningService {
    * 3. パターンを抽出
    * 4. 知見を保存
    */
-  async runLearningCycle(): Promise<LearningResult> {
+  async runLearningCycle(tenantId?: TenantId): Promise<LearningResult> {
     if (!this.client) {
       throw new Error('ANTHROPIC_API_KEYが未設定です');
     }
@@ -63,7 +64,7 @@ class LearningService {
     logger.info('学習サイクルを開始します...');
 
     // 1. 過去の実績データを取得
-    const actuals = await this.getActualData();
+    const actuals = await this.getActualData(tenantId);
     if (actuals.length < 3) {
       return {
         newInsights: [],
@@ -73,7 +74,7 @@ class LearningService {
     }
 
     // 2. 過去の分析履歴を取得
-    const pastAnalyses = await this.getPastAnalyses();
+    const pastAnalyses = await this.getPastAnalyses(tenantId);
 
     // 3. 既存の知見を取得
     const existingInsights = await this.getInsights();
@@ -157,10 +158,10 @@ class LearningService {
 
   // ========== Private Methods ==========
 
-  private async getActualData(): Promise<any[]> {
-    if (isSupabaseAvailable()) {
+  private async getActualData(tenantId?: TenantId): Promise<any[]> {
+    if (isSupabaseAvailable() && tenantId) {
       try {
-        return await repo.getAllMonthlyActuals();
+        return await repo.getAllMonthlyActuals(tenantId);
       } catch (e) {
         logger.warn('Supabase実績取得失敗');
       }
@@ -178,10 +179,10 @@ class LearningService {
     return [];
   }
 
-  private async getPastAnalyses(): Promise<any[]> {
-    if (isSupabaseAvailable()) {
+  private async getPastAnalyses(tenantId?: TenantId): Promise<any[]> {
+    if (isSupabaseAvailable() && tenantId) {
       try {
-        return await repo.getPlanAnalyses();
+        return await repo.getPlanAnalyses(tenantId);
       } catch (e) {
         logger.warn('Supabase分析履歴取得失敗');
       }

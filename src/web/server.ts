@@ -32,17 +32,26 @@ import { analysisStore } from '../services/analysis-store.js';
 import { renderHistoryHTML } from './history-page.js';
 import { googleTasksClient } from '../clients/google-tasks.js';
 import { logger } from '../utils/logger.js';
-import { isSupabaseAvailable } from '../clients/supabase.js';
+import { isSupabaseAvailable, getSupabase } from '../clients/supabase.js';
 import * as repo from '../repositories/supabase-repository.js';
 import { learningService } from '../services/learning-service.js';
 import { seedDemoData } from '../demo-data.js';
-import { renderLoginHTML } from './login-page.js';
+import { renderLoginHTML, renderChangePasswordHTML } from './login-page.js';
+import { renderUsersHTML } from './users-page.js';
 import { setCurrentUser } from './shared.js';
+
+import { authService } from '../services/auth-service.js';
+import { validatePassword, hashPassword, generateInitialPassword } from '../utils/password.js';
+import type { SessionUser } from '../types/auth.js';
+import { asTenantId } from '../types/auth.js';
+import { requireSuperAdmin, requireRole, requireTenant, getActiveTenantId } from './auth-middleware.js';
 
 // セッションにユーザー情報を保持するための型拡張
 declare module 'express-session' {
   interface SessionData {
-    user?: { id: string; email: string; name: string; picture: string };
+    user?: SessionUser;
+    activeTenantId?: string;
+    activeTenantRole?: string;
   }
 }
 
@@ -74,15 +83,34 @@ function clearCache(): void {
   logger.info('APIキャッシュをクリアしました');
 }
 
-// CORS（企業AI OSからのAPI呼び出し対応）
+// 本番環境判定
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
+// SESSION_SECRET 検証
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+if (!process.env.SESSION_SECRET) {
+  if (IS_PRODUCTION) {
+    logger.error('SESSION_SECRET が未設定です。本番環境では .env に設定してください');
+    process.exit(1);
+  } else {
+    logger.warn('SESSION_SECRET が未設定のため自動生成しました（サーバー再起動でセッション無効化）');
+  }
+} else if (process.env.SESSION_SECRET.length < 32) {
+  logger.warn('SESSION_SECRET が短すぎます（32文字以上を推奨）');
+}
+
+// CORS
 app.use((_req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  const origin = IS_PRODUCTION ? (process.env.ALLOWED_ORIGIN || '') : '*';
+  if (origin) res.header('Access-Control-Allow-Origin', origin);
   res.header('Access-Control-Allow-Headers', 'Content-Type');
   next();
 });
 
+// Expressのtrust proxy（Railway等のリバースプロキシ背後で動作する場合に必要）
+if (IS_PRODUCTION) app.set('trust proxy', 1);
+
 // セッション管理
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 app.use(session({
   secret: SESSION_SECRET,
   resave: false,
@@ -90,12 +118,15 @@ app.use(session({
   cookie: {
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7日間
     httpOnly: true,
-    secure: false, // 本番ではtrue（HTTPS）
+    secure: IS_PRODUCTION,  // 本番: true（HTTPS必須）、開発: false
     sameSite: 'lax',
   },
 }));
 
 // === 認証ルート（ミドルウェアの前に定義） ===
+
+// JSON body parser（ログインフォーム等）
+app.use(express.urlencoded({ extended: false }));
 
 // ログインページ
 app.get('/login', (req, res) => {
@@ -104,83 +135,104 @@ app.get('/login', (req, res) => {
   res.send(renderLoginHTML(error));
 });
 
-// Google OAuth開始（ログイン用）
-const GOOGLE_LOGIN_REDIRECT_URI = process.env.GOOGLE_LOGIN_REDIRECT_URI || 'http://localhost:3000/auth/login/google/callback';
-app.get('/auth/login/google', (_req, res) => {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  if (!clientId) {
-    res.redirect('/login?error=' + encodeURIComponent('Google OAuth未設定です。.envにGOOGLE_CLIENT_IDを設定してください。'));
-    return;
-  }
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: GOOGLE_LOGIN_REDIRECT_URI,
-    response_type: 'code',
-    scope: 'openid email profile',
-    access_type: 'online',
-    prompt: 'select_account',
-  });
-  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
-});
-
-// Google OAuthコールバック（ログイン用）
-app.get('/auth/login/google/callback', async (req, res) => {
+// メール+パスワード ログイン処理
+app.post('/auth/login', async (req, res) => {
   try {
-    const code = req.query.code as string;
-    if (!code) {
-      res.redirect('/login?error=' + encodeURIComponent('認可コードが取得できませんでした'));
+    const { email, password } = req.body;
+    if (!email || !password) {
+      res.redirect('/login?error=' + encodeURIComponent('メールアドレスとパスワードを入力してください'));
       return;
     }
 
-    // アクセストークン取得
-    const tokenRes = await axios.post('https://oauth2.googleapis.com/token', {
-      code,
-      client_id: process.env.GOOGLE_CLIENT_ID,
-      client_secret: process.env.GOOGLE_CLIENT_SECRET,
-      redirect_uri: GOOGLE_LOGIN_REDIRECT_URI,
-      grant_type: 'authorization_code',
-    });
-    const accessToken = tokenRes.data.access_token;
+    const result = await authService.login(email, password);
+    if ('error' in result) {
+      res.redirect('/login?error=' + encodeURIComponent(result.error));
+      return;
+    }
 
-    // ユーザー情報取得
-    const userRes = await axios.get('https://www.googleapis.com/oauth2/v2/userinfo', {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
+    const user = result.user;
+    req.session.user = {
+      id: user.id,
+      email: user.email,
+      name: user.name || user.email,
+      isSuperAdmin: user.isSuperAdmin,
+    };
 
-    const email = userRes.data.email;
-    const name = userRes.data.name || email;
-    const picture = userRes.data.picture || '';
+    // 初回パスワード変更が必要な場合
+    if (user.mustChangePassword) {
+      res.redirect('/auth/change-password');
+      return;
+    }
 
-    // Supabaseにユーザーを登録/更新
-    let userId = '';
-    if (isSupabaseAvailable()) {
-      try {
-        const user = await repo.upsertUser(email, name, picture);
-        userId = user.id;
-      } catch (e) {
-        logger.warn('Supabaseユーザー登録失敗（ログインは継続）', e);
+    // テナントを自動選択（超管理者以外）
+    if (!user.isSuperAdmin) {
+      const tenants = await authService.getUserTenants(user.id);
+      if (tenants.length > 0) {
+        req.session.activeTenantId = tenants[0].tenantId;
+        req.session.activeTenantRole = tenants[0].role;
       }
     }
 
-    req.session.user = { id: userId, email, name, picture };
-
-    logger.info(`ログイン: ${email}${userId ? ` (ID: ${userId})` : ''}`);
     res.redirect('/');
   } catch (error: any) {
-    logger.error('Googleログインエラー', error);
-    res.redirect('/login?error=' + encodeURIComponent('Googleログインに失敗しました'));
+    logger.error('ログインエラー', error);
+    res.redirect('/login?error=' + encodeURIComponent('ログイン処理中にエラーが発生しました'));
+  }
+});
+
+// パスワード変更ページ
+app.get('/auth/change-password', (req, res) => {
+  if (!req.session.user) { res.redirect('/login'); return; }
+  const error = req.query.error as string | undefined;
+  const success = req.query.success as string | undefined;
+  res.send(renderChangePasswordHTML(error, success));
+});
+
+// パスワード変更処理
+app.post('/auth/change-password', async (req, res) => {
+  if (!req.session.user) { res.redirect('/login'); return; }
+  try {
+    const { newPassword, confirmPassword } = req.body;
+
+    if (newPassword !== confirmPassword) {
+      res.redirect('/auth/change-password?error=' + encodeURIComponent('パスワードが一致しません'));
+      return;
+    }
+
+    const validation = validatePassword(newPassword);
+    if (!validation.valid) {
+      res.redirect('/auth/change-password?error=' + encodeURIComponent(validation.errors.join('、')));
+      return;
+    }
+
+    await authService.changePassword(req.session.user.id, newPassword);
+
+    // テナントを自動選択
+    if (!req.session.user.isSuperAdmin) {
+      const tenants = await authService.getUserTenants(req.session.user.id);
+      if (tenants.length > 0) {
+        req.session.activeTenantId = tenants[0].tenantId;
+        req.session.activeTenantRole = tenants[0].role;
+      }
+    }
+
+    res.redirect('/');
+  } catch (error: any) {
+    logger.error('パスワード変更エラー', error);
+    res.redirect('/auth/change-password?error=' + encodeURIComponent('パスワード変更に失敗しました'));
   }
 });
 
 // デモモードログイン（認証不要）
 app.get('/auth/demo', async (req, res) => {
-  // デモ用のセッションを作成
   req.session.user = {
     id: 'demo-user',
     email: 'demo@ai-cfo.example.com',
     name: 'デモユーザー',
-    picture: '',
+    isSuperAdmin: false,
   };
+  req.session.activeTenantId = 'demo-tenant';
+  req.session.activeTenantRole = 'financial_admin'; // デモではフル権限
   // デモモードを有効化（IT業プロファイル）
   const { enableDemoMode: enableDemo } = await import('../services/demo-mode.js');
   enableDemo('consulting');
@@ -197,12 +249,16 @@ app.post('/logout', (req, res) => {
 
 // 認証ミドルウェア（上記ルート以外に適用）
 app.use((req, res, next) => {
-  // サイドバー用にユーザー情報をセット
-  setCurrentUser(req.session.user);
+  // サイドバー用にユーザー情報をセット（isSuperAdmin, tenantRole含む）
+  setCurrentUser(req.session.user ? {
+    ...req.session.user,
+    picture: '',
+    tenantRole: req.session.activeTenantRole || '',
+  } : undefined);
 
   // 認証不要パス
-  const path = req.path;
-  if (path === '/login' || path.startsWith('/auth/login/') || path === '/auth/demo' || path.startsWith('/api/')) {
+  const p = req.path;
+  if (p === '/login' || p.startsWith('/auth/') || p.startsWith('/api/')) {
     next();
     return;
   }
@@ -210,8 +266,224 @@ app.use((req, res, next) => {
     res.redirect('/login');
     return;
   }
+  // 初回パスワード変更が強制される場合
+  if (p !== '/auth/change-password') {
+    // ユーザーのmustChangePasswordフラグはログイン時にセッションに反映済み
+    // パスワード変更後はリダイレクトされるので、ここでは通過を許可
+  }
   next();
 });
+
+// === テナント管理API ===
+
+// テナント一覧（超管理者: 全テナント、それ以外: 自分が所属するテナント）
+app.get('/api/tenants', async (req, res) => {
+  if (!req.session.user) { res.status(401).json({ error: 'ログインが必要です' }); return; }
+  try {
+    if (req.session.user.isSuperAdmin) {
+      const { data, error } = await getSupabase().from('tenants').select('*').order('created_at');
+      if (error) throw error;
+      res.json({ tenants: data || [] });
+    } else {
+      const tenants = await authService.getUserTenants(req.session.user.id);
+      res.json({ tenants });
+    }
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// テナント作成（超管理者のみ）
+app.post('/api/tenants', express.json(), requireSuperAdmin, async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name) { res.status(400).json({ error: 'テナント名を入力してください' }); return; }
+    const { data, error } = await getSupabase()
+      .from('tenants')
+      .insert({ name })
+      .select()
+      .single();
+    if (error) throw error;
+    logger.info(`テナント作成: ${name} (${data.id})`);
+    res.json({ tenant: data });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// テナント切り替え
+app.post('/api/tenant/switch', express.json(), async (req, res) => {
+  if (!req.session.user) { res.status(401).json({ error: 'ログインが必要です' }); return; }
+  try {
+    const { tenantId } = req.body;
+    if (!tenantId) { res.status(400).json({ error: 'tenantIdを指定してください' }); return; }
+
+    // 超管理者は全テナントにアクセス可能
+    if (!req.session.user.isSuperAdmin) {
+      const role = await authService.getUserRoleInTenant(req.session.user.id, asTenantId(tenantId));
+      if (!role) {
+        res.status(403).json({ error: 'このテナントへのアクセス権がありません' });
+        return;
+      }
+    }
+
+    req.session.activeTenantId = tenantId;
+    // テナント内でのロールもセッションに保存
+    if (req.session.user.isSuperAdmin) {
+      req.session.activeTenantRole = 'financial_admin'; // 超管理者はフル権限
+    } else {
+      const role = await authService.getUserRoleInTenant(req.session.user.id, asTenantId(tenantId));
+      req.session.activeTenantRole = role || '';
+    }
+    // キャッシュクリア（テナント切替時はデータが変わるため）
+    clearCache();
+    logger.info(`テナント切替: ${req.session.user.email} → ${tenantId}`);
+    res.json({ success: true, activeTenantId: tenantId });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 現在のテナント情報
+app.get('/api/tenant/current', (req, res) => {
+  if (!req.session.user) { res.status(401).json({ error: 'ログインが必要です' }); return; }
+  res.json({
+    activeTenantId: req.session.activeTenantId || null,
+    user: req.session.user,
+  });
+});
+
+// テナントメンバー一覧（financial_admin以上）
+app.get('/api/tenant/members', requireRole('financial_admin'), async (req, res) => {
+  try {
+    const tenantId = getActiveTenantId(req);
+    if (!tenantId) { res.status(400).json({ error: 'テナントが選択されていません' }); return; }
+    const members = await authService.getTenantMembers(tenantId);
+    res.json({ members });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// テナント財務管理者の作成（超管理者のみ）
+app.post('/api/tenants/:tenantId/financial-admin', express.json(), requireSuperAdmin, async (req, res) => {
+  try {
+    const tenantId = req.params.tenantId as string;
+    const { email, name } = req.body;
+    if (!email) { res.status(400).json({ error: 'メールアドレスを入力してください' }); return; }
+
+    // ユーザーが既に存在するか確認
+    let user = await authService.getUserByEmail(email);
+    const initialPassword = generateInitialPassword();
+
+    if (!user) {
+      const passwordHash = await hashPassword(initialPassword);
+      user = await authService.createUser(email, name || email, passwordHash);
+    }
+
+    // テナントメンバーとして追加
+    await authService.addTenantMember(asTenantId(tenantId), user.id, 'financial_admin');
+
+    logger.info(`テナント財務管理者を追加: ${email} → テナント ${tenantId}`);
+    // 初期パスワードをレスポンスに含める（画面に表示してメール送信は別途）
+    res.json({ success: true, userId: user.id, initialPassword });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// === メンバー管理API ===
+
+// テナント内メンバー招待（管理者→従業員追加、財務管理者→管理者招待）
+app.post('/api/tenant/invite', express.json(), requireRole('admin'), async (req, res) => {
+  try {
+    const tenantId = getActiveTenantId(req);
+    if (!tenantId) { res.status(400).json({ error: 'テナントが選択されていません' }); return; }
+
+    const { email, name, role } = req.body;
+    if (!email || !role) { res.status(400).json({ error: 'メールアドレスとロールを指定してください' }); return; }
+
+    // 権限チェック: adminはemployeeのみ追加可能、financial_adminはadminも追加可能
+    if (!req.session.user!.isSuperAdmin) {
+      const myRole = await authService.getUserRoleInTenant(req.session.user!.id, tenantId);
+      if (role === 'admin' && myRole !== 'financial_admin') {
+        res.status(403).json({ error: '管理者を招待する権限がありません' }); return;
+      }
+      if (role === 'financial_admin') {
+        res.status(403).json({ error: '財務管理者の追加は超管理者のみ可能です' }); return;
+      }
+    }
+
+    let user = await authService.getUserByEmail(email);
+    // 初期パスワードは画面表示で運用（手動伝達）
+    const initialPassword = generateInitialPassword();
+
+    if (!user) {
+      const ph = await hashPassword(initialPassword);
+      user = await authService.createUser(email, name || email, ph);
+    }
+
+    await authService.addTenantMember(tenantId, user.id, role);
+    // パスワード平文をログに出力しない
+    logger.info(`メンバー追加: ${email} (${role}) → テナント ${tenantId}`);
+    res.json({ success: true, userId: user.id, initialPassword });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// パスワードリセット（財務管理者 or 超管理者）
+app.post('/api/tenant/members/:userId/reset-password', requireRole('financial_admin'), async (req, res) => {
+  try {
+    const userId = req.params.userId as string;
+    const newPassword = generateInitialPassword();
+    const ph = await hashPassword(newPassword);
+    await authService.resetPassword(userId, ph);
+    // パスワード平文をログに出力しない
+    logger.info(`パスワードリセット: ${userId}`);
+    res.json({ success: true, newPassword });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// メンバー削除
+app.delete('/api/tenant/members/:userId', requireRole('admin'), async (req, res) => {
+  try {
+    const tenantId = getActiveTenantId(req);
+    if (!tenantId) { res.status(400).json({ error: 'テナントが選択されていません' }); return; }
+    const userId = req.params.userId as string;
+
+    const { error } = await getSupabase()
+      .from('tenant_members')
+      .delete()
+      .eq('tenant_id', tenantId)
+      .eq('user_id', userId);
+
+    if (error) throw error;
+    logger.info(`メンバー削除: ${userId} from テナント ${tenantId}`);
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// === ユーザー管理ページ（テナント管理 + メンバー管理を統合） ===
+app.get('/settings/users', requireRole('admin'), async (req, res) => {
+  const user = req.session.user!;
+  const tenantId = getActiveTenantId(req);
+  let tenantRole = req.session.activeTenantRole || '';
+  if (tenantId && !user.isSuperAdmin && !tenantRole) {
+    tenantRole = await authService.getUserRoleInTenant(user.id, tenantId) || '';
+  }
+  res.send(renderUsersHTML({
+    id: user.id, email: user.email, name: user.name,
+    isSuperAdmin: user.isSuperAdmin, tenantRole,
+  }));
+});
+// 旧URLからのリダイレクト
+app.get('/admin/tenants', (req, res) => res.redirect('/settings/users'));
+app.get('/settings/members', (req, res) => res.redirect('/settings/users'));
 
 // ファイルアップロード設定
 const uploadDir = path.resolve('uploads');
@@ -394,7 +666,8 @@ async function buildTrendData(endYear?: number, endMonth?: number, monthCount: n
       // freeeデータをSupabaseに自動蓄積
       if (isSupabaseAvailable()) {
         for (const month of trend.months) {
-          repo.upsertMonthlyActual(month).catch(e => logger.warn('Supabase蓄積失敗:', e));
+          // TODO: Phase 3でリクエストからtenantIdを取得する仕組みに変更
+          // repo.upsertMonthlyActual(asTenantId(tenantId), month).catch(e => logger.warn('Supabase蓄積失敗:', e));
         }
       }
 
@@ -2313,11 +2586,22 @@ app.post('/tasks/generate-monthly', express.urlencoded({ extended: true }), (req
   res.redirect('/tasks');
 });
 
-// === Google Tasks連携 ===
-// Google OAuth認証開始
-app.get('/auth/google', (_req, res) => {
+// === Google連携（Gmail / Tasks）設定画面 ===
+import { renderGoogleSettingsHTML } from './google-settings-page.js';
+
+app.get('/settings/google', (req, res) => {
+  const user = req.session.user;
+  res.send(renderGoogleSettingsHTML({
+    user: user ? { ...user, picture: '', tenantRole: req.session.activeTenantRole || '' } : undefined,
+    isConfigured: googleTasksClient.isConfigured(),
+    isAuthenticated: googleTasksClient.isAuthenticated(),
+  }));
+});
+
+// Google OAuth認証開始（連携用、ログイン目的ではない）
+app.get('/settings/google/auth', (_req, res) => {
   if (!googleTasksClient.isConfigured()) {
-    res.status(400).send('Google API認証情報が未設定です。.envにGOOGLE_CLIENT_IDとGOOGLE_CLIENT_SECRETを設定してください。');
+    res.redirect('/settings/google');
     return;
   }
   res.redirect(googleTasksClient.getAuthUrl());
@@ -2327,26 +2611,30 @@ app.get('/auth/google', (_req, res) => {
 app.get('/auth/google/callback', async (req, res) => {
   try {
     const code = req.query.code as string;
-    if (!code) { res.status(400).send('認可コードがありません'); return; }
+    if (!code) { res.redirect('/settings/google'); return; }
     await googleTasksClient.exchangeCode(code);
-    res.redirect('/tasks?google=connected');
+    res.redirect('/settings/google');
   } catch (error) {
-    logger.error('Google認証エラー', error);
-    res.status(500).send(`Google認証に失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`);
+    logger.error('Google連携エラー', error);
+    res.redirect('/settings/google');
   }
 });
 
 // Google連携解除
-app.post('/auth/google/disconnect', (_req, res) => {
+app.post('/settings/google/disconnect', (_req, res) => {
   googleTasksClient.disconnect();
-  res.redirect('/tasks');
+  res.redirect('/settings/google');
 });
+
+// 旧URLからリダイレクト
+app.get('/auth/google', (_req, res) => res.redirect('/settings/google/auth'));
+app.post('/auth/google/disconnect', (_req, res) => res.redirect(307, '/settings/google/disconnect'));
 
 // Google Tasksにタスクを同期（選択されたタスクのみ）
 app.post('/tasks/sync-google', express.urlencoded({ extended: true }), async (req, res) => {
   try {
     if (!googleTasksClient.isAuthenticated()) {
-      res.redirect('/auth/google');
+      res.redirect('/settings/google');
       return;
     }
 
@@ -2426,6 +2714,18 @@ app.get('/api/company', async (_req, res) => {
 // API使用量
 app.get('/api/usage', (_req, res) => {
   res.json(usageTracker.getSummary());
+});
+
+// === 404 / 500 エラーハンドラ ===
+import { renderErrorHTML } from './error-page.js';
+
+app.use((_req, res) => {
+  res.status(404).send(renderErrorHTML(404));
+});
+
+app.use((err: any, _req: any, res: any, _next: any) => {
+  logger.error('Unhandled error', err);
+  res.status(500).send(renderErrorHTML(500));
 });
 
 app.listen(PORT, () => {

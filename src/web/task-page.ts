@@ -111,11 +111,11 @@ ${googleAuthed ? `
         <span id="syncBtnText">選択してください</span>
       </button>
       <button type="button" class="task-btn btn-sm" style="margin-left:4px" onclick="toggleAllSync()" title="全選択/全解除">全選択</button>
-      <form action="/auth/google/disconnect" method="post" style="display:inline;margin-left:6px">
+      <form action="/settings/google/disconnect" method="post" style="display:inline;margin-left:6px">
         <button type="submit" class="task-btn task-btn--del" title="連携解除" onclick="return confirm('Google連携を解除しますか？')">切断</button>
       </form>
 ` : googleConfigured ? `
-      <a href="/auth/google" class="btn-primary btn-sm">Google認証</a>
+      <a href="/settings/google/auth" class="btn-primary btn-sm">Google認証</a>
 ` : `
       <span class="sync-status sync-status--off">未設定</span>
 `}

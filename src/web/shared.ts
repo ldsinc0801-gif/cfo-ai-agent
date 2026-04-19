@@ -44,13 +44,19 @@ export interface SidebarUser {
   id: string;
   email: string;
   name: string;
-  picture: string;
+  picture?: string;
+  isSuperAdmin?: boolean;
+  /** 現在のテナントでのロール（サーバー側でセット） */
+  tenantRole?: string;
 }
 
 export function renderSidebar(active: string, companyName?: string, user?: SidebarUser): string {
   const sidebarUser = user || _currentUser;
   const demo = getDemoModeInfo();
-  const displayName = demo.enabled ? demo.companyName : (companyName || getCompanyNameFromToken() || 'AI CFO');
+  const isSuperAdmin = sidebarUser?.isSuperAdmin || false;
+  const tenantRole = sidebarUser?.tenantRole || '';
+  const showMemberMenu = isSuperAdmin || tenantRole === 'financial_admin' || tenantRole === 'admin';
+
   const menu = [
     { id: 'dashboard', href: '/', icon: ICONS.home, label: 'ダッシュボード' },
     { id: 'chat', href: '/chat', icon: ICONS.chat, label: 'AIチャット' },
@@ -66,10 +72,14 @@ export function renderSidebar(active: string, companyName?: string, user?: Sideb
     { id: 'secretary', href: '/agent/secretary', icon: ICONS.file, label: '秘書AI' },
   ];
 
-  const settings = [
-    { id: 'company', href: '/settings/company', icon: ICONS.building, label: '事業所の選択' },
+  const settings: Array<{ id: string; href: string; icon: string; label: string }> = [
+    { id: 'freee-company', href: '/settings/company', icon: ICONS.building, label: 'freee事業所設定' },
     { id: 'freee', href: '/auth/freee', icon: ICONS.settings, label: 'freee連携設定' },
+    { id: 'google', href: '/settings/google', icon: ICONS.link, label: 'Google連携' },
   ];
+  if (showMemberMenu) {
+    settings.push({ id: 'users', href: '/settings/users', icon: ICONS.users, label: 'ユーザー管理' });
+  }
 
   return `
 <aside class="sidebar" id="sidebar">
@@ -77,8 +87,20 @@ export function renderSidebar(active: string, companyName?: string, user?: Sideb
     <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
     <span>AI CFO</span>
     ${demo.enabled ? '<span style="font-size:9px;background:rgba(255,255,255,0.2);color:#fff;padding:2px 6px;border-radius:4px;margin-left:4px;font-weight:700">DEMO</span>' : ''}
+    ${isSuperAdmin ? '<span style="font-size:9px;background:rgba(239,68,68,0.6);color:#fff;padding:2px 6px;border-radius:4px;margin-left:4px;font-weight:700">ADMIN</span>' : ''}
   </div>
-  ${demo.enabled ? `<div style="padding:4px 16px 8px;font-size:11px;color:#fff;font-weight:600">${esc(displayName)}</div>` : ''}
+  <!-- テナント切替 -->
+  <div class="tenant-switcher" id="tenantSwitcher">
+    <button class="tenant-switcher-btn" id="tenantSwitcherBtn" onclick="window.__toggleTenantPanel()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 22V4a2 2 0 012-2h8a2 2 0 012 2v18"/><path d="M6 12H4a2 2 0 00-2 2v6a2 2 0 002 2h2"/><path d="M18 9h2a2 2 0 012 2v9a2 2 0 01-2 2h-2"/></svg>
+      <span id="tenantSwitcherLabel">テナントを選択...</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:auto;flex-shrink:0"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+    <div class="tenant-panel" id="tenantPanel" style="display:none">
+      <input type="text" class="tenant-search" id="tenantSearch" placeholder="テナントを検索..." oninput="window.__filterTenants(this.value)" autocomplete="off">
+      <div class="tenant-list" id="tenantList"><div style="padding:8px 12px;color:#94a3b8;font-size:12px">読み込み中...</div></div>
+    </div>
+  </div>
   <nav class="sidebar-nav">
     <div class="nav-section">メニュー</div>
 ${menu.map(i => navItem(i, active)).join('\n')}
@@ -88,10 +110,9 @@ ${agents.map(i => navItem(i, active)).join('\n')}
 ${settings.map(i => navItem(i, active)).join('\n')}
   </nav>
   <div class="sidebar-footer">
-    <div class="sidebar-company">${esc(displayName)}</div>
     ${sidebarUser ? `
     <div class="sidebar-user">
-      ${sidebarUser.picture ? `<img src="${esc(sidebarUser.picture)}" alt="" class="sidebar-user-avatar" referrerpolicy="no-referrer">` : '<div class="sidebar-user-avatar-placeholder"></div>'}
+      <div class="sidebar-user-avatar-placeholder"></div>
       <div class="sidebar-user-info">
         <div class="sidebar-user-name">${esc(sidebarUser.name)}</div>
         <div class="sidebar-user-email">${esc(sidebarUser.email)}</div>
@@ -104,7 +125,8 @@ ${settings.map(i => navItem(i, active)).join('\n')}
     </div>` : ''}
     <div class="sidebar-version">v0.1.0</div>
   </div>
-</aside>`;
+</aside>
+${TENANT_SWITCHER_SCRIPT}`;
 }
 
 function navItem(item: { id: string; href: string; icon: string; label: string; disabled?: boolean }, active: string): string {
@@ -114,6 +136,64 @@ function navItem(item: { id: string; href: string; icon: string; label: string; 
       ${item.label}
     </a>`;
 }
+
+const TENANT_SWITCHER_SCRIPT = `
+<div class="toast-container" id="toastContainer"></div>
+<script>
+window.__toast=function(msg,type){
+  var c=document.getElementById('toastContainer');if(!c)return;
+  var t=document.createElement('div');t.className='toast toast-'+(type||'info');t.textContent=msg;
+  c.appendChild(t);setTimeout(function(){t.style.opacity='0';t.style.transition='opacity .3s';setTimeout(function(){t.remove()},300)},4000);
+};
+(function(){
+  var tenants=[], activeTenantId=null;
+  function load(){
+    fetch('/api/tenants').then(function(r){return r.json()}).then(function(d){
+      tenants=d.tenants||[];
+      fetch('/api/tenant/current').then(function(r){return r.json()}).then(function(c){
+        activeTenantId=c.activeTenantId;
+        render(tenants);
+        var lb=document.getElementById('tenantSwitcherLabel');
+        if(!lb)return;
+        if(activeTenantId){
+          var t=tenants.find(function(x){return(x.tenantId||x.id)===activeTenantId});
+          lb.textContent=t?(t.tenantName||t.name):'テナント選択中';
+        } else { lb.textContent='テナントを選択...'; }
+      });
+    }).catch(function(){});
+  }
+  function render(list){
+    var el=document.getElementById('tenantList');if(!el)return;
+    if(list.length===0){el.innerHTML='<div style="padding:12px;color:#94a3b8;font-size:12px;text-align:center">所属するテナントがありません<br><span style="font-size:11px;color:#64748b">管理者にテナントへの招待を依頼してください</span></div>';return;}
+    el.innerHTML=list.map(function(t){
+      var id=t.tenantId||t.id, nm=t.tenantName||t.name, ac=id===activeTenantId;
+      return '<button class="tenant-item'+(ac?' active':'')+'" onclick="window.__switchTenant(\\''+id+'\\')"><span>'+nm+'</span>'+(ac?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>':'')+'</button>';
+    }).join('');
+  }
+  window.__toggleTenantPanel=function(){
+    var p=document.getElementById('tenantPanel');
+    if(p.style.display==='none'){p.style.display='block';var s=document.getElementById('tenantSearch');if(s){s.value='';s.focus();}load();}
+    else{p.style.display='none';}
+  };
+  window.__filterTenants=function(q){
+    render(tenants.filter(function(t){return((t.tenantName||t.name)||'').toLowerCase().indexOf(q.toLowerCase())>=0}));
+  };
+  window.__switchTenant=function(id){
+    var btn=document.getElementById('tenantSwitcherLabel');
+    if(btn)btn.textContent='切替中...';
+    fetch('/api/tenant/switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenantId:id})})
+      .then(function(r){return r.json()}).then(function(d){
+        if(d.success)location.reload();
+        else{if(btn)btn.textContent='切替失敗';window.__toast(d.error||'切替に失敗しました','error');}
+      }).catch(function(){if(btn)btn.textContent='接続エラー';window.__toast('ネットワークエラーが発生しました','error');});
+  };
+  document.addEventListener('click',function(e){
+    var sw=document.getElementById('tenantSwitcher'),p=document.getElementById('tenantPanel');
+    if(sw&&p&&!sw.contains(e.target))p.style.display='none';
+  });
+  load();
+})();
+</script>`;
 
 const ICONS = {
   home: '<path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
@@ -127,6 +207,8 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
   building: '<path d="M6 22V4a2 2 0 012-2h8a2 2 0 012 2v18"/><path d="M6 12H4a2 2 0 00-2 2v6a2 2 0 002 2h2"/><path d="M18 9h2a2 2 0 012 2v9a2 2 0 01-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>',
+  users: '<path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/>',
+  link: '<path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>',
 };
 
 export function esc(s: string): string {
@@ -284,6 +366,25 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","H
 .sidebar-logout-btn:hover{color:#ef4444;background:rgba(239,68,68,0.1)}
 .sidebar-version{font-size:11px;color:#68b3be;margin-top:2px}
 
+.tenant-switcher{padding:8px 12px;position:relative}
+.tenant-switcher-btn{display:flex;align-items:center;gap:8px;width:100%;padding:8px 12px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);border-radius:8px;color:#e2e8f0;font-size:13px;font-weight:500;cursor:pointer;text-align:left;font-family:inherit;transition:all .15s}
+.tenant-switcher-btn:hover{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.2)}
+.tenant-panel{position:absolute;left:8px;right:8px;top:calc(100% + 2px);background:#1e293b;border:1px solid rgba(148,163,184,0.2);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.3);z-index:200;overflow:hidden}
+.tenant-search{width:100%;padding:10px 12px;background:transparent;border:none;border-bottom:1px solid rgba(148,163,184,0.15);color:#e2e8f0;font-size:13px;outline:none;font-family:inherit}
+.tenant-search::placeholder{color:#64748b}
+.tenant-list{max-height:240px;overflow-y:auto;padding:4px}
+.tenant-item{display:flex;align-items:center;justify-content:space-between;width:100%;padding:8px 12px;background:none;border:none;border-radius:6px;color:#cbd5e1;font-size:13px;cursor:pointer;text-align:left;font-family:inherit;transition:background .1s}
+.tenant-item:hover{background:rgba(255,255,255,0.06);color:#fff}
+.tenant-item.active{background:rgba(56,189,248,0.1);color:#38bdf8}
+.tenant-role{font-size:10px;color:#64748b;margin-left:8px}
+
+.toast-container{position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{pointer-events:auto;padding:12px 20px;border-radius:10px;font-size:13px;font-weight:500;color:#fff;box-shadow:0 4px 16px rgba(0,0,0,0.15);animation:toastIn .3s ease;max-width:400px}
+.toast-error{background:#ef4444}
+.toast-success{background:#22c55e}
+.toast-info{background:#3b82f6}
+@keyframes toastIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+
 .main{margin-left:var(--sidebar-w)}
 .header{height:var(--header-h);background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:50}
 .header-left{display:flex;align-items:center;gap:12px}
@@ -362,5 +463,9 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
   .grid-2,.grid-3{grid-template-columns:1fr}
   .content{padding:16px}
   .feature-grid{grid-template-columns:1fr}
+  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .card-header{flex-direction:column;gap:8px;align-items:flex-start}
+  .header-right{gap:8px}
+  .tenant-panel{left:4px;right:4px}
 }
 `;
