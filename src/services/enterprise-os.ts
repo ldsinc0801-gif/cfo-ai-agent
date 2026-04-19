@@ -1,84 +1,28 @@
-import fs from 'fs';
-import path from 'path';
-import { logger } from '../utils/logger.js';
-
 /**
- * 企業AI OSからデータを読み込むサービス
+ * 企業AI OS ナレッジサービス
  *
- * 企業の第一次情報（理念、サービス、顧客、ナレッジ等）を
- * 構造化された形で提供し、各AIエージェントが参照できるようにする。
+ * テナント別にナレッジをSupabase (enterprise_knowledge テーブル) に保存・取得する。
+ * 各AIエージェントのシステムプロンプトに動的挿入される。
  */
 
-const OS_BASE_PATH = path.resolve(process.env.ENTERPRISE_OS_PATH || `${process.env.HOME}/Desktop/企業AI OS/企業AI_OS`);
+import { getSupabase } from '../clients/supabase.js';
+import { isSupabaseAvailable } from '../clients/supabase.js';
+import { logger } from '../utils/logger.js';
+import type { TenantId } from '../types/auth.js';
 
-export interface OSCategory {
-  id: string;      // "01_企業基盤"
-  name: string;    // "企業基盤"
-  files: OSFile[];
+export interface KnowledgeEntry {
+  id: string;
+  tenantId: string;
+  category: string;
+  title: string;
+  content: string;
+  keyPoints: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export interface OSFile {
-  name: string;     // "会社理念"
-  path: string;     // full path
-  content: string;  // file content
-}
-
-/** 企業AI OSが存在するか */
-export function isEnterpriseOSAvailable(): boolean {
-  return fs.existsSync(OS_BASE_PATH);
-}
-
-/** 全カテゴリとファイルを読み込む */
-export function loadAllCategories(): OSCategory[] {
-  if (!isEnterpriseOSAvailable()) return [];
-
-  try {
-    const dirs = fs.readdirSync(OS_BASE_PATH)
-      .filter(d => /^\d{2}_/.test(d))
-      .sort();
-
-    return dirs.map(dir => {
-      const dirPath = path.join(OS_BASE_PATH, dir);
-      if (!fs.statSync(dirPath).isDirectory()) return null;
-
-      const name = dir.replace(/^\d{2}_/, '');
-      const files = fs.readdirSync(dirPath)
-        .filter(f => f.endsWith('.txt') || f.endsWith('.md'))
-        .map(f => {
-          const filePath = path.join(dirPath, f);
-          try {
-            return {
-              name: path.basename(f, path.extname(f)),
-              path: filePath,
-              content: fs.readFileSync(filePath, 'utf-8').trim(),
-            };
-          } catch {
-            return null;
-          }
-        })
-        .filter((f): f is OSFile => f !== null && f.content.length > 0);
-
-      return { id: dir, name, files };
-    }).filter((c): c is OSCategory => c !== null && c.files.length > 0);
-  } catch (error) {
-    logger.warn('企業AI OSの読み込みに失敗:', error instanceof Error ? error.message : error);
-    return [];
-  }
-}
-
-/** カテゴリ一覧の概要を返す（UI表示用） */
-export function getOSSummary(): Array<{ id: string; name: string; fileCount: number; fileNames: string[] }> {
-  const categories = loadAllCategories();
-  return categories.map(c => ({
-    id: c.id,
-    name: c.name,
-    fileCount: c.files.length,
-    fileNames: c.files.map(f => f.name),
-  }));
-}
-
-/** カテゴリIDとディレクトリ名のマッピング */
-const CATEGORY_DIRS: Record<string, string> = {
+/** 利用可能なカテゴリ */
+const CATEGORIES: Record<string, string> = {
   '企業基盤': '01_企業基盤',
   '事業・サービス': '02_事業・サービス',
   '顧客情報': '03_顧客情報',
@@ -91,98 +35,147 @@ const CATEGORY_DIRS: Record<string, string> = {
   'AIエージェント': '10_AIエージェント',
 };
 
-/**
- * 企業AI OSにナレッジを保存する
- *
- * チャットで得られた情報を適切なカテゴリのファイルに追記する。
- * ファイルが存在しない場合は新規作成する。
- */
-export function saveKnowledge(category: string, fileName: string, content: string): { success: boolean; path: string; message: string } {
-  const dirName = CATEGORY_DIRS[category];
-  if (!dirName) {
-    return { success: false, path: '', message: `不明なカテゴリ: ${category}` };
-  }
-
-  // 企業AI OSフォルダがなければ作成
-  if (!isEnterpriseOSAvailable()) {
-    fs.mkdirSync(OS_BASE_PATH, { recursive: true });
-    logger.info(`企業AI OSフォルダを作成しました: ${OS_BASE_PATH}`);
-  }
-
-  const dirPath = path.join(OS_BASE_PATH, dirName);
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
-
-  const safeName = fileName.replace(/[/\\:*?"<>|]/g, '_');
-  const filePath = path.join(dirPath, `${safeName}.txt`);
-  const today = new Date().toISOString().split('T')[0];
-
-  if (fs.existsSync(filePath)) {
-    // 既存ファイルに追記
-    const existing = fs.readFileSync(filePath, 'utf-8');
-
-    // 「詳細」セクションの末尾に追記
-    const detailMatch = existing.match(/(詳細\n)([\s\S]*?)(\n\nAIに覚えさせたい要点)/);
-    if (detailMatch) {
-      const updated = existing.replace(
-        detailMatch[0],
-        `${detailMatch[1]}${detailMatch[2]}\n・ ${content}${detailMatch[3]}`
-      );
-      // 更新日を更新
-      const withDate = updated.replace(/更新日\n・\s*[\d-]+/, `更新日\n・ ${today}`);
-      fs.writeFileSync(filePath, withDate, 'utf-8');
-    } else {
-      // セクション構造がない場合は末尾に追記
-      fs.appendFileSync(filePath, `\n\n【${today} チャットから追記】\n${content}\n`);
-    }
-    logger.info(`企業AI OSに追記: ${dirName}/${safeName}.txt`);
-  } else {
-    // 新規ファイル作成
-    const template = `${safeName}
-
-概要
-チャットから自動保存されたナレッジ
-
-詳細
-・ ${content}
-
-AIに覚えさせたい要点
-・ ${content}
-
-関連する他フォルダ
-・
-
-更新日
-・ ${today}
-`;
-    fs.writeFileSync(filePath, template, 'utf-8');
-    logger.info(`企業AI OSに新規作成: ${dirName}/${safeName}.txt`);
-  }
-
-  return { success: true, path: filePath, message: `${dirName}/${safeName}.txt に保存しました` };
-}
-
-/** 利用可能なカテゴリ名一覧を返す */
+/** 利用可能なカテゴリ名一覧 */
 export function getAvailableCategories(): string[] {
-  return Object.keys(CATEGORY_DIRS);
+  return Object.keys(CATEGORIES);
 }
 
-/** AIプロンプト用に全データをテキストに変換 */
-export function buildOSContext(): string {
-  const categories = loadAllCategories();
-  if (categories.length === 0) return '';
+/** カテゴリ名をID（01_企業基盤 等）に変換 */
+function categoryToId(category: string): string {
+  return CATEGORIES[category] || category;
+}
 
-  const sections = categories.map(cat => {
-    const files = cat.files.map(f => {
-      // 「AIに覚えさせたい要点」セクションがあればそこを優先
-      const keyPointsMatch = f.content.match(/AIに覚えさせたい要点[\s\S]*?(?=\n(?:関連|更新日|$))/);
-      const summary = keyPointsMatch ? keyPointsMatch[0].trim() : f.content.slice(0, 500);
-      return `### ${f.name}\n${summary}`;
+/** テナントの全ナレッジを取得 */
+export async function loadAllKnowledge(tenantId: TenantId): Promise<KnowledgeEntry[]> {
+  if (!isSupabaseAvailable()) return [];
+  try {
+    const { data, error } = await getSupabase()
+      .from('enterprise_knowledge')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .order('category')
+      .order('title');
+    if (error) throw error;
+    return (data || []).map(mapEntry);
+  } catch (e) {
+    logger.warn('ナレッジ取得失敗:', e instanceof Error ? e.message : e);
+    return [];
+  }
+}
+
+/** ナレッジを保存（UPSERT） */
+export async function saveKnowledge(
+  tenantId: TenantId,
+  category: string,
+  fileName: string,
+  content: string,
+): Promise<{ success: boolean; message: string }> {
+  if (!isSupabaseAvailable()) {
+    return { success: false, message: 'Supabase未接続' };
+  }
+
+  const catId = categoryToId(category);
+  const title = fileName.replace(/[/\\:*?"<>|]/g, '_');
+
+  try {
+    // 既存エントリを確認
+    const { data: existing } = await getSupabase()
+      .from('enterprise_knowledge')
+      .select('id, content')
+      .eq('tenant_id', tenantId)
+      .eq('category', catId)
+      .eq('title', title)
+      .single();
+
+    if (existing) {
+      // 追記
+      const updated = existing.content + '\n・ ' + content;
+      await getSupabase()
+        .from('enterprise_knowledge')
+        .update({
+          content: updated,
+          key_points: content,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existing.id);
+      logger.info(`ナレッジ追記: ${catId}/${title} (tenant: ${tenantId})`);
+    } else {
+      // 新規
+      await getSupabase()
+        .from('enterprise_knowledge')
+        .insert({
+          tenant_id: tenantId,
+          category: catId,
+          title,
+          content: '・ ' + content,
+          key_points: content,
+        });
+      logger.info(`ナレッジ新規作成: ${catId}/${title} (tenant: ${tenantId})`);
+    }
+
+    return { success: true, message: `${catId}/${title} に保存しました` };
+  } catch (e: any) {
+    logger.error('ナレッジ保存失敗:', e.message);
+    return { success: false, message: e.message };
+  }
+}
+
+/** AIプロンプト用に全ナレッジをテキスト化 */
+export async function buildOSContext(tenantId?: TenantId): Promise<string> {
+  if (!tenantId) return '';
+  const entries = await loadAllKnowledge(tenantId);
+  if (entries.length === 0) return '';
+
+  // カテゴリ別にグループ化
+  const grouped = new Map<string, KnowledgeEntry[]>();
+  for (const e of entries) {
+    const list = grouped.get(e.category) || [];
+    list.push(e);
+    grouped.set(e.category, list);
+  }
+
+  const sections = Array.from(grouped.entries()).map(([cat, items]) => {
+    const files = items.map(e => {
+      const display = e.keyPoints || e.content.slice(0, 500);
+      return `### ${e.title}\n${display}`;
     }).join('\n\n');
-
-    return `## ${cat.id} ${cat.name}\n${files}`;
+    return `## ${cat}\n${files}`;
   }).join('\n\n---\n\n');
 
   return `# 企業AI OS（企業の第一次情報）\n\n${sections}`;
+}
+
+/** カテゴリ一覧の概要（UI表示用） */
+export async function getOSSummary(tenantId: TenantId): Promise<Array<{ id: string; name: string; fileCount: number; titles: string[] }>> {
+  const entries = await loadAllKnowledge(tenantId);
+  const grouped = new Map<string, string[]>();
+  for (const e of entries) {
+    const list = grouped.get(e.category) || [];
+    list.push(e.title);
+    grouped.set(e.category, list);
+  }
+  return Array.from(grouped.entries()).map(([cat, titles]) => ({
+    id: cat,
+    name: cat.replace(/^\d{2}_/, ''),
+    fileCount: titles.length,
+    titles,
+  }));
+}
+
+/** 企業AI OSが利用可能か（Supabase接続済みならtrue） */
+export function isEnterpriseOSAvailable(): boolean {
+  return isSupabaseAvailable();
+}
+
+function mapEntry(data: any): KnowledgeEntry {
+  return {
+    id: data.id,
+    tenantId: data.tenant_id,
+    category: data.category,
+    title: data.title,
+    content: data.content,
+    keyPoints: data.key_points,
+    createdAt: data.created_at,
+    updatedAt: data.updated_at,
+  };
 }

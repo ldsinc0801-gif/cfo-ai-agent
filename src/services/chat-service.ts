@@ -38,8 +38,23 @@ export interface CompanyMemory {
   employeeCount: string;
   fiscalYearEnd: string;
   notes: string[];
+  businessDescription: string;
+  strengths: string;
+  challenges: string;
+  keyClients: string;
+  aiNotes: string[];
   lastUpdated: string;
 }
+
+/** 文字数制限 */
+const MEMORY_LIMITS = {
+  businessDescription: 1000,
+  strengths: 500,
+  challenges: 500,
+  keyClients: 500,
+  aiNoteItem: 300,
+  aiNotesMax: 50,
+};
 
 export interface FreeeContextData {
   companyName: string;
@@ -104,7 +119,7 @@ export class ChatService {
     if (fs.existsSync(MEMORY_FILE)) {
       return JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf-8'));
     }
-    return { companyName: '', industry: '', employeeCount: '', fiscalYearEnd: '', notes: [], lastUpdated: '' };
+    return { companyName: '', industry: '', employeeCount: '', fiscalYearEnd: '', notes: [], businessDescription: '', strengths: '', challenges: '', keyClients: '', aiNotes: [], lastUpdated: '' };
   }
 
   async saveMemory(memory: CompanyMemory, tenantId?: TenantId): Promise<void> {
@@ -161,7 +176,7 @@ export class ChatService {
     const analyses = analysisStore.list();
     const latestAnalysis = analyses.length > 0 ? analysisStore.get(analyses[0].id) : null;
 
-    const systemPrompt = await this.buildSystemPrompt(memory, latestAnalysis);
+    const systemPrompt = await this.buildSystemPrompt(memory, latestAnalysis, tenantId);
 
     const apiMessages: OpenAI.ChatCompletionMessageParam[] = [
       { role: 'system', content: systemPrompt },
@@ -198,9 +213,9 @@ export class ChatService {
     return { reply: assistantMessage, proposals: [] };
   }
 
-  private async buildSystemPrompt(memory: CompanyMemory, latestAnalysis: any): Promise<string> {
+  private async buildSystemPrompt(memory: CompanyMemory, latestAnalysis: any, tenantId?: TenantId): Promise<string> {
     let osContext = '';
-    try { osContext = buildOSContext(); } catch { /* ignore */ }
+    try { osContext = await buildOSContext(tenantId); } catch { /* ignore */ }
 
     let prompt = `あなたは「AI CFO」です。中小企業の経営者のための財務・経営アドバイザーとして会話してください。
 
@@ -222,15 +237,23 @@ export class ChatService {
 ユーザーが情報の保存を希望した場合は、画面のOS保存ボタンを使うよう案内してください。
 `;
 
-    if (memory.companyName) {
+    if (memory.companyName || memory.industry || memory.businessDescription) {
       prompt += `\n【この会社の情報（記憶済み）】\n`;
       if (memory.companyName) prompt += `- 会社名: ${memory.companyName}\n`;
       if (memory.industry) prompt += `- 業種: ${memory.industry}\n`;
       if (memory.employeeCount) prompt += `- 従業員数: ${memory.employeeCount}\n`;
       if (memory.fiscalYearEnd) prompt += `- 決算期: ${memory.fiscalYearEnd}\n`;
+      if (memory.businessDescription) prompt += `- 事業内容: ${memory.businessDescription}\n`;
+      if (memory.strengths) prompt += `- 強み: ${memory.strengths}\n`;
+      if (memory.challenges) prompt += `- 課題: ${memory.challenges}\n`;
+      if (memory.keyClients) prompt += `- 主要顧客: ${memory.keyClients}\n`;
       if (memory.notes.length > 0) {
-        prompt += `- その他の情報:\n`;
+        prompt += `- メモ:\n`;
         memory.notes.forEach(n => { prompt += `  - ${n}\n`; });
+      }
+      if (memory.aiNotes && memory.aiNotes.length > 0) {
+        prompt += `- AIが学習した情報:\n`;
+        memory.aiNotes.slice(-10).forEach(n => { prompt += `  - ${n}\n`; });
       }
     }
 
@@ -288,24 +311,90 @@ export class ChatService {
     return prompt;
   }
 
-  private async tryUpdateMemory(userMsg: string, _assistantMsg: string, memory: CompanyMemory, tenantId?: TenantId): Promise<void> {
-    let updated = false;
+  private async tryUpdateMemory(userMsg: string, assistantMsg: string, memory: CompanyMemory, tenantId?: TenantId): Promise<void> {
+    const changes: Array<{ field: string; before: string; after: string; reason: string }> = [];
 
-    const companyMatch = userMsg.match(/(?:うちの会社は|弊社は|当社は|会社名は)(.+?)(?:です|だ|。|$)/);
-    if (companyMatch && !memory.companyName) { memory.companyName = companyMatch[1].trim(); updated = true; }
+    // 基本フィールド（上書き許可）
+    const patterns: Array<{ field: keyof CompanyMemory; regex: RegExp; extract: (m: RegExpMatchArray) => string }> = [
+      { field: 'companyName', regex: /(?:うちの会社は|弊社は|当社は|会社名は|社名は)(.+?)(?:です|だ|。|$)/, extract: m => m[1].trim() },
+      { field: 'industry', regex: /(?:業種は|業界は|事業は)(.+?)(?:です|だ|。|$)/, extract: m => m[1].trim() },
+      { field: 'employeeCount', regex: /(?:従業員|社員|スタッフ).*?(\d+).*?(?:人|名)/, extract: m => m[1] + '人' },
+      { field: 'fiscalYearEnd', regex: /(?:決算|決算期|決算月).*?(\d{1,2})月/, extract: m => m[1] + '月' },
+    ];
 
-    const industryMatch = userMsg.match(/(?:業種は|業界は|事業は)(.+?)(?:です|だ|。|$)/);
-    if (industryMatch && !memory.industry) { memory.industry = industryMatch[1].trim(); updated = true; }
+    for (const p of patterns) {
+      const match = userMsg.match(p.regex);
+      if (match) {
+        const newVal = p.extract(match);
+        const oldVal = memory[p.field] as string;
+        if (newVal !== oldVal) {
+          changes.push({ field: p.field, before: oldVal, after: newVal, reason: `ユーザー発言: "${userMsg.substring(0, 80)}"` });
+          (memory as any)[p.field] = newVal;
+        }
+      }
+    }
 
-    const empMatch = userMsg.match(/(?:従業員|社員|スタッフ).*?(\d+).*?(?:人|名)/);
-    if (empMatch && !memory.employeeCount) { memory.employeeCount = empMatch[1] + '人'; updated = true; }
+    // 拡張フィールド（正規表現 + 上書き許可）
+    const extPatterns: Array<{ field: keyof CompanyMemory; regex: RegExp; limit: number }> = [
+      { field: 'businessDescription', regex: /(?:事業内容は|事業として|主な事業は)(.+?)(?:です|だ|。|$)/, limit: MEMORY_LIMITS.businessDescription },
+      { field: 'strengths', regex: /(?:強みは|得意な|自社の強み)(.+?)(?:です|だ|。|$)/, limit: MEMORY_LIMITS.strengths },
+      { field: 'challenges', regex: /(?:課題は|問題は|悩みは|困っている)(.+?)(?:です|だ|。|$)/, limit: MEMORY_LIMITS.challenges },
+      { field: 'keyClients', regex: /(?:主要な取引先|主な顧客|得意先)(?:は|として)(.+?)(?:です|だ|。|$)/, limit: MEMORY_LIMITS.keyClients },
+    ];
 
-    const fyMatch = userMsg.match(/(?:決算|決算期|決算月).*?(\d{1,2})月/);
-    if (fyMatch && !memory.fiscalYearEnd) { memory.fiscalYearEnd = fyMatch[1] + '月'; updated = true; }
+    for (const p of extPatterns) {
+      const match = userMsg.match(p.regex);
+      if (match) {
+        let newVal = match[1].trim();
+        if (newVal.length > p.limit) {
+          newVal = newVal.substring(0, p.limit);
+          logger.warn(`company_memory.${p.field}: ${p.limit}文字に切り詰めました`);
+        }
+        const oldVal = memory[p.field] as string;
+        if (newVal !== oldVal) {
+          changes.push({ field: p.field, before: oldVal, after: newVal, reason: `ユーザー発言: "${userMsg.substring(0, 80)}"` });
+          (memory as any)[p.field] = newVal;
+        }
+      }
+    }
 
-    if (updated) {
+    // AI自動メモ: ユーザーが事業に関する具体的な情報を語った場合、aiNotesに追記
+    const infoPatterns = [
+      /(?:売上|年商).*?(\d[\d,]*万?円)/,
+      /(?:設立|創業).*?(\d{4}年)/,
+      /(?:本社|拠点).*?(?:は|が)(.+?)(?:です|にあり|。|$)/,
+      /(?:目標|計画).*?(?:は|が)(.+?)(?:です|。|$)/,
+    ];
+
+    for (const regex of infoPatterns) {
+      const match = userMsg.match(regex);
+      if (match) {
+        let note = match[0].trim();
+        if (note.length > MEMORY_LIMITS.aiNoteItem) {
+          note = note.substring(0, MEMORY_LIMITS.aiNoteItem);
+        }
+        // 重複チェック（先頭30文字）
+        const prefix = note.substring(0, 30);
+        if (!memory.aiNotes) memory.aiNotes = [];
+        const isDuplicate = memory.aiNotes.some(n => n.substring(0, 30) === prefix);
+        if (!isDuplicate) {
+          memory.aiNotes.push(note);
+          // 上限チェック
+          if (memory.aiNotes.length > MEMORY_LIMITS.aiNotesMax) {
+            const removed = memory.aiNotes.shift();
+            logger.warn(`company_memory.aiNotes: 上限${MEMORY_LIMITS.aiNotesMax}件超過、最古の項目を削除: "${removed?.substring(0, 50)}"`);
+          }
+          changes.push({ field: 'aiNotes', before: '', after: note, reason: `自動抽出: "${userMsg.substring(0, 80)}"` });
+        }
+      }
+    }
+
+    if (changes.length > 0) {
       await this.saveMemory(memory, tenantId);
-      logger.info('会社情報メモリを更新しました');
+      // 変更ログ出力（AIが誤って書き換えた時の原因追跡用）
+      for (const c of changes) {
+        logger.info(`[memory-update] tenant=${tenantId || 'none'} field=${c.field} before="${c.before}" after="${c.after}" reason="${c.reason}"`);
+      }
     }
   }
 }

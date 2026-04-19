@@ -598,8 +598,7 @@ async function buildReport(year?: number, month?: number, isDemo: boolean = fals
       setCache(cacheKey, report);
       return report;
     } catch (error) {
-      logger.warn('freeeデータ取得に失敗。モックデータで代替します:', error instanceof Error ? error.message : error);
-      // フォールバック: モックデータ
+      logger.warn('freeeデータ取得に失敗:', error instanceof Error ? error.message : error);
     }
   }
 
@@ -671,7 +670,7 @@ async function buildTrendData(endYear?: number, endMonth?: number, monthCount: n
 
       return trend;
     } catch (error) {
-      logger.warn('freeeトレンドデータ取得に失敗。モックデータで代替します:', error instanceof Error ? error.message : error);
+      logger.warn('freeeトレンドデータ取得に失敗:', error instanceof Error ? error.message : error);
     }
   }
 
@@ -879,6 +878,12 @@ app.get('/', async (req, res) => {
     }
 
     res.send(renderDashboardHTML(dashReport, trend, { selectedDate, fromMonth, toMonth, periodLabel, periodTotals }));
+
+    // 自動学習トリガー（非同期、レスポンスをブロックしない）
+    const autoLearnTenantId = getActiveTenantId(req);
+    if (autoLearnTenantId && !isDemo) {
+      learningService.tryAutoLearn(autoLearnTenantId);
+    }
   } catch (error) {
     logger.error('ダッシュボード生成エラー', error);
     res.status(500).send('ダッシュボード生成に失敗しました');
@@ -2497,11 +2502,13 @@ app.post('/chat/clear', async (_req, res) => {
 
 // 企業AI OSへの保存を確定
 import { saveKnowledge } from '../services/enterprise-os.js';
-app.post('/chat/save-to-os', express.json(), (req, res) => {
+app.post('/chat/save-to-os', express.json(), async (req, res) => {
+  const tenantId = getActiveTenantId(req);
+  if (!tenantId) { res.status(400).json({ error: 'テナントが選択されていません' }); return; }
   const items: Array<{ category: string; fileName: string; content: string }> = req.body.items || [];
   const results: string[] = [];
   for (const item of items) {
-    const result = saveKnowledge(item.category, item.fileName, item.content);
+    const result = await saveKnowledge(tenantId, item.category, item.fileName, item.content);
     results.push(result.message);
     logger.info(`企業AI OS保存確定: ${result.message}`);
   }

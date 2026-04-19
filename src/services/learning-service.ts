@@ -156,6 +156,34 @@ class LearningService {
       .join('\n');
   }
 
+  /**
+   * 自動学習を実行すべきか判定し、条件を満たせば非同期で実行する。
+   * 条件: APIキー設定済み & 前回実行から7日以上経過 & 実績3ヶ月以上
+   */
+  async tryAutoLearn(tenantId?: TenantId): Promise<void> {
+    if (!this.client || !tenantId) return;
+
+    try {
+      const insights = await this.getInsights();
+      const lastUpdate = insights.length > 0
+        ? Math.max(...insights.map(i => new Date(i.updated_at || i.created_at || 0).getTime()))
+        : 0;
+      const daysSinceLast = (Date.now() - lastUpdate) / (1000 * 60 * 60 * 24);
+
+      if (daysSinceLast < 7) return;
+
+      // 非同期実行（レスポンスをブロックしない）
+      logger.info(`自動学習トリガー: ${daysSinceLast.toFixed(0)}日経過 (tenant: ${tenantId})`);
+      this.runLearningCycle(tenantId).then(result => {
+        logger.info(`自動学習完了: 新規${result.newInsights.length}件, 更新${result.updatedInsights.length}件`);
+      }).catch(e => {
+        logger.warn('自動学習失敗:', e instanceof Error ? e.message : e);
+      });
+    } catch (e) {
+      // 判定失敗は無視（自動実行なので）
+    }
+  }
+
   // ========== Private Methods ==========
 
   private async getActualData(tenantId?: TenantId): Promise<any[]> {

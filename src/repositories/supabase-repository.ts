@@ -168,7 +168,7 @@ export async function getCompanyMemory(tenantId: TenantId): Promise<CompanyMemor
     .single();
 
   if (error || !data) {
-    return { companyName: '', industry: '', employeeCount: '', fiscalYearEnd: '', notes: [], lastUpdated: '' };
+    return { companyName: '', industry: '', employeeCount: '', fiscalYearEnd: '', notes: [], businessDescription: '', strengths: '', challenges: '', keyClients: '', aiNotes: [], lastUpdated: '' };
   }
 
   return {
@@ -177,6 +177,11 @@ export async function getCompanyMemory(tenantId: TenantId): Promise<CompanyMemor
     employeeCount: data.employee_count || '',
     fiscalYearEnd: data.fiscal_year_end || '',
     notes: data.notes || [],
+    businessDescription: data.business_description || '',
+    strengths: data.strengths || '',
+    challenges: data.challenges || '',
+    keyClients: data.key_clients || '',
+    aiNotes: data.ai_notes || [],
     lastUpdated: data.updated_at || '',
   };
 }
@@ -191,6 +196,11 @@ export async function saveCompanyMemory(tenantId: TenantId, memory: CompanyMemor
       employee_count: memory.employeeCount,
       fiscal_year_end: memory.fiscalYearEnd,
       notes: memory.notes,
+      business_description: memory.businessDescription,
+      strengths: memory.strengths,
+      challenges: memory.challenges,
+      key_clients: memory.keyClients,
+      ai_notes: memory.aiNotes,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'tenant_id' });
 
