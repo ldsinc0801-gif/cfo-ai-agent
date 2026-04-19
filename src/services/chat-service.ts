@@ -114,32 +114,26 @@ export class ChatService {
   // ========== メモリ ==========
 
   async getMemory(tenantId?: TenantId): Promise<CompanyMemory> {
+    // Supabase接続時はDBのみ参照（JSONフォールバック禁止: テナント間データ混在防止）
     if (this.useSupabase && tenantId) {
-      try { return await repo.getCompanyMemory(tenantId); } catch (e) { logger.warn('Supabaseメモリ取得失敗、ファイルにフォールバック'); }
-    }
-    if (fs.existsSync(MEMORY_FILE)) {
-      return JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf-8'));
+      try { return await repo.getCompanyMemory(tenantId); } catch (e) { logger.warn('Supabaseメモリ取得失敗'); }
     }
     return { companyName: '', industry: '', employeeCount: '', fiscalYearEnd: '', notes: [], businessDescription: '', strengths: '', challenges: '', keyClients: '', aiNotes: [], lastUpdated: '' };
   }
 
   async saveMemory(memory: CompanyMemory, tenantId?: TenantId): Promise<void> {
     memory.lastUpdated = new Date().toISOString();
+    // Supabase接続時はDBのみ保存（JSONフォールバック禁止）
     if (this.useSupabase && tenantId) {
-      try { await repo.saveCompanyMemory(tenantId, memory); return; } catch (e) { logger.warn('Supabaseメモリ保存失敗、ファイルにフォールバック'); }
+      try { await repo.saveCompanyMemory(tenantId, memory); return; } catch (e) { logger.warn('Supabaseメモリ保存失敗'); }
     }
-    if (!fs.existsSync(CHAT_DIR)) fs.mkdirSync(CHAT_DIR, { recursive: true });
-    fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2), 'utf-8');
   }
 
   // ========== 履歴 ==========
 
   async getHistory(tenantId?: TenantId): Promise<ChatMessage[]> {
     if (this.useSupabase && tenantId) {
-      try { return await repo.getChatHistory(tenantId, 50); } catch (e) { logger.warn('Supabase履歴取得失敗、ファイルにフォールバック'); }
-    }
-    if (fs.existsSync(HISTORY_FILE)) {
-      return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8'));
+      try { return await repo.getChatHistory(tenantId, 50); } catch (e) { logger.warn('Supabase履歴取得失敗'); }
     }
     return [];
   }
@@ -152,18 +146,14 @@ export class ChatService {
           await repo.saveChatMessage(tenantId, m.role, m.content);
         }
         return;
-      } catch (e) { logger.warn('Supabase履歴保存失敗、ファイルにフォールバック'); }
+      } catch (e) { logger.warn('Supabase履歴保存失敗'); }
     }
-    if (!fs.existsSync(CHAT_DIR)) fs.mkdirSync(CHAT_DIR, { recursive: true });
-    const trimmed = history.slice(-50);
-    fs.writeFileSync(HISTORY_FILE, JSON.stringify(trimmed, null, 2), 'utf-8');
   }
 
   async clearHistory(tenantId?: TenantId): Promise<void> {
     if (this.useSupabase && tenantId) {
       try { await repo.clearChatHistory(tenantId); return; } catch (e) { logger.warn('Supabase履歴削除失敗'); }
     }
-    if (fs.existsSync(HISTORY_FILE)) fs.unlinkSync(HISTORY_FILE);
   }
 
   // ========== チャット送信 ==========

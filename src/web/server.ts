@@ -35,7 +35,7 @@ import { logger } from '../utils/logger.js';
 import { isSupabaseAvailable, getSupabase } from '../clients/supabase.js';
 import * as repo from '../repositories/supabase-repository.js';
 import { learningService } from '../services/learning-service.js';
-import { seedDemoData } from '../demo-data.js';
+// demo-data.ts は削除済み（デモデータの自動シードを廃止）
 import { renderLoginHTML, renderChangePasswordHTML } from './login-page.js';
 import { renderUsersHTML } from './users-page.js';
 import { setCurrentUser, renderSidebar, SHARED_CSS, agentPageShell } from './shared.js';
@@ -54,9 +54,6 @@ declare module 'express-session' {
     activeTenantRole?: string;
   }
 }
-
-// デモデータの初期化
-seedDemoData();
 
 const anthropicService = new AnthropicAnalysisService();
 
@@ -1499,7 +1496,7 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
     if (!receiptService.isAvailable()) { res.status(400).send('Vertex AI の認証が未設定です'); return; }
 
     // チャットメモリから業種を取得（学習ルール適用のため）
-    const memory = await chatService.getMemory();
+    const memory = await chatService.getMemory(getActiveTenantId(req) || undefined);
     const industry = memory.industry || undefined;
 
     if (files.length === 1) {
@@ -1604,7 +1601,7 @@ app.post('/agent/accounting/analyze-video', upload.single('video'), async (req, 
     const mimeType = mimeMap[ext] || 'video/mp4';
 
     // チャットメモリから業種を取得
-    const memory = await chatService.getMemory();
+    const memory = await chatService.getMemory(getActiveTenantId(req) || undefined);
     const industry = memory.industry || undefined;
 
     // Geminiで動画を直接解析
@@ -1629,7 +1626,7 @@ app.post('/agent/accounting/correct', express.json(), async (req, res) => {
     const { original, corrected, reason } = req.body;
     if (!original || !corrected) { res.status(400).json({ error: '修正前・修正後の仕訳データが必要です' }); return; }
 
-    const memory = await chatService.getMemory();
+    const memory = await chatService.getMemory(getActiveTenantId(req) || undefined);
     const industry = memory.industry || '未設定';
 
     await receiptService.recordJournalCorrection(original, corrected, industry, reason);
@@ -1654,7 +1651,7 @@ app.post('/agent/accounting/chat-correct', express.json({ limit: '5mb' }), async
 
     // 修正があれば学習データとして記録
     if (result.corrections.length > 0) {
-      const memory = await chatService.getMemory();
+      const memory = await chatService.getMemory(getActiveTenantId(req) || undefined);
       const industry = memory.industry || '未設定';
 
       for (const correction of result.corrections) {
@@ -2374,9 +2371,10 @@ app.post('/settings/company', express.urlencoded({ extended: true }), (req, res)
 });
 
 // === チャット ===
-app.get('/chat', async (_req, res) => {
-  const history = await chatService.getHistory();
-  const memory = await chatService.getMemory();
+app.get('/chat', async (req, res) => {
+  const tid = getActiveTenantId(req) || undefined;
+  const history = await chatService.getHistory(tid);
+  const memory = await chatService.getMemory(tid);
   res.send(renderChatHTML(history, memory, chatService.isAvailable()));
 });
 
@@ -2399,7 +2397,8 @@ app.post('/chat/send', express.json(), async (req, res) => {
     // freeeデータをチャットコンテキストに設定
     await loadFreeeContextForChat();
 
-    const result = await chatService.sendMessage(message);
+    const tid = getActiveTenantId(req) || undefined;
+    const result = await chatService.sendMessage(message, tid);
     res.json(result);
   } catch (error) {
     logger.error('チャットエラー', error);
@@ -2485,18 +2484,19 @@ async function loadFreeeContextForChat(): Promise<void> {
 }
 
 app.post('/chat/memory', express.urlencoded({ extended: true }), async (req, res) => {
-  const memory = await chatService.getMemory();
+  const tenantId = getActiveTenantId(req);
+  const memory = await chatService.getMemory(tenantId || undefined);
   memory.companyName = req.body.companyName || '';
   memory.industry = req.body.industry || '';
   memory.employeeCount = req.body.employeeCount || '';
   memory.fiscalYearEnd = req.body.fiscalYearEnd || '';
   memory.notes = (req.body.notes || '').split('\n').filter((n: string) => n.trim());
-  await chatService.saveMemory(memory);
+  await chatService.saveMemory(memory, tenantId || undefined);
   res.redirect('/chat');
 });
 
-app.post('/chat/clear', async (_req, res) => {
-  await chatService.clearHistory();
+app.post('/chat/clear', async (req, res) => {
+  await chatService.clearHistory(getActiveTenantId(req) || undefined);
   res.json({ ok: true });
 });
 
@@ -2708,8 +2708,8 @@ app.patch('/api/tasks/:id', express.json(), (req, res) => {
 });
 
 // 会社情報（秘書AIが参照）
-app.get('/api/company', async (_req, res) => {
-  const memory = await chatService.getMemory();
+app.get('/api/company', async (req, res) => {
+  const memory = await chatService.getMemory(getActiveTenantId(req) || undefined);
   const analyses = analysisStore.list();
   res.json({ company: memory, latestAnalyses: analyses.slice(0, 5) });
 });
