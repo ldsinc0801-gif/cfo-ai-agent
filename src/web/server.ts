@@ -1848,7 +1848,7 @@ import type { CustomerBilling } from '../services/secretary-auto.js';
 
 // 秘書AI：メインページ（Googleタスク検知付き）
 app.get('/agent/secretary', async (req, res) => {
-  const templates = await secretaryService.listTemplates();
+  const templates = await secretaryService.listTemplates(getActiveTenantId(req) || undefined);
   const documents = await secretaryService.listDocuments();
   const billingConfigs = await loadBillingConfigs();
   let detectedTasks: Array<{ title: string; customerName: string }> = [];
@@ -1899,7 +1899,7 @@ app.get('/agent/secretary', async (req, res) => {
   }
 
   const companySettings = await loadCompanySettings(getActiveTenantId(req) || undefined);
-  const updatedTemplates = await secretaryService.listTemplates();
+  const updatedTemplates = await secretaryService.listTemplates(getActiveTenantId(req) || undefined);
   const updatedConfigs = await loadBillingConfigs();
   res.send(renderSecretaryPageHTML({ templates: updatedTemplates, documents, detectedTasks, billingConfigs: updatedConfigs, companySettings }));
 });
@@ -1938,7 +1938,7 @@ app.post('/agent/secretary/template/upload', upload.single('template'), async (r
   } catch (error) {
     logger.error('テンプレート登録エラー', error);
     res.send(renderSecretaryPageHTML({
-      templates: await secretaryService.listTemplates(),
+      templates: await secretaryService.listTemplates(getActiveTenantId(req) || undefined),
       documents: await secretaryService.listDocuments(),
       error: `テンプレート登録に失敗: ${error instanceof Error ? error.message : '不明なエラー'}`,
     }));
@@ -1986,7 +1986,7 @@ app.post('/agent/secretary/billing-config', async (req, res) => {
 
 // 秘書AI：書類作成フォーム（企業AI OS連携）
 app.get('/agent/secretary/create/:templateId', async (req, res) => {
-  const template = await secretaryService.getTemplate(req.params.templateId);
+  const template = await secretaryService.getTemplate(req.params.templateId, getActiveTenantId(req) || undefined);
   if (!template) { res.redirect('/agent/secretary'); return; }
 
   const customerName = (req.query.customer as string) || '';
@@ -2008,7 +2008,7 @@ app.get('/agent/secretary/create/:templateId', async (req, res) => {
 // 秘書AI：PDF生成（一括生成対応）
 app.post('/agent/secretary/generate', express.urlencoded({ extended: true }), async (req, res) => {
   try {
-    const template = await secretaryService.getTemplate(req.body.templateId);
+    const template = await secretaryService.getTemplate(req.body.templateId, getActiveTenantId(req) || undefined);
     if (!template) { res.redirect('/agent/secretary'); return; }
 
     // フォームデータを整形
@@ -2116,14 +2116,14 @@ app.post('/agent/secretary/generate', express.urlencoded({ extended: true }), as
     } else {
       // 複数生成の場合はメインページに戻って結果を表示
       res.send(renderSecretaryPageHTML({
-        templates: await secretaryService.listTemplates(),
+        templates: await secretaryService.listTemplates(getActiveTenantId(req) || undefined),
         documents: await secretaryService.listDocuments(),
         success: `${batchMonths}ヶ月分の${template.name}を生成しました（${generatedDocs.length}件）`,
       }));
     }
   } catch (error) {
     logger.error('PDF生成エラー', error);
-    const template = await secretaryService.getTemplate(req.body.templateId);
+    const template = await secretaryService.getTemplate(req.body.templateId, getActiveTenantId(req) || undefined);
     if (template) {
       res.send(renderSecretaryFormHTML({ template, serviceList: [], error: `PDF生成に失敗: ${error instanceof Error ? error.message : '不明なエラー'}` }));
     } else {

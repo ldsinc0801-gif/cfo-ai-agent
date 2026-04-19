@@ -139,12 +139,12 @@ export class SecretaryService {
   setTenantId(id: TenantId | null): void { this.tenantId = id; }
 
   /** テンプレート一覧 */
-  async listTemplates(): Promise<DocumentTemplate[]> {
-    logger.info(`[DEBUG listTemplates] supabase=${isSupabaseAvailable()} tenantId=${this.tenantId}`);
-    if (isSupabaseAvailable() && this.tenantId) {
+  async listTemplates(tenantIdOverride?: TenantId): Promise<DocumentTemplate[]> {
+    const tid = tenantIdOverride || this.tenantId;
+    if (isSupabaseAvailable() && tid) {
       try {
-        const { data, error } = await getSupabase().from('secretary_templates').select('*').eq('tenant_id', this.tenantId).order('created_at', { ascending: false });
-        logger.info(`[DEBUG listTemplates] DB result: ${data?.length || 0} rows, error=${error?.message || 'none'}`);
+        const { data, error } = await getSupabase().from('secretary_templates').select('*').eq('tenant_id', tid).order('created_at', { ascending: false });
+        if (error) logger.warn('テンプレート一覧取得エラー:', error.message);
         return (data || []).map((r: any) => ({ id: r.id, name: r.name, type: r.type, templateFile: r.template_file, fields: r.fields || [], createdAt: r.created_at }));
       } catch (e) { logger.warn('テンプレート一覧取得失敗:', e); }
     }
@@ -159,8 +159,9 @@ export class SecretaryService {
   }
 
   /** テンプレート取得 */
-  async getTemplate(id: string): Promise<DocumentTemplate | null> {
-    if (isSupabaseAvailable() && this.tenantId) {
+  async getTemplate(id: string, tenantIdOverride?: TenantId): Promise<DocumentTemplate | null> {
+    const tid = tenantIdOverride || this.tenantId;
+    if (isSupabaseAvailable() && tid) {
       try {
         const { data } = await getSupabase().from('secretary_templates').select('*').eq('id', id).single();
         if (data) return { id: data.id, name: data.name, type: data.type, templateFile: data.template_file, fields: data.fields || [], createdAt: data.created_at };
