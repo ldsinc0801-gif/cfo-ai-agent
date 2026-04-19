@@ -140,11 +140,13 @@ export class SecretaryService {
 
   /** テンプレート一覧 */
   async listTemplates(): Promise<DocumentTemplate[]> {
+    logger.info(`[DEBUG listTemplates] supabase=${isSupabaseAvailable()} tenantId=${this.tenantId}`);
     if (isSupabaseAvailable() && this.tenantId) {
       try {
-        const { data } = await getSupabase().from('secretary_templates').select('*').eq('tenant_id', this.tenantId).order('created_at', { ascending: false });
+        const { data, error } = await getSupabase().from('secretary_templates').select('*').eq('tenant_id', this.tenantId).order('created_at', { ascending: false });
+        logger.info(`[DEBUG listTemplates] DB result: ${data?.length || 0} rows, error=${error?.message || 'none'}`);
         return (data || []).map((r: any) => ({ id: r.id, name: r.name, type: r.type, templateFile: r.template_file, fields: r.fields || [], createdAt: r.created_at }));
-      } catch (e) { logger.warn('テンプレート一覧取得失敗'); }
+      } catch (e) { logger.warn('テンプレート一覧取得失敗:', e); }
     }
     // ファイルフォールバック（Supabase未接続時のみ）
     if (!isSupabaseAvailable() && fs.existsSync(TEMPLATES_DIR)) {
@@ -235,10 +237,15 @@ export class SecretaryService {
       try {
         const layoutPath = path.join(dir, 'layout.json');
         const layout = fs.existsSync(layoutPath) ? JSON.parse(fs.readFileSync(layoutPath, 'utf-8')) : null;
-        await getSupabase().from('secretary_templates').insert({
+        const { error: insErr } = await getSupabase().from('secretary_templates').insert({
           id: template.id, tenant_id: this.tenantId, name: template.name, type: template.type,
           template_file: template.templateFile, fields: template.fields, layout,
         });
+        if (insErr) {
+          logger.error(`テンプレートDB INSERT失敗: ${insErr.message} (code: ${insErr.code})`);
+        } else {
+          logger.info(`テンプレートDB INSERT成功: ${template.id}`);
+        }
       } catch (e) { logger.warn('テンプレートDB保存失敗:', e); }
 
       // テンプレートファイルをStorageにアップロード
