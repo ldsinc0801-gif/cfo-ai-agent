@@ -506,53 +506,46 @@ const upload = multer({
   limits: { fileSize: 200 * 1024 * 1024 },  // 動画対応のため200MB
 });
 
-// TODO: freeeトークンをSupabaseに保存してテナント分離する
-// 現在はdata/freee-token.jsonにグローバル保存（マルチテナント非対応）
-// users.google_access_token等のカラムは既存だが、freee用カラムは未作成
-/** freeeトークンが保存されているか */
-function getFreeeToken(): { access_token: string; refresh_token: string; company_id?: number; company_name?: string } | null {
-  const tokenPath = path.resolve('data/freee-token.json');
-  try {
-    if (fs.existsSync(tokenPath)) {
-      return JSON.parse(fs.readFileSync(tokenPath, 'utf-8'));
-    }
-  } catch { /* ignore */ }
-  return null;
+import { getOAuthToken, saveOAuthToken, updateOAuthExtra, deleteOAuthToken } from '../services/oauth-token-service.js';
+
+/** freeeトークンを取得（テナント分離、Supabase） */
+async function getFreeeToken(tenantId?: TenantId): Promise<{ access_token: string; refresh_token: string; company_id?: number; company_name?: string } | null> {
+  if (!tenantId) return null;
+  const token = await getOAuthToken(tenantId, 'freee');
+  if (!token || !token.accessToken) return null;
+  return {
+    access_token: token.accessToken,
+    refresh_token: token.refreshToken,
+    company_id: token.extra?.company_id,
+    company_name: token.extra?.company_name,
+  };
 }
 
 /** 選択中の事業所IDを取得 */
-function getSelectedCompanyId(): number | null {
-  const token = getFreeeToken();
+async function getSelectedCompanyId(tenantId?: TenantId): Promise<number | null> {
+  const token = await getFreeeToken(tenantId);
   return token?.company_id ?? null;
 }
 
-/** freeeトークンファイルに事業所ID・名称を保存 */
-function saveSelectedCompany(companyId: number, companyName: string): void {
-  const tokenPath = path.resolve('data/freee-token.json');
-  try {
-    const data = JSON.parse(fs.readFileSync(tokenPath, 'utf-8'));
-    data.company_id = companyId;
-    data.company_name = companyName;
-    fs.writeFileSync(tokenPath, JSON.stringify(data, null, 2), 'utf-8');
-    logger.info(`事業所 ${companyName} (ID:${companyId}) を保存しました`);
-  } catch (error) {
-    logger.error('事業所保存エラー', error);
-  }
+/** 事業所ID・名称を保存 */
+async function saveSelectedCompany(tenantId: TenantId, companyId: number, companyName: string): Promise<void> {
+  await updateOAuthExtra(tenantId, 'freee', { company_id: companyId, company_name: companyName });
+  logger.info(`事業所 ${companyName} (ID:${companyId}) を保存しました`);
 }
 
 /** 選択中の事業所名を取得 */
-function getSelectedCompanyName(): string | null {
-  const token = getFreeeToken();
+async function getSelectedCompanyName(tenantId?: TenantId): Promise<string | null> {
+  const token = await getFreeeToken(tenantId);
   return token?.company_name ?? null;
 }
 
 /** freee接続済みか */
-function isFreeeConnected(): boolean {
-  return getFreeeToken() !== null;
+async function isFreeeConnected(tenantId?: TenantId): Promise<boolean> {
+  return (await getFreeeToken(tenantId)) !== null;
 }
 
 /** レポートデータを生成（freee接続時は実データ、デモモード時はデモデータ、それ以外はnull） */
-async function buildReport(year?: number, month?: number, isDemo: boolean = false) {
+async function buildReport(year?: number, month?: number, isDemo: boolean = false, tenantId?: TenantId) {
   // デモモード: セッションがデモユーザーの場合のみデモデータを使用
   const demoProfile = isDemo ? getDemoProfile() : null;
   if (demoProfile) {
@@ -563,7 +556,7 @@ async function buildReport(year?: number, month?: number, isDemo: boolean = fals
     return builder.build(mockRaw, year || now.getFullYear(), month || (now.getMonth() === 0 ? 12 : now.getMonth()));
   }
 
-  const cacheKey = `report-${year || 'default'}-${month || 'default'}-${getSelectedCompanyId()}`;
+  const cacheKey = `report-${year || 'default'}-${month || 'default'}-${await getSelectedCompanyId(tenantId)}`;
   const cached = getCached<any>(cacheKey);
   if (cached) { logger.info(`レポート: キャッシュヒット (${cacheKey})`); return cached; }
   const now = new Date();
@@ -571,7 +564,7 @@ async function buildReport(year?: number, month?: number, isDemo: boolean = fals
   // デフォルトは前月
   const targetMonth = month || (now.getMonth() === 0 ? 12 : now.getMonth());
 
-  const token = getFreeeToken();
+  const token = await getFreeeToken(tenantId);
   if (token) {
     try {
       const auth = new FreeeAuthClient({
@@ -581,7 +574,7 @@ async function buildReport(year?: number, month?: number, isDemo: boolean = fals
       const freeeService = new FreeeService(auth);
 
       // 保存済みの事業所IDを使用、なければ最初の事業所
-      const savedCompanyId = getSelectedCompanyId();
+      const savedCompanyId = await getSelectedCompanyId(tenantId);
       let companyId: number;
       if (savedCompanyId) {
         companyId = savedCompanyId;
@@ -627,11 +620,11 @@ async function buildTrendData(endYear?: number, endMonth?: number, monthCount: n
   const targetYear = endYear || now.getFullYear();
   const targetMonth = endMonth || (now.getMonth() === 0 ? 12 : now.getMonth());
 
-  const cacheKey = `trend-${targetYear}-${targetMonth}-${monthCount}-${getSelectedCompanyId()}`;
+  const cacheKey = `trend-${targetYear}-${targetMonth}-${monthCount}-${await getSelectedCompanyId(tenantId)}`;
   const cached = getCached<any>(cacheKey);
   if (cached) { logger.info(`トレンド: キャッシュヒット (${cacheKey})`); return cached; }
 
-  const token = getFreeeToken();
+  const token = await getFreeeToken(tenantId);
   if (token) {
     try {
       const auth = new FreeeAuthClient({
@@ -640,7 +633,7 @@ async function buildTrendData(endYear?: number, endMonth?: number, monthCount: n
       });
       const freeeService = new FreeeService(auth);
 
-      const savedCompanyId = getSelectedCompanyId();
+      const savedCompanyId = await getSelectedCompanyId(tenantId);
       let companyId: number;
       if (savedCompanyId) {
         companyId = savedCompanyId;
@@ -698,11 +691,11 @@ function getUploadedFiles(): string[] {
 }
 
 /** 期間累計でレポートを再構築する */
-async function buildPeriodReport(baseReport: any, fromMonth: string, toMonth: string): Promise<any> {
-  const token = getFreeeToken();
+async function buildPeriodReport(baseReport: any, fromMonth: string, toMonth: string, tenantId?: TenantId): Promise<any> {
+  const token = await getFreeeToken(tenantId);
   if (!token) return null;
 
-  const cacheKey = `period-report-${fromMonth}-${toMonth}-${getSelectedCompanyId()}`;
+  const cacheKey = `period-report-${fromMonth}-${toMonth}-${await getSelectedCompanyId(tenantId)}`;
   const cached = getCached<any>(cacheKey);
   if (cached) return cached;
 
@@ -713,7 +706,7 @@ async function buildPeriodReport(baseReport: any, fromMonth: string, toMonth: st
     });
     const freeeService = new FreeeService(auth);
 
-    const companyId = getSelectedCompanyId();
+    const companyId = await getSelectedCompanyId(tenantId);
     if (!companyId) return null;
 
     // 会計年度を取得
@@ -845,7 +838,7 @@ app.get('/', async (req, res) => {
       if (y && m) { reportYear = y; reportMonth = m; }
     }
     const isDemo = req.session.user?.id === 'demo-user';
-    const report = await buildReport(reportYear, reportMonth, isDemo);
+    const report = await buildReport(reportYear, reportMonth, isDemo, getActiveTenantId(req) || undefined);
 
     // freee未接続・デモモードOFFの場合、データなしページを表示
     if (!report) {
@@ -876,7 +869,7 @@ app.get('/', async (req, res) => {
     // 期間指定時はレポート全体を期間累計で再構築
     let dashReport = report;
     if (fromMonth && toMonth && fromMonth !== toMonth) {
-      const periodReport = await buildPeriodReport(report, fromMonth, toMonth);
+      const periodReport = await buildPeriodReport(report, fromMonth, toMonth, getActiveTenantId(req) || undefined);
       if (periodReport) dashReport = periodReport;
     }
 
@@ -902,7 +895,7 @@ function monthDiff(from: string, to: string): number {
 // 月次レポート（HTML表示）
 app.get('/report', async (req, res) => {
   try {
-    const report = await buildReport(undefined, undefined, req.session.user?.id === 'demo-user');
+    const report = await buildReport(undefined, undefined, req.session.user?.id === 'demo-user', getActiveTenantId(req) || undefined);
     if (!report) { res.send(renderNoDataPage('月次レポート', 'freee APIと連携してデータを取得してください。')); return; }
     res.send(renderReportHTML(report));
   } catch (error) {
@@ -914,7 +907,7 @@ app.get('/report', async (req, res) => {
 // 月次レポート（PDFダウンロード）
 app.get('/report/pdf', async (req, res) => {
   try {
-    const report = await buildReport(undefined, undefined, req.session.user?.id === 'demo-user');
+    const report = await buildReport(undefined, undefined, req.session.user?.id === 'demo-user', getActiveTenantId(req) || undefined);
     if (!report) { res.status(400).send('データがありません'); return; }
     const html = renderReportHTML(report);
 
@@ -1191,7 +1184,7 @@ app.get('/api/learn/insights', async (_req, res) => {
 });
 
 // 財務分析AIエージェント
-app.get('/agent/finance', async (_req, res) => {
+app.get('/agent/finance', async (req, res) => {
   try {
     // デモモード
     const demoProfile = getDemoProfile();
@@ -1206,8 +1199,8 @@ app.get('/agent/finance', async (_req, res) => {
     }
 
     // freee接続時は自動的にfreeeデータで表示
-    const token = getFreeeToken();
-    if (token && getSelectedCompanyId()) {
+    const token = await getFreeeToken(getActiveTenantId(req) || undefined);
+    if (token && await getSelectedCompanyId(getActiveTenantId(req) || undefined)) {
       res.redirect('/agent/finance/freee');
       return;
     }
@@ -1300,7 +1293,7 @@ app.post('/agent/finance/analyze', upload.single('file'), async (req, res) => {
 });
 
 // 財務分析：freeeデータ分析のローディング画面
-app.get('/agent/finance/freee', (_req, res) => {
+app.get('/agent/finance/freee', async (req, res) => {
   res.send(renderAnalysisLoadingHTML('freee'));
 });
 
@@ -1309,8 +1302,8 @@ app.get('/api/finance/freee', async (req, res) => {
   try {
     let input: import('../types/bank-rating.js').RatingInput;
 
-    const token = getFreeeToken();
-    if (token && getSelectedCompanyId()) {
+    const token = await getFreeeToken(getActiveTenantId(req) || undefined);
+    if (token && await getSelectedCompanyId(getActiveTenantId(req) || undefined)) {
       // freee実データからRatingInputを組み立てる
       // 会計年度の累計PL + 最新月のBSを取得
       const auth = new FreeeAuthClient({
@@ -1318,7 +1311,8 @@ app.get('/api/finance/freee', async (req, res) => {
         refreshToken: token.refresh_token,
       });
       const freeeService = new FreeeService(auth);
-      const companyId = getSelectedCompanyId()!;
+      const companyId = await getSelectedCompanyId(getActiveTenantId(req) || undefined);
+      if (!companyId) { res.status(400).json({ error: '事業所が未選択です' }); return; }
 
       // 事業所の会計年度を取得
       const companyDetail = await freeeService.getCompanyDetail(companyId);
@@ -1725,7 +1719,7 @@ app.post('/agent/accounting/send-freee', express.urlencoded({ extended: true }),
       return;
     }
 
-    const token = getFreeeToken();
+    const token = await getFreeeToken(getActiveTenantId(req) || undefined);
     if (!token) {
       res.send(renderAccountingPageHTML({
         aiAvailable: true,
@@ -1734,7 +1728,7 @@ app.post('/agent/accounting/send-freee', express.urlencoded({ extended: true }),
       return;
     }
 
-    const companyId = getSelectedCompanyId();
+    const companyId = await getSelectedCompanyId(getActiveTenantId(req) || undefined);
     if (!companyId) {
       res.send(renderAccountingPageHTML({
         aiAvailable: true,
@@ -2211,7 +2205,7 @@ app.post('/agent/secretary/gmail-draft', express.urlencoded({ extended: true }),
 // API（JSON）
 app.get('/api/report', async (req, res) => {
   try {
-    const report = await buildReport(undefined, undefined, req.session.user?.id === 'demo-user');
+    const report = await buildReport(undefined, undefined, req.session.user?.id === 'demo-user', getActiveTenantId(req) || undefined);
     res.json(report);
   } catch (error) {
     logger.error('API エラー', error);
@@ -2238,20 +2232,24 @@ app.post('/settings/demo', express.urlencoded({ extended: true }), async (req, r
   res.redirect('/settings/company');
 });
 
-app.get('/auth/freee', (_req, res) => {
-  res.redirect(freeeAuth.getAuthorizationUrl());
+app.get('/auth/freee', (req, res) => {
+  // state にtenantIdを埋め込む（callbackでテナント特定用）
+  const tid = getActiveTenantId(req);
+  const authUrl = freeeAuth.getAuthorizationUrl();
+  const stateParam = tid ? `&state=${encodeURIComponent(tid)}` : '';
+  res.redirect(authUrl + stateParam);
 });
 
 app.get('/callback', async (req, res) => {
   try {
     const code = req.query.code as string;
+    const stateTenantId = req.query.state as string || '';
+    const tenantId = stateTenantId ? asTenantId(stateTenantId) : getActiveTenantId(req);
     if (!code) { res.status(400).send('認可コードがありません'); return; }
+    if (!tenantId) { res.status(400).send('テナントが特定できません'); return; }
 
-    logger.info(`freee callback受信: code=${code.substring(0, 10)}...`);
-    logger.info(`client_id=${process.env.FREEE_CLIENT_ID}`);
-    logger.info(`redirect_uri=${process.env.FREEE_REDIRECT_URI}`);
+    logger.info(`freee callback受信: tenantId=${tenantId}`);
 
-    // 直接axiosでトークン交換
     const tokenResponse = await axios.post('https://accounts.secure.freee.co.jp/public_api/token', {
       grant_type: 'authorization_code',
       client_id: process.env.FREEE_CLIENT_ID,
@@ -2262,19 +2260,15 @@ app.get('/callback', async (req, res) => {
 
     const tokenData = tokenResponse.data;
 
-    // トークンをdata/freee-token.jsonに保存
-    const tokenPath = path.resolve('data/freee-token.json');
-    const tokenDir = path.dirname(tokenPath);
-    if (!fs.existsSync(tokenDir)) fs.mkdirSync(tokenDir, { recursive: true });
-    fs.writeFileSync(tokenPath, JSON.stringify({
-      access_token: tokenData.access_token,
-      refresh_token: tokenData.refresh_token,
-      expires_at: Date.now() + (tokenData.expires_in - 60) * 1000,
-    }, null, 2), 'utf-8');
+    // トークンをSupabaseに保存（テナント分離）
+    await saveOAuthToken(tenantId, 'freee', {
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token,
+      tokenExpiry: new Date(Date.now() + (tokenData.expires_in - 60) * 1000).toISOString(),
+    });
 
-    logger.info('freee認証完了、トークンを保存しました');
+    logger.info(`freee認証完了、トークンをSupabaseに保存しました (tenant: ${tenantId})`);
 
-    // 事業所選択ページへリダイレクト
     res.redirect('/settings/company');
   } catch (error: any) {
     const detail = error?.response?.data ? JSON.stringify(error.response.data) : (error instanceof Error ? error.message : '不明なエラー');
@@ -2284,9 +2278,9 @@ app.get('/callback', async (req, res) => {
 });
 
 // === 事業所選択 ===
-app.get('/settings/company', async (_req, res) => {
+app.get('/settings/company', async (req, res) => {
   try {
-    const token = getFreeeToken();
+    const token = await getFreeeToken(getActiveTenantId(req) || undefined);
     const demoActive = isDemoMode();
     const demoProfile = getDemoProfile();
     const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -2334,7 +2328,7 @@ app.get('/settings/company', async (_req, res) => {
     });
     const freeeService = new FreeeService(auth);
     const companies = await freeeService.getCompanies();
-    const selectedId = getSelectedCompanyId();
+    const selectedId = await getSelectedCompanyId(getActiveTenantId(req) || undefined);
 
     const companyCards = companies.map(c => {
       const isSelected = c.id === selectedId;
@@ -2403,7 +2397,8 @@ app.post('/settings/company', express.urlencoded({ extended: true }), async (req
     res.status(400).send('事業所IDが不正です');
     return;
   }
-  saveSelectedCompany(companyId, companyName);
+  const tid = getActiveTenantId(req);
+  if (tid) await saveSelectedCompany(tid, companyId, companyName);
   clearCache(); // 事業所変更時はキャッシュクリア
   res.redirect('/settings/company');
 });
@@ -2433,7 +2428,7 @@ app.post('/chat/send', express.json(), async (req, res) => {
     }
 
     // freeeデータをチャットコンテキストに設定
-    await loadFreeeContextForChat();
+    await loadFreeeContextForChat(getActiveTenantId(req) || undefined);
 
     const tid = getActiveTenantId(req) || undefined;
     const result = await chatService.sendMessage(message, tid);
@@ -2445,14 +2440,14 @@ app.post('/chat/send', express.json(), async (req, res) => {
 });
 
 /** freeeのPL/BSデータをチャット用コンテキストとして読み込む */
-async function loadFreeeContextForChat(): Promise<void> {
-  const token = getFreeeToken();
+async function loadFreeeContextForChat(tenantId?: TenantId): Promise<void> {
+  const token = await getFreeeToken(tenantId);
   if (!token) {
     chatService.setFreeeContext(null);
     return;
   }
 
-  const cacheKey = `chat-freee-context-${getSelectedCompanyId()}`;
+  const cacheKey = `chat-freee-context-${await getSelectedCompanyId(tenantId)}`;
   const cached = getCached<any>(cacheKey);
   if (cached) {
     chatService.setFreeeContext(cached);
@@ -2466,7 +2461,7 @@ async function loadFreeeContextForChat(): Promise<void> {
     });
     const freeeService = new FreeeService(auth);
 
-    const savedCompanyId = getSelectedCompanyId();
+    const savedCompanyId = await getSelectedCompanyId(tenantId);
     let companyId: number;
     let companyName: string;
     if (savedCompanyId) {
@@ -2582,6 +2577,8 @@ app.post('/tasks/:id/status', express.urlencoded({ extended: true }), async (req
   await taskService.update(req.params.id, { status: req.body.status });
 
   // Google Tasks連携: 完了時に同期
+  const gtid = getActiveTenantId(req);
+  if (gtid) await googleTasksClient.loadForTenant(gtid);
   if (task && req.body.status === 'done' && googleTasksClient.isAuthenticated()) {
     try {
       const listId = await googleTasksClient.getOrCreateTaskList('AI CFO');
@@ -2630,8 +2627,11 @@ app.post('/tasks/generate-monthly', express.urlencoded({ extended: true }), asyn
 // === Google連携（Gmail / Tasks）設定画面 ===
 import { renderGoogleSettingsHTML } from './google-settings-page.js';
 
-app.get('/settings/google', (req, res) => {
+app.get('/settings/google', async (req, res) => {
   const user = req.session.user;
+  const tid = getActiveTenantId(req);
+  // テナントのGoogle連携状態をDBから読み込み
+  if (tid) await googleTasksClient.loadForTenant(tid);
   res.send(renderGoogleSettingsHTML({
     user: user ? { ...user, picture: '', tenantRole: req.session.activeTenantRole || '' } : undefined,
     isConfigured: googleTasksClient.isConfigured(),
@@ -2640,20 +2640,23 @@ app.get('/settings/google', (req, res) => {
 });
 
 // Google OAuth認証開始（連携用、ログイン目的ではない）
-app.get('/settings/google/auth', (_req, res) => {
+app.get('/settings/google/auth', (req, res) => {
   if (!googleTasksClient.isConfigured()) {
     res.redirect('/settings/google');
     return;
   }
-  res.redirect(googleTasksClient.getAuthUrl());
+  const tid = getActiveTenantId(req);
+  res.redirect(googleTasksClient.getAuthUrl(tid || undefined));
 });
 
 // Google OAuthコールバック
 app.get('/auth/google/callback', async (req, res) => {
   try {
     const code = req.query.code as string;
-    if (!code) { res.redirect('/settings/google'); return; }
-    await googleTasksClient.exchangeCode(code);
+    const stateTenantId = req.query.state as string || '';
+    const tenantId = stateTenantId ? asTenantId(stateTenantId) : getActiveTenantId(req);
+    if (!code || !tenantId) { res.redirect('/settings/google'); return; }
+    await googleTasksClient.exchangeCode(code, tenantId);
     res.redirect('/settings/google');
   } catch (error) {
     logger.error('Google連携エラー', error);
@@ -2662,8 +2665,9 @@ app.get('/auth/google/callback', async (req, res) => {
 });
 
 // Google連携解除
-app.post('/settings/google/disconnect', (_req, res) => {
-  googleTasksClient.disconnect();
+app.post('/settings/google/disconnect', async (req, res) => {
+  const tid = getActiveTenantId(req);
+  await googleTasksClient.disconnect(tid || undefined);
   res.redirect('/settings/google');
 });
 
@@ -2674,6 +2678,8 @@ app.post('/auth/google/disconnect', (_req, res) => res.redirect(307, '/settings/
 // Google Tasksにタスクを同期（選択されたタスクのみ）
 app.post('/tasks/sync-google', express.urlencoded({ extended: true }), async (req, res) => {
   try {
+    const tid = getActiveTenantId(req);
+    if (tid) await googleTasksClient.loadForTenant(tid);
     if (!googleTasksClient.isAuthenticated()) {
       res.redirect('/settings/google');
       return;

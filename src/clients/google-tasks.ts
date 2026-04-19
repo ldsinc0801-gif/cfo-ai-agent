@@ -1,12 +1,7 @@
 import axios from 'axios';
-import fs from 'fs';
-import path from 'path';
 import { logger } from '../utils/logger.js';
-
-// TODO: GoogleトークンをSupabaseに保存してテナント分離する
-// 現在はdata/google-token.jsonにグローバル保存（マルチテナント非対応）
-// users テーブルに google_access_token / google_refresh_token カラムは既に存在
-const TOKEN_FILE = path.resolve('data/google-token.json');
+import { getOAuthToken, saveOAuthToken, deleteOAuthToken } from '../services/oauth-token-service.js';
+import type { TenantId } from '../types/auth.js';
 
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -27,21 +22,17 @@ interface GoogleTask {
   id?: string;
   title: string;
   notes?: string;
-  due?: string; // RFC 3339 timestamp
+  due?: string;
   status?: 'needsAction' | 'completed';
 }
 
 /**
- * Google Tasks APIクライアント
- *
- * OAuth 2.0で認証し、タスクの作成・同期を行う。
+ * Google Tasks APIクライアント（テナント分離）
+ * トークンはSupabase tenant_oauth_tokens テーブルに保存
  */
 class GoogleTasksClient {
   private tokens: GoogleTokens | null = null;
-
-  constructor() {
-    this.loadTokens();
-  }
+  private currentTenantId: TenantId | null = null;
 
   /** Google OAuth認証情報が設定されているか */
   isConfigured(): boolean {
@@ -53,8 +44,23 @@ class GoogleTasksClient {
     return this.tokens !== null && !!this.tokens.refresh_token;
   }
 
-  /** OAuth認可URL生成 */
-  getAuthUrl(): string {
+  /** テナントのトークンをDBから読み込む */
+  async loadForTenant(tenantId: TenantId): Promise<void> {
+    this.currentTenantId = tenantId;
+    const token = await getOAuthToken(tenantId, 'google');
+    if (token && token.accessToken) {
+      this.tokens = {
+        access_token: token.accessToken,
+        refresh_token: token.refreshToken,
+        expires_at: token.tokenExpiry ? new Date(token.tokenExpiry).getTime() : 0,
+      };
+    } else {
+      this.tokens = null;
+    }
+  }
+
+  /** OAuth認可URL生成（stateにtenantIdを埋め込む） */
+  getAuthUrl(tenantId?: TenantId): string {
     const params = new URLSearchParams({
       client_id: process.env.GOOGLE_CLIENT_ID || '',
       redirect_uri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/auth/google/callback',
@@ -63,11 +69,12 @@ class GoogleTasksClient {
       access_type: 'offline',
       prompt: 'consent',
     });
+    if (tenantId) params.set('state', tenantId);
     return `${GOOGLE_AUTH_URL}?${params.toString()}`;
   }
 
-  /** 認可コードからトークン取得 */
-  async exchangeCode(code: string): Promise<void> {
+  /** 認可コードからトークン取得・保存 */
+  async exchangeCode(code: string, tenantId: TenantId): Promise<void> {
     const res = await axios.post(GOOGLE_TOKEN_URL, {
       code,
       client_id: process.env.GOOGLE_CLIENT_ID,
@@ -81,8 +88,9 @@ class GoogleTasksClient {
       refresh_token: res.data.refresh_token,
       expires_at: Date.now() + (res.data.expires_in - 60) * 1000,
     };
-    this.saveTokens();
-    logger.info('Google認証完了');
+    this.currentTenantId = tenantId;
+    await this.saveTokensToDB();
+    logger.info(`Google認証完了 (tenant: ${tenantId})`);
   }
 
   /** トークンリフレッシュ */
@@ -101,7 +109,7 @@ class GoogleTasksClient {
     if (res.data.refresh_token) {
       this.tokens.refresh_token = res.data.refresh_token;
     }
-    this.saveTokens();
+    await this.saveTokensToDB();
   }
 
   /** 有効なアクセストークンを取得 */
@@ -137,41 +145,15 @@ class GoogleTasksClient {
       { title },
       { headers: { Authorization: `Bearer ${token}` } },
     );
-    logger.info(`Googleタスクリスト「${title}」を作成しました`);
     return res.data.id;
   }
 
-  /** タスクを追加 */
-  async addTask(listId: string, task: GoogleTask): Promise<string> {
+  /** タスク一覧取得 */
+  async listTasks(taskListId: string): Promise<GoogleTask[]> {
     const token = await this.getAccessToken();
-    const body: any = {
-      title: task.title,
-      notes: task.notes || '',
-      status: task.status || 'needsAction',
-    };
-    if (task.due) {
-      // Google Tasks APIはRFC 3339形式（日付のみの場合はT00:00:00.000Z）
-      body.due = task.due.length === 10 ? `${task.due}T00:00:00.000Z` : task.due;
-    }
-
-    const res = await axios.post(
-      `${TASKS_API_BASE}/lists/${listId}/tasks`,
-      body,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-    return res.data.id;
-  }
-
-  /** 指定リストのタスク一覧を取得 */
-  async listTasks(listId: string): Promise<GoogleTask[]> {
-    const token = await this.getAccessToken();
-    const res = await axios.get(
-      `${TASKS_API_BASE}/lists/${listId}/tasks`,
-      {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { showCompleted: true, maxResults: 100 },
-      },
-    );
+    const res = await axios.get(`${TASKS_API_BASE}/lists/${taskListId}/tasks`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
     return (res.data.items || []).map((item: any) => ({
       id: item.id,
       title: item.title,
@@ -181,45 +163,39 @@ class GoogleTasksClient {
     }));
   }
 
-  /** タスクのステータスを更新 */
-  async updateTaskStatus(listId: string, taskId: string, status: 'needsAction' | 'completed'): Promise<void> {
+  /** タスク作成 */
+  async createTask(taskListId: string, task: GoogleTask): Promise<string> {
     const token = await this.getAccessToken();
-    await axios.patch(
-      `${TASKS_API_BASE}/lists/${listId}/tasks/${taskId}`,
-      { status },
+    const res = await axios.post(
+      `${TASKS_API_BASE}/lists/${taskListId}/tasks`,
+      {
+        title: task.title,
+        notes: task.notes,
+        due: task.due,
+      },
       { headers: { Authorization: `Bearer ${token}` } },
     );
-  }
-
-  /** タイトルでGoogle Taskを検索 */
-  async findTaskByTitle(listId: string, title: string): Promise<GoogleTask | null> {
-    const tasks = await this.listTasks(listId);
-    return tasks.find(t => t.title === title) || null;
+    return res.data.id;
   }
 
   /** 認証解除 */
-  disconnect(): void {
+  async disconnect(tenantId?: TenantId): Promise<void> {
+    const tid = tenantId || this.currentTenantId;
     this.tokens = null;
-    if (fs.existsSync(TOKEN_FILE)) {
-      fs.unlinkSync(TOKEN_FILE);
+    if (tid) {
+      await deleteOAuthToken(tid, 'google');
     }
     logger.info('Google連携を解除しました');
   }
 
-  private loadTokens(): void {
-    try {
-      if (fs.existsSync(TOKEN_FILE)) {
-        this.tokens = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf-8'));
-      }
-    } catch {
-      this.tokens = null;
-    }
-  }
-
-  private saveTokens(): void {
-    const dir = path.dirname(TOKEN_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(TOKEN_FILE, JSON.stringify(this.tokens, null, 2), 'utf-8');
+  /** DBにトークンを保存 */
+  private async saveTokensToDB(): Promise<void> {
+    if (!this.currentTenantId || !this.tokens) return;
+    await saveOAuthToken(this.currentTenantId, 'google', {
+      accessToken: this.tokens.access_token,
+      refreshToken: this.tokens.refresh_token,
+      tokenExpiry: new Date(this.tokens.expires_at).toISOString(),
+    });
   }
 }
 
