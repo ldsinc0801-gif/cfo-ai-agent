@@ -746,7 +746,7 @@ export class SecretaryService {
     }
 
     // 振込先: 会社設定 > layout.json の順で優先
-    const cs = loadCompanySettings();
+    const cs = await loadCompanySettings(this.tenantId || undefined);
     const bankFromSettings = cs ? {
       '金融機関名': cs.bankName,
       '支店名': cs.branchName,
@@ -888,10 +888,10 @@ body { font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Noto Sans JP', sa
 </div>
 
 <div class="company-footer">
-  <div class="name">${esc(cs?.companyName || 'Flourish Japan株式会社')}</div><br>
-  <div class="address">${esc(cs ? `〒${cs.postalCode} ${cs.address}` : '〒810-0001 福岡県福岡市中央区天神2丁目2番12号　T＆Jビルディング７F')}</div><br>
-  <div class="rep">${esc(cs?.representative || '代表取締役　川口　直人')}</div><br>
-  <div class="reg">${esc(cs ? `登録番号　${cs.registrationNumber}` : '登録番号　T1290001106865')}</div>
+  <div class="name">${esc(cs?.companyName || '（会社名未設定）')}</div><br>
+  <div class="address">${esc(cs ? `〒${cs.postalCode} ${cs.address}` : '')}</div><br>
+  <div class="rep">${esc(cs?.representative || '')}</div><br>
+  <div class="reg">${esc(cs?.registrationNumber ? `登録番号　${cs.registrationNumber}` : '')}</div>
 </div>
 
 </div></body></html>`;
