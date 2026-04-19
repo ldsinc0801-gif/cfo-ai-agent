@@ -1,5 +1,17 @@
 import dotenv from 'dotenv';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
 dotenv.config();
+
+// GCPサービスアカウントJSON: 環境変数から一時ファイルに書き出し（Railway等のクラウド環境用）
+// ローカル開発では GOOGLE_APPLICATION_CREDENTIALS（ファイルパス）をそのまま使用
+if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON && !process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+  const tmpPath = path.join(os.tmpdir(), 'gcp-sa.json');
+  fs.writeFileSync(tmpPath, process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON, { mode: 0o600 });
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = tmpPath;
+}
 
 export const config = {
   freee: {
