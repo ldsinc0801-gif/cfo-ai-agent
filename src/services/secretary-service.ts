@@ -623,6 +623,22 @@ export class SecretaryService {
     }
 
     const convertedPdf = path.join(templateDir, 'converted.pdf');
+
+    // converted.pdfがあるがlayout.jsonがない場合、レイアウトを再検出
+    if (fs.existsSync(convertedPdf) && !fs.existsSync(layoutPath)) {
+      try {
+        const layout = this.detectPdfLayout(convertedPdf);
+        fs.writeFileSync(layoutPath, JSON.stringify(layout, null, 2));
+        logger.info(`PDFレイアウト再検出成功: ${Object.keys(layout).length}項目`);
+        // DBにも保存
+        if (isSupabaseAvailable()) {
+          await getSupabase().from('secretary_templates').update({ layout }).eq('id', template.id);
+        }
+      } catch (e) {
+        logger.warn(`PDFレイアウト再検出スキップ: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+
     if (fs.existsSync(layoutPath) || fs.existsSync(convertedPdf)) {
       await this.generateFromHTMLFull(templateDir, template, data, pdfPath);
     } else if (['.xlsx', '.xls'].includes(origExt)) {
@@ -1261,28 +1277,30 @@ body { font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Noto Sans JP', sa
   /** Storageからテンプレートファイルをローカルに復元（再デプロイ後の復旧用） */
   private async restoreTemplateFromStorage(templateId: string, templateDir: string): Promise<void> {
     if (!isStorageAvailable() || !this.tenantId) return;
-    // converted.pdf がローカルに存在しなければStorageから取得
-    const convertedLocal = path.join(templateDir, 'converted.pdf');
-    if (!fs.existsSync(convertedLocal)) {
-      const storagePath = `${this.tenantId}/templates/${templateId}/converted.pdf`;
-      try {
-        const { data } = await getSupabaseAdmin()!.storage.from(STORAGE_BUCKET).download(storagePath);
-        if (data) {
-          fs.writeFileSync(convertedLocal, Buffer.from(await data.arrayBuffer()));
-          logger.info(`テンプレート復元: ${storagePath} → ${convertedLocal}`);
-        }
-      } catch { /* not in storage */ }
+    const admin = getSupabaseAdmin()!;
+    const prefix = `${this.tenantId}/templates/${templateId}`;
+
+    // 復元対象ファイル一覧
+    const filesToRestore = ['converted.pdf', 'preview.png', 'original.pdf'];
+    for (const fileName of filesToRestore) {
+      const localPath = path.join(templateDir, fileName);
+      if (!fs.existsSync(localPath)) {
+        try {
+          const { data } = await admin.storage.from(STORAGE_BUCKET).download(`${prefix}/${fileName}`);
+          if (data) {
+            fs.writeFileSync(localPath, Buffer.from(await data.arrayBuffer()));
+            logger.info(`テンプレート復元: ${prefix}/${fileName}`);
+          }
+        } catch { /* not in storage */ }
+      }
     }
-    // preview.png
-    const previewLocal = path.join(templateDir, 'preview.png');
-    if (!fs.existsSync(previewLocal)) {
-      const storagePath = `${this.tenantId}/templates/${templateId}/preview.png`;
-      try {
-        const { data } = await getSupabaseAdmin()!.storage.from(STORAGE_BUCKET).download(storagePath);
-        if (data) {
-          fs.writeFileSync(previewLocal, Buffer.from(await data.arrayBuffer()));
-        }
-      } catch { /* not in storage */ }
+
+    // original.pdf からconverted.pdfを生成（Storageにconverted.pdfがなかった場合）
+    const convertedLocal = path.join(templateDir, 'converted.pdf');
+    const originalLocal = path.join(templateDir, 'original.pdf');
+    if (!fs.existsSync(convertedLocal) && fs.existsSync(originalLocal)) {
+      fs.copyFileSync(originalLocal, convertedLocal);
+      logger.info(`original.pdf → converted.pdf コピー: ${templateId}`);
     }
   }
 
