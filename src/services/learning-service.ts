@@ -130,17 +130,9 @@ class LearningService {
           }));
         }
       } catch (e) {
-        logger.warn('Supabase知見取得失敗、ファイルにフォールバック');
+        logger.warn('Supabase知見取得失敗');
       }
     }
-
-    // ファイルフォールバック
-    try {
-      if (fs.existsSync(INSIGHTS_FILE)) {
-        return JSON.parse(fs.readFileSync(INSIGHTS_FILE, 'utf-8'));
-      }
-    } catch { /* ignore */ }
-
     return [];
   }
 
@@ -358,15 +350,9 @@ ${existingText ? `【既存の学習済み知見】\n${existingText}\n` : ''}
         logger.info(`学習知見をSupabaseに保存: ${insights.length}件`);
         return;
       } catch (e) {
-        logger.warn('Supabase知見保存失敗、ファイルにフォールバック');
+        logger.warn('Supabase知見保存失敗');
       }
     }
-
-    // ファイルフォールバック
-    const dir = path.dirname(INSIGHTS_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(INSIGHTS_FILE, JSON.stringify(insights, null, 2), 'utf-8');
-    logger.info(`学習知見をファイルに保存: ${insights.length}件`);
   }
 }
 

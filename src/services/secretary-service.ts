@@ -1,6 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from '../utils/logger.js';
+import { getSupabase } from '../clients/supabase.js';
+import { isSupabaseAvailable } from '../clients/supabase.js';
+import type { TenantId } from '../types/auth.js';
 
 const TEMPLATES_DIR = path.resolve('data/secretary/templates');
 const DOCUMENTS_DIR = path.resolve('data/secretary/documents');
@@ -25,15 +28,32 @@ export interface CompanySettings {
   accountHolder: string;
 }
 
-export function loadCompanySettings(): CompanySettings | null {
-  if (!fs.existsSync(COMPANY_SETTINGS_PATH)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(COMPANY_SETTINGS_PATH, 'utf-8'));
-  } catch { return null; }
+export async function loadCompanySettings(tenantId?: TenantId): Promise<CompanySettings | null> {
+  if (isSupabaseAvailable() && tenantId) {
+    try {
+      const { data } = await getSupabase().from('secretary_company_settings').select('*').eq('tenant_id', tenantId).single();
+      if (data) return {
+        companyName: data.company_name || '', postalCode: data.postal_code || '', address: data.address || '',
+        representative: data.representative || '', registrationNumber: data.registration_number || '',
+        bankName: data.bank_name || '', branchName: data.branch_name || '', accountType: data.account_type || '',
+        accountNumber: data.account_number || '', accountHolder: data.account_holder || '',
+      };
+    } catch { /* not found */ }
+  }
+  return null;
 }
 
-export function saveCompanySettings(settings: CompanySettings): void {
-  fs.writeFileSync(COMPANY_SETTINGS_PATH, JSON.stringify(settings, null, 2));
+export async function saveCompanySettings(settings: CompanySettings, tenantId?: TenantId): Promise<void> {
+  if (isSupabaseAvailable() && tenantId) {
+    await getSupabase().from('secretary_company_settings').upsert({
+      tenant_id: tenantId, company_name: settings.companyName, postal_code: settings.postalCode,
+      address: settings.address, representative: settings.representative,
+      registration_number: settings.registrationNumber, bank_name: settings.bankName,
+      branch_name: settings.branchName, account_type: settings.accountType,
+      account_number: settings.accountNumber, account_holder: settings.accountHolder,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'tenant_id' });
+  }
 }
 
 export type DocumentType = 'invoice' | 'contract' | 'estimate' | 'application';
@@ -113,21 +133,41 @@ const DEFAULT_FIELDS: Record<DocumentType, TemplateField[]> = {
 };
 
 export class SecretaryService {
+  private tenantId: TenantId | null = null;
+  setTenantId(id: TenantId | null): void { this.tenantId = id; }
 
   /** テンプレート一覧 */
-  listTemplates(): DocumentTemplate[] {
-    if (!fs.existsSync(TEMPLATES_DIR)) return [];
-    return fs.readdirSync(TEMPLATES_DIR)
-      .filter(d => fs.existsSync(path.join(TEMPLATES_DIR, d, 'metadata.json')))
-      .map(d => JSON.parse(fs.readFileSync(path.join(TEMPLATES_DIR, d, 'metadata.json'), 'utf-8')))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  async listTemplates(): Promise<DocumentTemplate[]> {
+    if (isSupabaseAvailable() && this.tenantId) {
+      try {
+        const { data } = await getSupabase().from('secretary_templates').select('*').eq('tenant_id', this.tenantId).order('created_at', { ascending: false });
+        return (data || []).map((r: any) => ({ id: r.id, name: r.name, type: r.type, templateFile: r.template_file, fields: r.fields || [], createdAt: r.created_at }));
+      } catch (e) { logger.warn('テンプレート一覧取得失敗'); }
+    }
+    // ファイルフォールバック（Supabase未接続時のみ）
+    if (!isSupabaseAvailable() && fs.existsSync(TEMPLATES_DIR)) {
+      return fs.readdirSync(TEMPLATES_DIR)
+        .filter(d => fs.existsSync(path.join(TEMPLATES_DIR, d, 'metadata.json')))
+        .map(d => JSON.parse(fs.readFileSync(path.join(TEMPLATES_DIR, d, 'metadata.json'), 'utf-8')))
+        .sort((a: any, b: any) => b.createdAt.localeCompare(a.createdAt));
+    }
+    return [];
   }
 
   /** テンプレート取得 */
-  getTemplate(id: string): DocumentTemplate | null {
-    const metaPath = path.join(TEMPLATES_DIR, id, 'metadata.json');
-    if (!fs.existsSync(metaPath)) return null;
-    return JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+  async getTemplate(id: string): Promise<DocumentTemplate | null> {
+    if (isSupabaseAvailable() && this.tenantId) {
+      try {
+        const { data } = await getSupabase().from('secretary_templates').select('*').eq('id', id).single();
+        if (data) return { id: data.id, name: data.name, type: data.type, templateFile: data.template_file, fields: data.fields || [], createdAt: data.created_at };
+      } catch { /* not found */ }
+    }
+    // ファイルフォールバック（Supabase未接続時のみ）
+    if (!isSupabaseAvailable()) {
+      const metaPath = path.join(TEMPLATES_DIR, id, 'metadata.json');
+      if (fs.existsSync(metaPath)) return JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+    }
+    return null;
   }
 
   /** テンプレート作成（非同期: プレビュー画像生成のため） */
@@ -185,7 +225,22 @@ export class SecretaryService {
       createdAt: new Date().toISOString(),
     };
 
+    // ファイルシステムにも保存（PDF生成用、MID-Bで廃止予定）
     fs.writeFileSync(path.join(dir, 'metadata.json'), JSON.stringify(template, null, 2));
+
+    // Supabaseにメタデータ保存
+    if (isSupabaseAvailable() && this.tenantId) {
+      try {
+        // layout.jsonがあれば読み込み
+        const layoutPath = path.join(dir, 'layout.json');
+        const layout = fs.existsSync(layoutPath) ? JSON.parse(fs.readFileSync(layoutPath, 'utf-8')) : null;
+        await getSupabase().from('secretary_templates').insert({
+          id: template.id, tenant_id: this.tenantId, name: template.name, type: template.type,
+          template_file: template.templateFile, fields: template.fields, layout,
+        });
+      } catch (e) { logger.warn('テンプレートDB保存失敗:', e); }
+    }
+
     logger.info(`テンプレート作成: ${name} (${type})`);
     return template;
   }

@@ -258,6 +258,8 @@ app.use((req, res, next) => {
   taskService.setTenantId(currentTid);
   planAnalysisService.setTenantId(currentTid);
   analysisStore.setTenantId(currentTid);
+  secretaryService.setTenantId(currentTid);
+  setBillingTenantId(currentTid);
 
   // 認証不要パス
   const p = req.path;
@@ -1841,14 +1843,14 @@ import { renderSecretaryPageHTML, renderSecretaryFormHTML, renderGmailDraftHTML,
 import { secretaryService, loadCompanySettings, saveCompanySettings } from '../services/secretary-service.js';
 import type { CompanySettings } from '../services/secretary-service.js';
 import { gmailClient } from '../clients/google-gmail.js';
-import { getServiceList, loadBillingConfigs, saveBillingConfig, getBillingConfig, calcInvoiceDateFromConfig, calcDueDateFromConfig, detectInvoiceTasksFromGoogle } from '../services/secretary-auto.js';
+import { getServiceList, loadBillingConfigs, saveBillingConfig, getBillingConfig, calcInvoiceDateFromConfig, calcDueDateFromConfig, detectInvoiceTasksFromGoogle, setBillingTenantId } from '../services/secretary-auto.js';
 import type { CustomerBilling } from '../services/secretary-auto.js';
 
 // 秘書AI：メインページ（Googleタスク検知付き）
-app.get('/agent/secretary', async (_req, res) => {
-  const templates = secretaryService.listTemplates();
+app.get('/agent/secretary', async (req, res) => {
+  const templates = await secretaryService.listTemplates();
   const documents = secretaryService.listDocuments();
-  const billingConfigs = loadBillingConfigs();
+  const billingConfigs = await loadBillingConfigs();
   let detectedTasks: Array<{ title: string; customerName: string }> = [];
 
   if (isDemoMode()) {
@@ -1865,10 +1867,10 @@ app.get('/agent/secretary', async (_req, res) => {
       } catch { /* skip */ }
     }
     // デモ用会社設定
-    const cs = loadCompanySettings();
+    const cs = await loadCompanySettings(getActiveTenantId(req) || undefined);
     if (!cs || !cs.companyName) {
       const demoProfile = getDemoProfile();
-      saveCompanySettings({
+      await saveCompanySettings({
         companyName: demoProfile?.companyName || '株式会社フローリッシュ',
         postalCode: '100-0001',
         address: '東京都千代田区千代田1-1',
@@ -1879,11 +1881,11 @@ app.get('/agent/secretary', async (_req, res) => {
         accountType: '普通預金',
         accountNumber: '1234567',
         accountHolder: 'カ）フローリッシュ',
-      });
+      }, getActiveTenantId(req) || undefined);
     }
     // デモ用請求設定
     if (billingConfigs.length === 0) {
-      saveBillingConfig([
+      await saveBillingConfig([
         { customerName: '株式会社ABC', closingDay: 31, invoiceDay: 1, dueDateType: 'end_next' },
         { customerName: 'DEFコンサル', closingDay: 25, invoiceDay: 27, dueDateType: 'end_next' },
         { customerName: '株式会社GHI', closingDay: 31, invoiceDay: 5, dueDateType: 'end_next' },
@@ -1896,9 +1898,9 @@ app.get('/agent/secretary', async (_req, res) => {
     } catch { /* skip */ }
   }
 
-  const companySettings = loadCompanySettings();
-  const updatedTemplates = secretaryService.listTemplates();
-  const updatedConfigs = loadBillingConfigs();
+  const companySettings = await loadCompanySettings(getActiveTenantId(req) || undefined);
+  const updatedTemplates = await secretaryService.listTemplates();
+  const updatedConfigs = await loadBillingConfigs();
   res.send(renderSecretaryPageHTML({ templates: updatedTemplates, documents, detectedTasks, billingConfigs: updatedConfigs, companySettings }));
 });
 
@@ -1916,7 +1918,7 @@ app.post('/agent/secretary/company-settings', express.urlencoded({ extended: tru
     accountNumber: req.body.accountNumber || '',
     accountHolder: req.body.accountHolder || '',
   };
-  saveCompanySettings(settings);
+  await saveCompanySettings(settings, getActiveTenantId(req) || undefined);
   res.redirect('/agent/secretary');
 });
 
@@ -1936,7 +1938,7 @@ app.post('/agent/secretary/template/upload', upload.single('template'), async (r
   } catch (error) {
     logger.error('テンプレート登録エラー', error);
     res.send(renderSecretaryPageHTML({
-      templates: secretaryService.listTemplates(),
+      templates: await secretaryService.listTemplates(),
       documents: secretaryService.listDocuments(),
       error: `テンプレート登録に失敗: ${error instanceof Error ? error.message : '不明なエラー'}`,
     }));
@@ -1975,13 +1977,13 @@ app.post('/agent/secretary/billing-config', express.urlencoded({ extended: true 
     dueDateType: dues[i] || 'end_next',
   })).filter((c: CustomerBilling) => c.customerName.trim());
 
-  saveBillingConfig(configs);
+  await saveBillingConfig(configs);
   res.redirect('/agent/secretary');
 });
 
 // 秘書AI：書類作成フォーム（企業AI OS連携）
-app.get('/agent/secretary/create/:templateId', (req, res) => {
-  const template = secretaryService.getTemplate(req.params.templateId);
+app.get('/agent/secretary/create/:templateId', async (req, res) => {
+  const template = await secretaryService.getTemplate(req.params.templateId);
   if (!template) { res.redirect('/agent/secretary'); return; }
 
   const customerName = (req.query.customer as string) || '';
@@ -2003,7 +2005,7 @@ app.get('/agent/secretary/create/:templateId', (req, res) => {
 // 秘書AI：PDF生成（一括生成対応）
 app.post('/agent/secretary/generate', express.urlencoded({ extended: true }), async (req, res) => {
   try {
-    const template = secretaryService.getTemplate(req.body.templateId);
+    const template = await secretaryService.getTemplate(req.body.templateId);
     if (!template) { res.redirect('/agent/secretary'); return; }
 
     // フォームデータを整形
@@ -2111,14 +2113,14 @@ app.post('/agent/secretary/generate', express.urlencoded({ extended: true }), as
     } else {
       // 複数生成の場合はメインページに戻って結果を表示
       res.send(renderSecretaryPageHTML({
-        templates: secretaryService.listTemplates(),
+        templates: await secretaryService.listTemplates(),
         documents: secretaryService.listDocuments(),
         success: `${batchMonths}ヶ月分の${template.name}を生成しました（${generatedDocs.length}件）`,
       }));
     }
   } catch (error) {
     logger.error('PDF生成エラー', error);
-    const template = secretaryService.getTemplate(req.body.templateId);
+    const template = await secretaryService.getTemplate(req.body.templateId);
     if (template) {
       res.send(renderSecretaryFormHTML(template, `PDF生成に失敗: ${error instanceof Error ? error.message : '不明なエラー'}`));
     } else {
