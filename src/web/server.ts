@@ -2535,11 +2535,20 @@ app.post('/chat/send', express.json(), async (req, res) => {
       }
     }
 
-    // freeeデータをチャットコンテキストに設定
-    await loadFreeeContextForChat(getActiveTenantId(req) || undefined);
-
     const tid = getActiveTenantId(req) || undefined;
-    const result = await chatService.sendMessage(message, tid);
+
+    // freeeデータをチャットに直接渡す（シングルトン状態廃止）
+    await loadFreeeContextForChat(tid);
+    const freeeCtx = chatService.getFreeeContext();
+
+    // 月次トレンドデータも取得してAIに渡す
+    let trendMonths: any[] = [];
+    try {
+      const trend = await buildTrendData(undefined, undefined, 6, false, tid);
+      trendMonths = trend.months || [];
+    } catch { /* ignore */ }
+
+    const result = await chatService.sendMessage(message, tid, freeeCtx, trendMonths);
     res.json(result);
   } catch (error) {
     logger.error('チャットエラー', error);

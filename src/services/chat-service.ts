@@ -111,6 +111,10 @@ export class ChatService {
     this.freeeContext = data;
   }
 
+  getFreeeContext(): FreeeContextData | null {
+    return this.freeeContext;
+  }
+
   // ========== メモリ ==========
 
   async getMemory(tenantId?: TenantId): Promise<CompanyMemory> {
@@ -158,7 +162,7 @@ export class ChatService {
 
   // ========== チャット送信 ==========
 
-  async sendMessage(userMessage: string, tenantId?: TenantId): Promise<ChatResponse> {
+  async sendMessage(userMessage: string, tenantId?: TenantId, freeeContext?: FreeeContextData | null, trendMonths?: any[]): Promise<ChatResponse> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     const memory = await this.getMemory(tenantId);
@@ -167,7 +171,10 @@ export class ChatService {
     const analyses = tenantId ? await analysisStore.list(tenantId) : [];
     const latestAnalysis = analyses.length > 0 ? await analysisStore.get(analyses[0].id) : null;
 
-    const systemPrompt = await this.buildSystemPrompt(memory, latestAnalysis, tenantId);
+    // freeeContextは引数で受け取る（シングルトン状態廃止）
+    if (freeeContext !== undefined) this.freeeContext = freeeContext;
+
+    const systemPrompt = await this.buildSystemPrompt(memory, latestAnalysis, tenantId, trendMonths);
 
     // OpenAI messages → Gemini contents 変換マッピング:
     // - OpenAI system → Gemini systemInstruction
@@ -208,16 +215,23 @@ export class ChatService {
     return { reply: assistantMessage, proposals: [] };
   }
 
-  private async buildSystemPrompt(memory: CompanyMemory, latestAnalysis: any, tenantId?: TenantId): Promise<string> {
+  private async buildSystemPrompt(memory: CompanyMemory, latestAnalysis: any, tenantId?: TenantId, trendMonths?: any[]): Promise<string> {
     let osContext = '';
     try { osContext = await buildOSContext(tenantId); } catch { /* ignore */ }
 
     let prompt = `あなたは「AI CFO」です。中小企業の経営者のための財務・経営アドバイザーとして会話してください。
 
+【最重要ルール】
+- このプロンプトには、freee会計システムから取得した実際の財務データが含まれています
+- 質問に対しては、必ずこの実データを元に具体的な数値で回答してください
+- 「データにアクセスできない」「未来のデータは分からない」等の回答は禁止です
+- データが提供されている場合は、それが実際の会計データであることを前提に分析してください
+- 今日の日付は ${new Date().toISOString().split('T')[0]} です
+
 【あなたの役割】
 - 経営者の相談相手として、財務・経理・資金繰り・銀行対策・事業計画に関する質問に答える
 - 専門用語を使いすぎず、経営者が理解しやすい言葉で説明する
-- 具体的な数値を交えて回答する
+- 提供されたfreeeデータから具体的な数値を引用して回答する
 - 不明な点は正直に「わかりません」と言い、推測する場合はその旨を明記する
 - 法的な判断や税務の最終判断は専門家への相談を勧める
 
@@ -280,6 +294,18 @@ export class ChatService {
         if (ctx.bs.totalAssets > 0) prompt += `- 自己資本比率: ${(ctx.bs.netAssets / ctx.bs.totalAssets * 100).toFixed(1)}%\n`;
         if (ctx.bs.currentLiabilities > 0) prompt += `- 流動比率: ${(ctx.bs.currentAssets / ctx.bs.currentLiabilities * 100).toFixed(1)}%\n`;
       }
+    }
+
+    // 月次推移データ（トレンド）
+    if (trendMonths && trendMonths.length > 0) {
+      const fmt = (n: number) => new Intl.NumberFormat('ja-JP').format(n);
+      prompt += `\n【月次推移データ（直近${trendMonths.length}ヶ月）】\n`;
+      prompt += `| 年月 | 売上高 | 売上原価 | 粗利 | 販管費 | 営業利益 | 経常利益 | 現預金 |\n`;
+      prompt += `|------|--------|----------|------|--------|----------|----------|--------|\n`;
+      for (const m of trendMonths) {
+        prompt += `| ${m.year}/${m.month} | ${fmt(m.revenue)} | ${fmt(m.costOfSales)} | ${fmt(m.grossProfit)} | ${fmt(m.sgaExpenses)} | ${fmt(m.operatingIncome)} | ${fmt(m.ordinaryIncome)} | ${fmt(m.cashAndDeposits)} |\n`;
+      }
+      prompt += `\nこのデータは実際のfreee会計データです。質問にはこのデータを元に具体的な数値で回答してください。\n`;
     }
 
     // 学習済み知見
