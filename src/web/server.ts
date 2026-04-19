@@ -765,10 +765,9 @@ async function buildTrendData(endYear?: number, endMonth?: number, monthCount: n
       setCache(cacheKey, trend);
 
       // freeeデータをSupabaseに自動蓄積
-      if (isSupabaseAvailable()) {
+      if (isSupabaseAvailable() && tenantId) {
         for (const month of trend.months) {
-          // TODO: Phase 3でリクエストからtenantIdを取得する仕組みに変更
-          // repo.upsertMonthlyActual(asTenantId(tenantId), month).catch(e => logger.warn('Supabase蓄積失敗:', e));
+          repo.upsertMonthlyActual(tenantId, month).catch(e => logger.warn('Supabase蓄積失敗:', e));
         }
       }
 
@@ -2547,7 +2546,10 @@ app.post('/chat/send', express.json(), async (req, res) => {
     try {
       const trend = await buildTrendData(undefined, undefined, 6, false, tid);
       trendMonths = trend.months || [];
-    } catch { /* ignore */ }
+      logger.info(`チャット: トレンドデータ取得 ${trendMonths.length}ヶ月分`);
+    } catch (e) {
+      logger.warn('チャット: トレンドデータ取得失敗:', e instanceof Error ? e.message : e);
+    }
 
     const result = await chatService.sendMessage(message, tid, freeeCtx, trendMonths, req.session.user?.id);
     res.json(result);
@@ -2606,6 +2608,12 @@ async function loadFreeeContextForChat(tenantId?: TenantId): Promise<void> {
     const currentPL = parsePLResponse(rawData.currentMonthPL, targetYear, targetMonth);
     const currentBS = parseBSResponse(rawData.currentMonthBS, targetYear, targetMonth);
 
+    // 費用科目内訳（上位10件）
+    const expenseBreakdown = (currentPL.expenseBreakdown || []).slice(0, 10).map((e: any) => ({
+      name: e.name || e.accountName,
+      amount: e.amount,
+    }));
+
     const contextData = {
       companyName,
       currentMonth: { year: targetYear, month: targetMonth },
@@ -2617,6 +2625,7 @@ async function loadFreeeContextForChat(tenantId?: TenantId): Promise<void> {
         operatingIncome: currentPL.operatingIncome,
         ordinaryIncome: currentPL.ordinaryIncome,
       },
+      expenseBreakdown,
       bs: {
         cashAndDeposits: currentBS.cashAndDeposits,
         currentAssets: currentBS.currentAssets,

@@ -293,6 +293,13 @@ export class ChatService {
         if (ctx.bs.totalAssets > 0) prompt += `- 自己資本比率: ${(ctx.bs.netAssets / ctx.bs.totalAssets * 100).toFixed(1)}%\n`;
         if (ctx.bs.currentLiabilities > 0) prompt += `- 流動比率: ${(ctx.bs.currentAssets / ctx.bs.currentLiabilities * 100).toFixed(1)}%\n`;
       }
+      // 費用科目内訳
+      if ((ctx as any).expenseBreakdown && (ctx as any).expenseBreakdown.length > 0) {
+        prompt += `\n【費用科目の内訳（上位）】\n`;
+        for (const e of (ctx as any).expenseBreakdown) {
+          prompt += `- ${e.name}: ${fmt(e.amount)}円\n`;
+        }
+      }
     }
 
     // 月次推移データ（トレンド）
