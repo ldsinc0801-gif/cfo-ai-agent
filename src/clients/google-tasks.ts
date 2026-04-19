@@ -3,6 +3,9 @@ import fs from 'fs';
 import path from 'path';
 import { logger } from '../utils/logger.js';
 
+// TODO: GoogleトークンをSupabaseに保存してテナント分離する
+// 現在はdata/google-token.jsonにグローバル保存（マルチテナント非対応）
+// users テーブルに google_access_token / google_refresh_token カラムは既に存在
 const TOKEN_FILE = path.resolve('data/google-token.json');
 
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';

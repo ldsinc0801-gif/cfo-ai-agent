@@ -506,6 +506,9 @@ const upload = multer({
   limits: { fileSize: 200 * 1024 * 1024 },  // 動画対応のため200MB
 });
 
+// TODO: freeeトークンをSupabaseに保存してテナント分離する
+// 現在はdata/freee-token.jsonにグローバル保存（マルチテナント非対応）
+// users.google_access_token等のカラムは既存だが、freee用カラムは未作成
 /** freeeトークンが保存されているか */
 function getFreeeToken(): { access_token: string; refresh_token: string; company_id?: number; company_name?: string } | null {
   const tokenPath = path.resolve('data/freee-token.json');
