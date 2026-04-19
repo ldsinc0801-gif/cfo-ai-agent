@@ -122,8 +122,8 @@ app.use(session({
 
 // === 認証ルート（ミドルウェアの前に定義） ===
 
-// JSON body parser（ログインフォーム等）
-app.use(express.urlencoded({ extended: false }));
+// Body parser（extended: trueでcfg_name[]等の配列記法をサポート）
+app.use(express.urlencoded({ extended: true }));
 
 // ログインページ
 app.get('/login', (req, res) => {
@@ -1964,17 +1964,13 @@ app.post('/agent/secretary/documents/delete-all', async (_req, res) => {
 });
 
 // 秘書AI：顧客別請求設定の保存
-app.post('/agent/secretary/billing-config', express.urlencoded({ extended: true }), async (req, res) => {
-  // [DEBUG] 一時デバッグログ（原因特定後に削除）
-  const debugTenantId = getActiveTenantId(req);
-  logger.info(`[DEBUG billing-config] POST received tenantId=${debugTenantId} userId=${req.session.user?.id} bodyKeys=${Object.keys(req.body || {}).join(',')}`);
-
-  const names = Array.isArray(req.body.cfg_name) ? req.body.cfg_name : [req.body.cfg_name].filter(Boolean);
-  const closings = Array.isArray(req.body.cfg_closing) ? req.body.cfg_closing : [req.body.cfg_closing].filter(Boolean);
-  const invoices = Array.isArray(req.body.cfg_invoice) ? req.body.cfg_invoice : [req.body.cfg_invoice].filter(Boolean);
-  const dues = Array.isArray(req.body.cfg_due) ? req.body.cfg_due : [req.body.cfg_due].filter(Boolean);
-
-  logger.info(`[DEBUG billing-config] parsed names=${JSON.stringify(names)} closings=${JSON.stringify(closings)}`);
+app.post('/agent/secretary/billing-config', async (req, res) => {
+  // cfg_name[] と cfg_name の両方に対応（Express body-parser互換）
+  const toArray = (v: any) => Array.isArray(v) ? v : (v ? [v] : []);
+  const names = toArray(req.body.cfg_name || req.body['cfg_name[]']);
+  const closings = toArray(req.body.cfg_closing || req.body['cfg_closing[]']);
+  const invoices = toArray(req.body.cfg_invoice || req.body['cfg_invoice[]']);
+  const dues = toArray(req.body.cfg_due || req.body['cfg_due[]']);
 
   const configs: CustomerBilling[] = names.map((name: string, i: number) => ({
     customerName: name,
@@ -1983,15 +1979,8 @@ app.post('/agent/secretary/billing-config', express.urlencoded({ extended: true 
     dueDateType: dues[i] || 'end_next',
   })).filter((c: CustomerBilling) => c.customerName.trim());
 
-  logger.info(`[DEBUG billing-config] saving ${configs.length} items, _billingTenantId will be checked inside saveBillingConfig`);
-
-  try {
-    await saveBillingConfig(configs);
-    logger.info(`[DEBUG billing-config] save completed successfully`);
-  } catch (e) {
-    logger.error(`[DEBUG billing-config] save FAILED`, e);
-  }
-
+  await saveBillingConfig(configs);
+  logger.info(`請求設定を保存: ${configs.length}件`);
   res.redirect('/agent/secretary');
 });
 
