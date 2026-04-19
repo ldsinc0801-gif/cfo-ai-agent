@@ -643,8 +643,13 @@ export class SecretaryService {
     if (fs.existsSync(layoutPath)) {
       L = JSON.parse(fs.readFileSync(layoutPath, 'utf-8'));
     } else if (fs.existsSync(convertedPdf)) {
-      L = this.detectPdfLayout(convertedPdf);
-      fs.writeFileSync(layoutPath, JSON.stringify(L, null, 2));
+      try {
+        L = this.detectPdfLayout(convertedPdf);
+        fs.writeFileSync(layoutPath, JSON.stringify(L, null, 2));
+      } catch (e) {
+        logger.warn(`PDFレイアウト検出スキップ（PDF生成は続行）: ${e instanceof Error ? e.message : e}`);
+        L = {};
+      }
     } else {
       L = {};
     }
@@ -901,8 +906,13 @@ body { font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Noto Sans JP', sa
     if (fs.existsSync(layoutPath)) {
       L = JSON.parse(fs.readFileSync(layoutPath, 'utf-8'));
     } else {
-      L = this.detectPdfLayout(convertedPdf);
-      fs.writeFileSync(layoutPath, JSON.stringify(L, null, 2));
+      try {
+        L = this.detectPdfLayout(convertedPdf);
+        fs.writeFileSync(layoutPath, JSON.stringify(L, null, 2));
+      } catch (e) {
+        logger.warn(`PDFレイアウト検出スキップ: ${e instanceof Error ? e.message : e}`);
+        L = {};
+      }
     }
 
     // 宛名

@@ -144,7 +144,7 @@ export async function detectInvoiceTasksFromGoogle(): Promise<{
   tasks: Array<{ title: string; customerName: string; notes?: string }>;
 }> {
   try {
-    if (!googleTasksClient.isAvailable()) return { tasks: [] };
+    if (!googleTasksClient.isConfigured()) return { tasks: [] };
 
     const lists = await googleTasksClient.getTaskLists();
     const allTasks: Array<{ title: string; customerName: string; notes?: string }> = [];

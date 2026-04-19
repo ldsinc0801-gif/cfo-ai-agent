@@ -2122,7 +2122,7 @@ app.post('/agent/secretary/generate', express.urlencoded({ extended: true }), as
     logger.error('PDF生成エラー', error);
     const template = await secretaryService.getTemplate(req.body.templateId);
     if (template) {
-      res.send(renderSecretaryFormHTML(template, `PDF生成に失敗: ${error instanceof Error ? error.message : '不明なエラー'}`));
+      res.send(renderSecretaryFormHTML({ template, serviceList: [], error: `PDF生成に失敗: ${error instanceof Error ? error.message : '不明なエラー'}` }));
     } else {
       res.redirect('/agent/secretary');
     }
