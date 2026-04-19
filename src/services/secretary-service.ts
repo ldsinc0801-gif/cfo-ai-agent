@@ -1,9 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from '../utils/logger.js';
-import { getSupabase } from '../clients/supabase.js';
+import { getSupabase, getSupabaseAdmin, isStorageAvailable } from '../clients/supabase.js';
 import { isSupabaseAvailable } from '../clients/supabase.js';
 import type { TenantId } from '../types/auth.js';
+
+const STORAGE_BUCKET = 'secretary-files';
 
 const TEMPLATES_DIR = path.resolve('data/secretary/templates');
 const DOCUMENTS_DIR = path.resolve('data/secretary/documents');
@@ -587,17 +589,40 @@ export class SecretaryService {
       await this.generateFromHTML(template, data, pdfPath);
     }
 
+    // Supabase Storageにアップロード
+    let storagePath = '';
+    if (isStorageAvailable() && this.tenantId && fs.existsSync(pdfPath)) {
+      storagePath = `${this.tenantId}/documents/${docId}.pdf`;
+      try {
+        const admin = getSupabaseAdmin()!;
+        const pdfBuffer = fs.readFileSync(pdfPath);
+        const { error } = await admin.storage.from(STORAGE_BUCKET).upload(storagePath, pdfBuffer, { contentType: 'application/pdf', upsert: true });
+        if (error) logger.warn('Storage upload失敗:', error.message);
+        else logger.info(`PDF Storageアップロード: ${storagePath}`);
+      } catch (e) { logger.warn('Storageアップロード失敗:', e); }
+    }
+
     const doc: GeneratedDocument = {
       id: docId,
       templateId: template.id,
       templateName: template.name,
       type: template.type,
       data,
-      pdfPath,
+      pdfPath: storagePath || pdfPath,
       createdAt: new Date().toISOString(),
     };
 
-    fs.writeFileSync(path.join(DOCUMENTS_DIR, `${docId}.json`), JSON.stringify(doc, null, 2));
+    // Supabase DBにメタデータ保存
+    if (isSupabaseAvailable() && this.tenantId) {
+      try {
+        await getSupabase().from('secretary_documents').insert({
+          id: docId, tenant_id: this.tenantId, template_id: template.id,
+          template_name: template.name, type: template.type, data,
+          storage_path: storagePath || null,
+        });
+      } catch (e) { logger.warn('ドキュメントDB保存失敗:', e); }
+    }
+
     logger.info(`PDF生成完了: ${docId} (${template.name})`);
     return doc;
   }
@@ -1134,44 +1159,71 @@ body { font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Noto Sans JP', sa
   }
 
   /** 生成済みドキュメント取得 */
-  getDocument(docId: string): GeneratedDocument | null {
-    const metaPath = path.join(DOCUMENTS_DIR, `${docId}.json`);
-    if (!fs.existsSync(metaPath)) return null;
-    return JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+  async getDocument(docId: string): Promise<GeneratedDocument | null> {
+    if (isSupabaseAvailable() && this.tenantId) {
+      try {
+        const { data } = await getSupabase().from('secretary_documents').select('*').eq('id', docId).single();
+        if (data) return { id: data.id, templateId: data.template_id, templateName: data.template_name, type: data.type, data: data.data, pdfPath: data.storage_path || '', createdAt: data.created_at };
+      } catch { /* not found */ }
+    }
+    return null;
   }
 
-  /** 生成済みドキュメント一覧 */
-  deleteDocument(id: string): void {
-    const jsonPath = path.join(DOCUMENTS_DIR, `${id}.json`);
-    if (fs.existsSync(jsonPath)) {
-      const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
-      // PDFも削除
-      if (doc.pdfPath && fs.existsSync(doc.pdfPath)) {
-        fs.unlinkSync(doc.pdfPath);
+  /** ドキュメント削除 */
+  async deleteDocument(id: string): Promise<void> {
+    if (isSupabaseAvailable()) {
+      // Storage削除
+      if (isStorageAvailable() && this.tenantId) {
+        try {
+          const storagePath = `${this.tenantId}/documents/${id}.pdf`;
+          await getSupabaseAdmin()!.storage.from(STORAGE_BUCKET).remove([storagePath]);
+        } catch { /* ignore */ }
       }
-      fs.unlinkSync(jsonPath);
+      await getSupabase().from('secretary_documents').delete().eq('id', id);
     }
   }
 
-  deleteAllDocuments(): number {
-    if (!fs.existsSync(DOCUMENTS_DIR)) return 0;
-    const files = fs.readdirSync(DOCUMENTS_DIR).filter(f => f.endsWith('.json'));
-    for (const f of files) {
-      const doc = JSON.parse(fs.readFileSync(path.join(DOCUMENTS_DIR, f), 'utf-8'));
-      if (doc.pdfPath && fs.existsSync(doc.pdfPath)) {
-        fs.unlinkSync(doc.pdfPath);
-      }
-      fs.unlinkSync(path.join(DOCUMENTS_DIR, f));
+  async deleteAllDocuments(): Promise<number> {
+    if (!isSupabaseAvailable() || !this.tenantId) return 0;
+    const { data } = await getSupabase().from('secretary_documents').select('id').eq('tenant_id', this.tenantId);
+    if (!data || data.length === 0) return 0;
+    // Storage削除
+    if (isStorageAvailable()) {
+      const paths = data.map((d: any) => `${this.tenantId}/documents/${d.id}.pdf`);
+      try { await getSupabaseAdmin()!.storage.from(STORAGE_BUCKET).remove(paths); } catch { /* ignore */ }
     }
-    return files.length;
+    await getSupabase().from('secretary_documents').delete().eq('tenant_id', this.tenantId);
+    return data.length;
   }
 
-  listDocuments(): GeneratedDocument[] {
-    if (!fs.existsSync(DOCUMENTS_DIR)) return [];
-    return fs.readdirSync(DOCUMENTS_DIR)
-      .filter(f => f.endsWith('.json'))
-      .map(f => JSON.parse(fs.readFileSync(path.join(DOCUMENTS_DIR, f), 'utf-8')))
-      .sort((a: GeneratedDocument, b: GeneratedDocument) => b.createdAt.localeCompare(a.createdAt));
+  async listDocuments(): Promise<GeneratedDocument[]> {
+    if (isSupabaseAvailable() && this.tenantId) {
+      try {
+        const { data } = await getSupabase().from('secretary_documents').select('*').eq('tenant_id', this.tenantId).order('created_at', { ascending: false });
+        return (data || []).map((r: any) => ({ id: r.id, templateId: r.template_id, templateName: r.template_name, type: r.type, data: r.data, pdfPath: r.storage_path || '', createdAt: r.created_at }));
+      } catch { /* ignore */ }
+    }
+    return [];
+  }
+
+  /** StorageからPDFをダウンロード（署名付きURL、有効期限1時間） */
+  async getDocumentDownloadUrl(storagePath: string): Promise<string | null> {
+    if (!isStorageAvailable() || !storagePath) return null;
+    try {
+      const { data, error } = await getSupabaseAdmin()!.storage.from(STORAGE_BUCKET).createSignedUrl(storagePath, 3600);
+      if (error) { logger.warn('署名付きURL生成失敗:', error.message); return null; }
+      return data.signedUrl;
+    } catch { return null; }
+  }
+
+  /** StorageからPDFバイナリを直接取得 */
+  async getDocumentBuffer(storagePath: string): Promise<Buffer | null> {
+    if (!isStorageAvailable() || !storagePath) return null;
+    try {
+      const { data, error } = await getSupabaseAdmin()!.storage.from(STORAGE_BUCKET).download(storagePath);
+      if (error || !data) return null;
+      return Buffer.from(await data.arrayBuffer());
+    } catch { return null; }
   }
 }
 

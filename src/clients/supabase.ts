@@ -3,6 +3,7 @@ import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 
 let supabase: SupabaseClient | null = null;
+let supabaseAdmin: SupabaseClient | null = null;
 
 export function getSupabase(): SupabaseClient {
   if (!supabase) {
@@ -15,6 +16,18 @@ export function getSupabase(): SupabaseClient {
   return supabase;
 }
 
+/** Storage操作用のservice_roleクライアント（RLSバイパス） */
+export function getSupabaseAdmin(): SupabaseClient | null {
+  if (!supabaseAdmin && config.supabase.url && config.supabase.serviceRoleKey) {
+    supabaseAdmin = createClient(config.supabase.url, config.supabase.serviceRoleKey);
+  }
+  return supabaseAdmin;
+}
+
 export function isSupabaseAvailable(): boolean {
   return !!(config.supabase.url && config.supabase.anonKey);
+}
+
+export function isStorageAvailable(): boolean {
+  return !!(config.supabase.url && config.supabase.serviceRoleKey);
 }

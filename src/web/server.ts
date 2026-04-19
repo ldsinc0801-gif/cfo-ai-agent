@@ -1849,7 +1849,7 @@ import type { CustomerBilling } from '../services/secretary-auto.js';
 // 秘書AI：メインページ（Googleタスク検知付き）
 app.get('/agent/secretary', async (req, res) => {
   const templates = await secretaryService.listTemplates();
-  const documents = secretaryService.listDocuments();
+  const documents = await secretaryService.listDocuments();
   const billingConfigs = await loadBillingConfigs();
   let detectedTasks: Array<{ title: string; customerName: string }> = [];
 
@@ -1939,7 +1939,7 @@ app.post('/agent/secretary/template/upload', upload.single('template'), async (r
     logger.error('テンプレート登録エラー', error);
     res.send(renderSecretaryPageHTML({
       templates: await secretaryService.listTemplates(),
-      documents: secretaryService.listDocuments(),
+      documents: await secretaryService.listDocuments(),
       error: `テンプレート登録に失敗: ${error instanceof Error ? error.message : '不明なエラー'}`,
     }));
   }
@@ -1952,13 +1952,13 @@ app.post('/agent/secretary/template/:id/delete', (req, res) => {
 });
 
 // 秘書AI：書類削除
-app.post('/agent/secretary/document/:id/delete', (req, res) => {
-  secretaryService.deleteDocument(req.params.id);
+app.post('/agent/secretary/document/:id/delete', async (req, res) => {
+  await secretaryService.deleteDocument(req.params.id);
   res.redirect('/agent/secretary');
 });
 
-app.post('/agent/secretary/documents/delete-all', (_req, res) => {
-  const count = secretaryService.deleteAllDocuments();
+app.post('/agent/secretary/documents/delete-all', async (_req, res) => {
+  const count = await secretaryService.deleteAllDocuments();
   logger.info(`作成済み書類を全件削除: ${count}件`);
   res.redirect('/agent/secretary');
 });
@@ -2114,7 +2114,7 @@ app.post('/agent/secretary/generate', express.urlencoded({ extended: true }), as
       // 複数生成の場合はメインページに戻って結果を表示
       res.send(renderSecretaryPageHTML({
         templates: await secretaryService.listTemplates(),
-        documents: secretaryService.listDocuments(),
+        documents: await secretaryService.listDocuments(),
         success: `${batchMonths}ヶ月分の${template.name}を生成しました（${generatedDocs.length}件）`,
       }));
     }
@@ -2130,22 +2130,22 @@ app.post('/agent/secretary/generate', express.urlencoded({ extended: true }), as
 });
 
 // 秘書AI：PDFダウンロード
-app.get('/agent/secretary/download/:docId', (req, res) => {
-  const doc = secretaryService.getDocument(req.params.docId);
+app.get('/agent/secretary/download/:docId', async (req, res) => {
+  const doc = await secretaryService.getDocument(req.params.docId);
   if (!doc || !fs.existsSync(doc.pdfPath)) { res.status(404).send('PDFが見つかりません'); return; }
   res.download(doc.pdfPath, `${doc.templateName}_${doc.data.customerName || 'document'}.pdf`);
 });
 
 // 秘書AI：Gmail下書きフォーム
-app.get('/agent/secretary/gmail/:docId', (req, res) => {
-  const doc = secretaryService.getDocument(req.params.docId);
+app.get('/agent/secretary/gmail/:docId', async (req, res) => {
+  const doc = await secretaryService.getDocument(req.params.docId);
   if (!doc) { res.redirect('/agent/secretary'); return; }
   res.send(renderGmailDraftHTML(doc));
 });
 
 // 秘書AI：Gmail下書き送信
 app.post('/agent/secretary/gmail-draft', express.urlencoded({ extended: true }), async (req, res) => {
-  const doc = secretaryService.getDocument(req.body.docId);
+  const doc = await secretaryService.getDocument(req.body.docId);
   if (!doc) { res.redirect('/agent/secretary'); return; }
 
   try {
