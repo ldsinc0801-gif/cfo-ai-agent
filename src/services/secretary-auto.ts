@@ -64,20 +64,26 @@ const BILLING_CONFIG_PATH = path.resolve('data/secretary/billing-config.json');
 
 /** 顧客ごとの請求設定を保存 */
 export async function saveBillingConfig(configs: CustomerBilling[]): Promise<void> {
+  // [DEBUG] 一時デバッグログ（原因特定後に削除）
+  logger.info(`[DEBUG saveBillingConfig] supabase=${isSupabaseAvailable()} tenantId=${_billingTenantId} configs=${configs.length}`);
+
   if (isSupabaseAvailable() && _billingTenantId) {
     try {
-      // 既存を削除してから再挿入
-      await getSupabase().from('billing_configs').delete().eq('tenant_id', _billingTenantId);
+      const delResult = await getSupabase().from('billing_configs').delete().eq('tenant_id', _billingTenantId);
+      logger.info(`[DEBUG saveBillingConfig] delete result error=${delResult.error?.message || 'none'}`);
       if (configs.length > 0) {
-        await getSupabase().from('billing_configs').insert(
+        const insResult = await getSupabase().from('billing_configs').insert(
           configs.map(c => ({
             tenant_id: _billingTenantId, customer_name: c.customerName,
             closing_day: c.closingDay, invoice_day: c.invoiceDay, due_date_type: c.dueDateType,
           }))
         );
+        logger.info(`[DEBUG saveBillingConfig] insert result error=${insResult.error?.message || 'none'}`);
       }
       return;
     } catch (e) { logger.warn('請求設定DB保存失敗:', e); }
+  } else {
+    logger.warn(`[DEBUG saveBillingConfig] SKIPPED - supabase=${isSupabaseAvailable()} tenantId=${_billingTenantId}`);
   }
 }
 
