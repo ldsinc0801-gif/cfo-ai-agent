@@ -87,15 +87,16 @@ ${isSuperAdmin ? `
   </div>
 </div>
 
-<!-- 財務管理者追加モーダル -->
+<!-- 財務管理者追加モーダル（既存FA一覧から選択） -->
 <div class="modal-overlay" id="addFAModal" style="display:none" onclick="if(event.target===this)hideModal('addFAModal')">
   <div class="modal-card">
     <h3>財務管理者を追加</h3>
     <p class="muted" id="addFATenantName" style="margin-bottom:16px"></p>
-    <div class="fg"><label>メールアドレス <span style="color:#ef4444">*</span></label>
-      <input type="email" id="faEmail" placeholder="tanaka@example.com" autocomplete="off"></div>
-    <div class="fg"><label>名前</label>
-      <input type="text" id="faName" placeholder="田中太郎" autocomplete="off"></div>
+    <div class="fg"><label>テナント財務管理者を選択 <span style="color:#ef4444">*</span></label>
+      <select id="faSelectUser" class="form-select-full">
+        <option value="">-- 選択してください --</option>
+      </select>
+    </div>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="hideModal('addFAModal')">キャンセル</button>
       <button class="btn-primary" onclick="addFA()">追加</button>
@@ -205,6 +206,8 @@ ${isSuperAdmin ? `
 .link-checkbox{display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;cursor:pointer;transition:background .1s}
 .link-checkbox:hover{background:var(--bg)}
 .link-checkbox input{width:16px;height:16px}
+.form-select-full{width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;outline:none;background:var(--bg);cursor:pointer}
+.form-select-full:focus{border-color:var(--primary)}
 .role-admin{background:#d1fae5;color:#065f46}
 .role-emp{background:#f3f4f6;color:#6b7280}
 .act-btn{background:none;border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;color:var(--text2);font-family:inherit;transition:all .15s}
@@ -285,22 +288,32 @@ function createTenant(){
 function showAddFA(tid,tnm){
   curFATid=tid;
   document.getElementById('addFATenantName').textContent='対象: '+tnm;
-  document.getElementById('faEmail').value='';document.getElementById('faName').value='';
-  showModal('addFAModal');document.getElementById('faEmail').focus();
+  // 既存のテナント財務管理者をプルダウンに読み込み
+  var sel=document.getElementById('faSelectUser');
+  sel.innerHTML='<option value="">読み込み中...</option>';
+  fetch('/api/financial-admins').then(function(r){return r.json()}).then(function(d){
+    var fas=d.financialAdmins||[];
+    var html='<option value="">-- 選択してください --</option>';
+    fas.forEach(function(fa){
+      html+='<option value="'+fa.email+'">'+fa.name+' ('+fa.email+')</option>';
+    });
+    if(fas.length===0) html+='<option value="" disabled>財務管理者が登録されていません（先に上部で登録してください）</option>';
+    sel.innerHTML=html;
+  });
+  showModal('addFAModal');
 }
 function addFA(){
-  var em=document.getElementById('faEmail').value.trim(),nm=document.getElementById('faName').value.trim();
-  if(!em){window.__toast('メールアドレスを入力してください','error');return;}
+  var sel=document.getElementById('faSelectUser');
+  var em=sel.value;
+  if(!em){window.__toast('財務管理者を選択してください','error');return;}
+  var selectedText=sel.options[sel.selectedIndex].text;
+  var nm=selectedText.split(' (')[0]||'';
   fetch('/api/tenants/'+curFATid+'/financial-admin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:em,name:nm})})
     .then(function(r){return r.json()}).then(function(d){
       if(d.error){window.__toast(d.error,'error');return;}
       hideModal('addFAModal');
-      if(d.isExistingUser){
-        window.__toast(em+' を財務管理者として追加しました（既存ユーザー、パスワード変更なし）','success');
-      } else {
-        showPw(em+' を財務管理者として追加しました。',d.initialPassword);
-      }
-      loadTenants();
+      window.__toast(nm+' をこのテナントの財務管理者として追加しました','success');
+      loadTenants();loadFAUsers();
     });
 }
 
