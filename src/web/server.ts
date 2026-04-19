@@ -2135,8 +2135,29 @@ app.post('/agent/secretary/generate', express.urlencoded({ extended: true }), as
 // 秘書AI：PDFダウンロード
 app.get('/agent/secretary/download/:docId', async (req, res) => {
   const doc = await secretaryService.getDocument(req.params.docId);
-  if (!doc || !fs.existsSync(doc.pdfPath)) { res.status(404).send('PDFが見つかりません'); return; }
-  res.download(doc.pdfPath, `${doc.templateName}_${doc.data.customerName || 'document'}.pdf`);
+  if (!doc) { res.status(404).send('ドキュメントが見つかりません'); return; }
+
+  const fileName = `${doc.templateName}_${doc.data.customerName || 'document'}.pdf`;
+
+  // Storage パスがある場合 → Supabase Storage からダウンロード
+  if (doc.pdfPath && !doc.pdfPath.startsWith('/') && !doc.pdfPath.startsWith('data/')) {
+    const buffer = await secretaryService.getDocumentBuffer(doc.pdfPath);
+    if (buffer) {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+      res.send(buffer);
+      return;
+    }
+    logger.warn(`Storage PDFダウンロード失敗: ${doc.pdfPath}`);
+  }
+
+  // ローカルファイルフォールバック（Supabase未接続時）
+  if (fs.existsSync(doc.pdfPath)) {
+    res.download(doc.pdfPath, fileName);
+    return;
+  }
+
+  res.status(404).send('PDFが見つかりません');
 });
 
 // 秘書AI：Gmail下書きフォーム
@@ -2164,7 +2185,15 @@ app.post('/agent/secretary/gmail-draft', express.urlencoded({ extended: true }),
       return;
     }
 
-    const pdfContent = fs.readFileSync(doc.pdfPath);
+    // Storage or ローカルからPDFを取得
+    let pdfContent: Buffer;
+    if (doc.pdfPath && !doc.pdfPath.startsWith('/') && !doc.pdfPath.startsWith('data/')) {
+      const buf = await secretaryService.getDocumentBuffer(doc.pdfPath);
+      if (!buf) { res.send(renderGmailDraftHTML(doc, 'PDFファイルが見つかりません')); return; }
+      pdfContent = buf;
+    } else {
+      pdfContent = fs.readFileSync(doc.pdfPath);
+    }
     const filename = `${doc.templateName}_${doc.data.customerName || 'document'}.pdf`;
 
     await gmailClient.createDraft(
