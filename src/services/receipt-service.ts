@@ -1,4 +1,3 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { usageTracker } from './usage-tracker.js';
@@ -36,39 +35,45 @@ export interface ReceiptAnalysis {
  * 画像・PDF・動画に対応。Geminiのマルチモーダル機能を活用。
  */
 export class ReceiptService {
-  private genAI: GoogleGenerativeAI | null = null;
+  private ai: any = null;
 
   constructor() {
-    const apiKey = config.ai.geminiApiKey;
-    if (apiKey) {
-      this.genAI = new GoogleGenerativeAI(apiKey);
-      logger.info('Gemini APIクライアントを初期化しました');
+    const project = config.ai.gcpProject;
+    if (project) {
+      import('@google/genai').then(({ GoogleGenAI }) => {
+        this.ai = new GoogleGenAI({ vertexai: true, project, location: config.ai.geminiRegion });
+        logger.info('Gemini API (Vertex AI) クライアントを初期化しました');
+      }).catch(e => logger.error('Gemini SDK初期化失敗:', e));
     }
   }
 
   isAvailable(): boolean {
-    return this.genAI !== null;
+    return this.ai !== null;
   }
 
   /**
    * 画像（領収書・レシート）から仕訳データを生成
    */
   async analyzeReceiptImage(imageBuffer: Buffer, mimeType: string, fileName: string, industry?: string): Promise<ReceiptAnalysis> {
-    if (!this.genAI) throw new Error('GEMINI_API_KEYが未設定です');
+    if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`領収書画像を解析中（Gemini）: ${fileName}`);
 
-    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
     const base64 = imageBuffer.toString('base64');
     const prompt = await this.buildPrompt(industry);
 
-    const result = await model.generateContent([
-      { inlineData: { mimeType, data: base64 } },
-      { text: prompt },
-    ]);
+    const response = await this.ai!.models.generateContent({
+      model: config.ai.geminiModel,
+      contents: [
+        { role: 'user', parts: [
+          { inlineData: { mimeType, data: base64 } },
+          { text: prompt },
+        ]},
+      ],
+    });
 
-    const text = result.response.text();
-    this.recordUsage(result, '領収書解析(Gemini)');
+    const text = response.text || '';
+    this.recordUsage(response, '領収書解析(Gemini)');
     return this.parseResponse(text);
   }
 
@@ -76,21 +81,23 @@ export class ReceiptService {
    * PDFの領収書・請求書から仕訳データを生成
    */
   async analyzeReceiptPDF(pdfBuffer: Buffer, fileName: string, industry?: string): Promise<ReceiptAnalysis> {
-    if (!this.genAI) throw new Error('GEMINI_API_KEYが未設定です');
+    if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`領収書PDFを解析中（Gemini）: ${fileName}`);
 
-    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
     const base64 = pdfBuffer.toString('base64');
     const prompt = await this.buildPrompt(industry);
 
-    const result = await model.generateContent([
-      { inlineData: { mimeType: 'application/pdf', data: base64 } },
-      { text: prompt },
-    ]);
+    const response = await this.ai!.models.generateContent({
+      model: config.ai.geminiModel,
+      contents: [{ role: 'user', parts: [
+        { inlineData: { mimeType: 'application/pdf', data: base64 } },
+        { text: prompt },
+      ]}],
+    });
 
-    const text = result.response.text();
-    this.recordUsage(result, '領収書PDF解析(Gemini)');
+    const text = response.text || '';
+    this.recordUsage(response, '領収書PDF解析(Gemini)');
     return this.parseResponse(text);
   }
 
@@ -101,24 +108,26 @@ export class ReceiptService {
    * 動画内の領収書・レシートを自動認識して仕訳データを生成する。
    */
   async analyzeVideo(videoBuffer: Buffer, mimeType: string, fileName: string, industry?: string): Promise<ReceiptAnalysis> {
-    if (!this.genAI) throw new Error('GEMINI_API_KEYが未設定です');
+    if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`動画を解析中（Gemini）: ${fileName}`);
 
-    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
     const base64 = videoBuffer.toString('base64');
     const prompt = await this.buildPrompt(industry);
 
-    const result = await model.generateContent([
-      { inlineData: { mimeType, data: base64 } },
-      { text: `この動画に映っている領収書・レシート・請求書を全て読み取り、仕訳データを生成してください。
+    const response = await this.ai!.models.generateContent({
+      model: config.ai.geminiModel,
+      contents: [{ role: 'user', parts: [
+        { inlineData: { mimeType, data: base64 } },
+        { text: `この動画に映っている領収書・レシート・請求書を全て読み取り、仕訳データを生成してください。
 同じ書類が複数回映っている場合は1件にまとめてください。
 
 ${prompt}` },
-    ]);
+      ]}],
+    });
 
-    const text = result.response.text();
-    this.recordUsage(result, '動画解析(Gemini)');
+    const text = response.text || '';
+    this.recordUsage(response, '動画解析(Gemini)');
     return this.parseResponse(text);
   }
 
@@ -126,11 +135,10 @@ ${prompt}` },
    * 複数画像を一括解析（動画フレーム互換）
    */
   async analyzeVideoFrames(frames: { buffer: Buffer; mimeType: string }[], industry?: string): Promise<ReceiptAnalysis> {
-    if (!this.genAI) throw new Error('GEMINI_API_KEYが未設定です');
+    if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`画像${frames.length}枚を一括解析中（Gemini）...`);
 
-    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
     const prompt = await this.buildPrompt(industry);
 
     const parts = [
@@ -144,9 +152,12 @@ ${prompt}` },
 ${prompt}` },
     ];
 
-    const result = await model.generateContent(parts);
-    const text = result.response.text();
-    this.recordUsage(result, '複数画像解析(Gemini)');
+    const response = await this.ai!.models.generateContent({
+      model: config.ai.geminiModel,
+      contents: [{ role: 'user', parts }],
+    });
+    const text = response.text || '';
+    this.recordUsage(response, '複数画像解析(Gemini)');
     return this.parseResponse(text);
   }
 
@@ -154,15 +165,15 @@ ${prompt}` },
    * CSV（カード明細・銀行取引明細）から仕訳データを生成
    */
   async analyzeCSV(csvText: string, fileName: string, industry?: string): Promise<ReceiptAnalysis> {
-    if (!this.genAI) throw new Error('GEMINI_API_KEYが未設定です');
+    if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`CSV明細を解析中（Gemini）: ${fileName}`);
 
-    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
     const basePrompt = await this.buildPrompt(industry);
 
-    const result = await model.generateContent([
-      { text: `以下はクレジットカード明細または銀行取引明細のCSVデータです。
+    const response = await this.ai!.models.generateContent({
+      model: config.ai.geminiModel,
+      contents: `以下はクレジットカード明細または銀行取引明細のCSVデータです。
 各取引行を読み取り、仕訳データを生成してください。
 - 貸方（creditAccount）はカード明細なら「未払金」、銀行明細なら「普通預金」としてください
 - CSVのヘッダー行がある場合は自動判別してください
@@ -172,11 +183,11 @@ ${prompt}` },
 ${csvText}
 ===
 
-${basePrompt}` },
-    ]);
+${basePrompt}`,
+    });
 
-    const text = result.response.text();
-    this.recordUsage(result, 'CSV明細解析(Gemini)');
+    const text = response.text || '';
+    this.recordUsage(response, 'CSV明細解析(Gemini)');
     return this.parseResponse(text);
   }
 
@@ -282,9 +293,8 @@ ${basePrompt}` },
     entries: JournalEntry[],
     userMessage: string,
   ): Promise<{ corrections: Array<{ index: number; field: 'debitAccount' | 'creditAccount'; newValue: string }>; aiMessage: string }> {
-    if (!this.genAI) throw new Error('GEMINI_API_KEYが未設定です');
+    if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
-    const model = this.genAI.getGenerativeModel({ model: config.ai.geminiModel });
     const accountNames = getAllAccountNames();
 
     const entrySummary = entries.map((e, i) =>
@@ -318,9 +328,12 @@ ${userMessage}
 - 修正がない場合や理解できない場合は corrections を空配列にして message で理由を説明
 - JSONのみ返すこと`;
 
-    const result = await model.generateContent([{ text: prompt }]);
-    const text = result.response.text();
-    this.recordUsage(result, '仕訳修正解釈(Gemini)');
+    const response = await this.ai!.models.generateContent({
+      model: config.ai.geminiModel,
+      contents: prompt,
+    });
+    const text = response.text || '';
+    this.recordUsage(response, '仕訳修正解釈(Gemini)');
 
     try {
       const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, text];
@@ -345,9 +358,9 @@ ${userMessage}
     }
   }
 
-  private recordUsage(result: any, purpose: string): void {
+  private recordUsage(response: any, purpose: string): void {
     try {
-      const usage = result.response.usageMetadata;
+      const usage = response.usageMetadata;
       if (usage) {
         usageTracker.record(
           config.ai.geminiModel,

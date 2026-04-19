@@ -1024,7 +1024,7 @@ app.post('/plan/analyze-file', express.json(), async (req, res) => {
     return;
   }
   if (!planExtractService.isAvailable()) {
-    res.status(400).json({ error: 'GEMINI_API_KEYが未設定です' });
+    res.status(400).json({ error: 'Vertex AI の認証が未設定です' });
     return;
   }
   const filePath = path.join(uploadDir, filename);
@@ -1105,7 +1105,7 @@ app.post('/api/plan/targets/clear', (_req, res) => {
 app.post('/api/plan/analyze', express.json(), async (req, res) => {
   try {
     if (!planAnalysisService.isAvailable()) {
-      res.status(400).json({ error: 'ANTHROPIC_API_KEYが未設定です' });
+      res.status(400).json({ error: 'Vertex AI の認証が未設定です' });
       return;
     }
 
@@ -1172,7 +1172,7 @@ app.get('/api/plan/history', (_req, res) => {
 app.post('/api/learn', async (_req, res) => {
   try {
     if (!learningService.isAvailable()) {
-      res.status(400).json({ error: 'ANTHROPIC_API_KEYが未設定です' });
+      res.status(400).json({ error: 'Vertex AI の認証が未設定です' });
       return;
     }
     const result = await learningService.runLearningCycle();
@@ -1225,7 +1225,7 @@ app.post('/agent/finance/analyze', upload.single('file'), async (req, res) => {
     }
 
     if (!anthropicService.isAvailable()) {
-      res.status(400).send('ANTHROPIC_API_KEYが設定されていません。.envファイルを確認してください。');
+      res.status(400).send('Vertex AI の認証が未設定です');
       return;
     }
 
@@ -1496,7 +1496,7 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
       return;
     }
 
-    if (!receiptService.isAvailable()) { res.status(400).send('GEMINI_API_KEYが未設定です'); return; }
+    if (!receiptService.isAvailable()) { res.status(400).send('Vertex AI の認証が未設定です'); return; }
 
     // チャットメモリから業種を取得（学習ルール適用のため）
     const memory = await chatService.getMemory();
@@ -1596,7 +1596,7 @@ app.post('/agent/accounting/analyze-video', upload.single('video'), async (req, 
       return;
     }
 
-    if (!receiptService.isAvailable()) { res.status(400).send('GEMINI_API_KEYが未設定です'); return; }
+    if (!receiptService.isAvailable()) { res.status(400).send('Vertex AI の認証が未設定です'); return; }
 
     const buffer = fs.readFileSync(req.file.path);
     const ext = path.extname(req.file.originalname).toLowerCase();
