@@ -30,18 +30,16 @@ export interface AnalysisSummary {
 
 /**
  * 分析結果の保存・読み込み（Supabase永続化、テナント分離）
+ * 全メソッドに tenantId を明示的に渡す
  */
 export class AnalysisStore {
-  private tenantId: TenantId | null = null;
 
-  setTenantId(id: TenantId | null): void { this.tenantId = id; }
-
-  async save(data: Omit<SavedAnalysis, 'id' | 'createdAt'>): Promise<string> {
+  async save(tenantId: TenantId, data: Omit<SavedAnalysis, 'id' | 'createdAt'>): Promise<string> {
     const id = `analysis-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    if (isSupabaseAvailable() && this.tenantId) {
+    if (isSupabaseAvailable()) {
       try {
         await getSupabase().from('financial_analyses').insert({
-          id, tenant_id: this.tenantId, file_name: data.fileName, source: data.source,
+          id, tenant_id: tenantId, file_name: data.fileName, source: data.source,
           rating_input: data.ratingInput, rating: data.rating, additional: data.additional,
           ai_commentary: data.aiCommentary,
         });
@@ -49,7 +47,6 @@ export class AnalysisStore {
         return id;
       } catch (e) { logger.warn('Supabase分析保存失敗:', e); }
     }
-    logger.info(`分析結果を保存しました（メモリのみ）: ${id}`);
     return id;
   }
 
@@ -64,10 +61,10 @@ export class AnalysisStore {
     };
   }
 
-  async list(): Promise<AnalysisSummary[]> {
-    if (!isSupabaseAvailable() || !this.tenantId) return [];
+  async list(tenantId: TenantId): Promise<AnalysisSummary[]> {
+    if (!isSupabaseAvailable()) return [];
     const { data, error } = await getSupabase().from('financial_analyses').select('*')
-      .eq('tenant_id', this.tenantId).order('created_at', { ascending: false }).limit(20);
+      .eq('tenant_id', tenantId).order('created_at', { ascending: false }).limit(20);
     if (error || !data) return [];
     return data.map((d: any) => ({
       id: d.id, createdAt: d.created_at, fileName: d.file_name, source: d.source,

@@ -56,9 +56,6 @@ export interface PlanAnalysisResult {
  */
 export class PlanAnalysisService {
   private ai: any = null;
-  private tenantId: TenantId | null = null;
-
-  setTenantId(id: TenantId | null): void { this.tenantId = id; }
 
   constructor() {
     const project = config.ai.gcpProject;
@@ -78,10 +75,10 @@ export class PlanAnalysisService {
   // ========== 計画データ管理 ==========
 
   /** 計画データを取得（Supabase優先、フォールバックはファイル） */
-  async getPlan(): Promise<PlanData> {
-    if (isSupabaseAvailable() && this.tenantId) {
+  async getPlan(tenantId?: TenantId): Promise<PlanData> {
+    if (isSupabaseAvailable() && tenantId) {
       try {
-        const { data } = await getSupabase().from('monthly_targets').select('*').eq('tenant_id', this.tenantId).order('year').order('month');
+        const { data } = await getSupabase().from('monthly_targets').select('*').eq('tenant_id', tenantId).order('year').order('month');
         if (data && data.length > 0) {
           return {
             targets: data.map((r: any) => ({ year: r.year, month: r.month, revenue: r.revenue, grossProfit: r.gross_profit, ordinaryIncome: r.ordinary_income })),
@@ -98,13 +95,13 @@ export class PlanAnalysisService {
   }
 
   /** 計画データを保存 */
-  async savePlan(data: PlanData): Promise<void> {
+  async savePlan(data: PlanData, tenantId?: TenantId): Promise<void> {
     data.updatedAt = new Date().toISOString();
-    if (isSupabaseAvailable() && this.tenantId) {
+    if (isSupabaseAvailable() && tenantId) {
       try {
         for (const t of data.targets) {
           await getSupabase().from('monthly_targets').upsert({
-            tenant_id: this.tenantId, year: t.year, month: t.month,
+            tenant_id: tenantId, year: t.year, month: t.month,
             revenue: t.revenue, gross_profit: t.grossProfit, ordinary_income: t.ordinaryIncome,
             updated_at: data.updatedAt,
           }, { onConflict: 'tenant_id,year,month' });
@@ -121,8 +118,8 @@ export class PlanAnalysisService {
   }
 
   /** 月次目標を個別に設定/更新 */
-  async setTarget(target: MonthlyTarget): Promise<void> {
-    const plan = await this.getPlan();
+  async setTarget(target: MonthlyTarget, tenantId?: TenantId): Promise<void> {
+    const plan = await this.getPlan(tenantId);
     const idx = plan.targets.findIndex(t => t.year === target.year && t.month === target.month);
     if (idx >= 0) {
       plan.targets[idx] = target;
@@ -130,7 +127,7 @@ export class PlanAnalysisService {
       plan.targets.push(target);
     }
     plan.targets.sort((a, b) => a.year * 100 + a.month - (b.year * 100 + b.month));
-    await this.savePlan(plan);
+    await this.savePlan(plan, tenantId);
   }
 
   // ========== 差分計算 ==========
@@ -165,7 +162,7 @@ export class PlanAnalysisService {
   /**
    * 実績 vs 計画の差分をGemini 2.5 Proで分析し、計画修正を提案する
    */
-  async analyzePlanVariance(
+  async analyzePlanVariance(tenantId: TenantId,
     actuals: MonthlySnapshot[],
     targets: MonthlyTarget[],
     futureMonths: number = 3,
@@ -208,7 +205,7 @@ export class PlanAnalysisService {
     }
 
     // 過去の分析履歴を読み込み（学習のため）
-    const history = await this.getAnalysisHistory();
+    const history = await this.getAnalysisHistory(tenantId);
     let historyText = '';
     if (history.length > 0) {
       historyText = '\n【過去の分析で判明したパターン】\n';
@@ -292,7 +289,7 @@ ${historyText}
     };
 
     // 分析履歴に保存（学習用）
-    await this.saveAnalysisHistory(result);
+    await this.saveAnalysisHistory(result, tenantId);
 
     logger.info(`計画分析完了: ${result.analysis.patterns.length}パターン検出, ${result.analysis.revisedTargets.length}か月分の修正案`);
     return result;
@@ -301,30 +298,30 @@ ${historyText}
   /**
    * 分析結果の修正計画を計画データに反映する
    */
-  async applyRevisedTargets(revisedTargets: MonthlyTarget[]): Promise<void> {
+  async applyRevisedTargets(revisedTargets: MonthlyTarget[], tenantId?: TenantId): Promise<void> {
     for (const target of revisedTargets) {
-      await this.setTarget(target);
+      await this.setTarget(target, tenantId);
     }
     logger.info(`修正計画を反映しました (${revisedTargets.length}か月分)`);
   }
 
   // ========== 分析履歴管理（学習用） ==========
 
-  private async getAnalysisHistory(): Promise<PlanAnalysisResult[]> {
-    if (isSupabaseAvailable() && this.tenantId) {
+  private async getAnalysisHistory(tenantId?: TenantId): Promise<PlanAnalysisResult[]> {
+    if (isSupabaseAvailable() && tenantId) {
       try {
-        const { data } = await getSupabase().from('plan_history').select('*').eq('tenant_id', this.tenantId).order('created_at', { ascending: false }).limit(10);
+        const { data } = await getSupabase().from('plan_history').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false }).limit(10);
         return (data || []).map((r: any) => ({ id: r.id, createdAt: r.created_at, variances: r.variances, analysis: r.analysis }));
       } catch (e) { logger.warn('Supabase分析履歴取得失敗'); }
     }
     return [];
   }
 
-  private async saveAnalysisHistory(result: PlanAnalysisResult): Promise<void> {
-    if (isSupabaseAvailable() && this.tenantId) {
+  private async saveAnalysisHistory(result: PlanAnalysisResult, tenantId?: TenantId): Promise<void> {
+    if (isSupabaseAvailable() && tenantId) {
       try {
         await getSupabase().from('plan_history').insert({
-          id: result.id, tenant_id: this.tenantId, variances: result.variances, analysis: result.analysis,
+          id: result.id, tenant_id: tenantId, variances: result.variances, analysis: result.analysis,
         });
         return;
       } catch (e) { logger.warn('Supabase分析履歴保存失敗'); }
@@ -332,8 +329,8 @@ ${historyText}
   }
 
   /** 分析履歴を取得（UI表示用） */
-  async getHistory(): Promise<PlanAnalysisResult[]> {
-    return await this.getAnalysisHistory();
+  async getHistory(tenantId?: TenantId): Promise<PlanAnalysisResult[]> {
+    return await this.getAnalysisHistory(tenantId);
   }
 }
 

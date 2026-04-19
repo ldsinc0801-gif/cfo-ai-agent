@@ -28,22 +28,18 @@ export interface TaskSummary {
 
 /**
  * タスク管理サービス（Supabase永続化、テナント分離）
+ * 全メソッドに tenantId を明示的に渡す（シングルトン状態依存なし）
  */
 class TaskService {
-  private tenantId: TenantId | null = null;
 
-  setTenantId(id: TenantId | null): void {
-    this.tenantId = id;
-  }
-
-  async add(task: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>): Promise<Task> {
+  async add(tenantId: TenantId, task: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>): Promise<Task> {
     const now = new Date().toISOString();
     const id = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const newTask: Task = { ...task, id, createdAt: now, updatedAt: now };
 
-    if (isSupabaseAvailable() && this.tenantId) {
+    if (isSupabaseAvailable()) {
       const { error } = await getSupabase().from('tasks').insert({
-        id, tenant_id: this.tenantId, title: task.title, description: task.description || '',
+        id, tenant_id: tenantId, title: task.title, description: task.description || '',
         priority: task.priority, status: task.status, category: task.category,
         source: task.source, source_id: task.sourceId || null, due_date: task.dueDate || null,
       });
@@ -53,15 +49,15 @@ class TaskService {
     return newTask;
   }
 
-  async addBatch(tasks: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>[]): Promise<Task[]> {
+  async addBatch(tenantId: TenantId, tasks: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>[]): Promise<Task[]> {
     const results: Task[] = [];
-    for (const t of tasks) results.push(await this.add(t));
+    for (const t of tasks) results.push(await this.add(tenantId, t));
     return results;
   }
 
-  async list(filter?: { status?: string; category?: string }): Promise<Task[]> {
-    if (!isSupabaseAvailable() || !this.tenantId) return [];
-    let query = getSupabase().from('tasks').select('*').eq('tenant_id', this.tenantId);
+  async list(tenantId: TenantId, filter?: { status?: string; category?: string }): Promise<Task[]> {
+    if (!isSupabaseAvailable()) return [];
+    let query = getSupabase().from('tasks').select('*').eq('tenant_id', tenantId);
     if (filter?.status) query = query.eq('status', filter.status);
     if (filter?.category) query = query.eq('category', filter.category);
     const { data, error } = await query.order('created_at', { ascending: false });
@@ -98,8 +94,8 @@ class TaskService {
     return !error;
   }
 
-  async getSummary(): Promise<TaskSummary> {
-    const tasks = await this.list();
+  async getSummary(tenantId: TenantId): Promise<TaskSummary> {
+    const tasks = await this.list(tenantId);
     return {
       total: tasks.length,
       todo: tasks.filter(t => t.status === 'todo').length,
@@ -109,7 +105,7 @@ class TaskService {
     };
   }
 
-  async generateFromAnalysis(analysisId: string, actions: { priority: string; content: string; effect: string; timeframe: string }[]): Promise<Task[]> {
+  async generateFromAnalysis(tenantId: TenantId, analysisId: string, actions: { priority: string; content: string; effect: string; timeframe: string }[]): Promise<Task[]> {
     const priorityMap: Record<string, 'high' | 'medium' | 'low'> = { high: 'high', medium: 'medium', low: 'low' };
     const newTasks = actions.map(a => ({
       title: a.content,
@@ -120,19 +116,19 @@ class TaskService {
       source: 'ai_analysis' as const,
       sourceId: analysisId,
     }));
-    return this.addBatch(newTasks);
+    return this.addBatch(tenantId, newTasks);
   }
 
-  async addFromChat(title: string, description: string = ''): Promise<Task> {
-    return this.add({
+  async addFromChat(tenantId: TenantId, title: string, description: string = ''): Promise<Task> {
+    return this.add(tenantId, {
       title, description, priority: 'medium', status: 'todo', category: 'general', source: 'chat',
     });
   }
 
-  async exportForAssistant(): Promise<{ summary: TaskSummary; activeTasks: Task[]; completedTasks: Task[] }> {
-    const tasks = await this.list();
+  async exportForAssistant(tenantId: TenantId): Promise<{ summary: TaskSummary; activeTasks: Task[]; completedTasks: Task[] }> {
+    const tasks = await this.list(tenantId);
     return {
-      summary: await this.getSummary(),
+      summary: await this.getSummary(tenantId),
       activeTasks: tasks.filter(t => t.status !== 'done'),
       completedTasks: tasks.filter(t => t.status === 'done'),
     };

@@ -135,12 +135,10 @@ const DEFAULT_FIELDS: Record<DocumentType, TemplateField[]> = {
 };
 
 export class SecretaryService {
-  private tenantId: TenantId | null = null;
-  setTenantId(id: TenantId | null): void { this.tenantId = id; }
 
   /** テンプレート一覧 */
-  async listTemplates(tenantIdOverride?: TenantId): Promise<DocumentTemplate[]> {
-    const tid = tenantIdOverride || this.tenantId;
+  async listTemplates(tenantId?: TenantId): Promise<DocumentTemplate[]> {
+    const tid = tenantId;
     if (isSupabaseAvailable() && tid) {
       try {
         const { data, error } = await getSupabase().from('secretary_templates').select('*').eq('tenant_id', tid).order('created_at', { ascending: false });
@@ -159,8 +157,8 @@ export class SecretaryService {
   }
 
   /** テンプレート取得 */
-  async getTemplate(id: string, tenantIdOverride?: TenantId): Promise<DocumentTemplate | null> {
-    const tid = tenantIdOverride || this.tenantId;
+  async getTemplate(id: string, tenantId?: TenantId): Promise<DocumentTemplate | null> {
+    const tid = tenantId;
     if (isSupabaseAvailable() && tid) {
       try {
         const { data } = await getSupabase().from('secretary_templates').select('*').eq('id', id).single();
@@ -176,7 +174,7 @@ export class SecretaryService {
   }
 
   /** テンプレート作成（非同期: プレビュー画像生成のため） */
-  async createTemplate(name: string, type: DocumentType, uploadedFile: string): Promise<DocumentTemplate> {
+  async createTemplate(tenantId: TenantId, name: string, type: DocumentType, uploadedFile: string): Promise<DocumentTemplate> {
     const id = `tpl-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const dir = path.join(TEMPLATES_DIR, id);
     fs.mkdirSync(dir, { recursive: true });
@@ -234,12 +232,12 @@ export class SecretaryService {
     fs.writeFileSync(path.join(dir, 'metadata.json'), JSON.stringify(template, null, 2));
 
     // Supabaseにメタデータ + ファイルをアップロード
-    if (isSupabaseAvailable() && this.tenantId) {
+    if (isSupabaseAvailable() && tenantId) {
       try {
         const layoutPath = path.join(dir, 'layout.json');
         const layout = fs.existsSync(layoutPath) ? JSON.parse(fs.readFileSync(layoutPath, 'utf-8')) : null;
         const { error: insErr } = await getSupabase().from('secretary_templates').insert({
-          id: template.id, tenant_id: this.tenantId, name: template.name, type: template.type,
+          id: template.id, tenant_id: tenantId, name: template.name, type: template.type,
           template_file: template.templateFile, fields: template.fields, layout,
         });
         if (insErr) {
@@ -252,7 +250,7 @@ export class SecretaryService {
       // テンプレートファイルをStorageにアップロード
       if (isStorageAvailable()) {
         const admin = getSupabaseAdmin()!;
-        const prefix = `${this.tenantId}/templates/${template.id}`;
+        const prefix = `${tenantId}/templates/${template.id}`;
         // 元ファイル
         if (templateFile && fs.existsSync(path.join(dir, templateFile))) {
           const ext = path.extname(templateFile);
@@ -506,7 +504,7 @@ export class SecretaryService {
   }
 
   /** テンプレート削除 */
-  async deleteTemplate(id: string): Promise<void> {
+  async deleteTemplate(tenantId: TenantId, id: string): Promise<void> {
     // ローカルファイル削除
     const dir = path.join(TEMPLATES_DIR, id);
     if (fs.existsSync(dir)) {
@@ -519,8 +517,8 @@ export class SecretaryService {
       } catch (e) { logger.warn('テンプレートDB削除失敗:', e); }
     }
     // Storage削除
-    if (isStorageAvailable() && this.tenantId) {
-      const prefix = `${this.tenantId}/templates/${id}`;
+    if (isStorageAvailable() && tenantId) {
+      const prefix = `${tenantId}/templates/${id}`;
       try {
         const admin = getSupabaseAdmin()!;
         const { data: files } = await admin.storage.from(STORAGE_BUCKET).list(prefix);
@@ -631,7 +629,7 @@ export class SecretaryService {
   }
 
   /** PDF生成 */
-  async generatePDF(template: DocumentTemplate, data: Record<string, any>): Promise<GeneratedDocument> {
+  async generatePDF(tenantId: TenantId, template: DocumentTemplate, data: Record<string, any>): Promise<GeneratedDocument> {
     const docId = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     if (!fs.existsSync(DOCUMENTS_DIR)) fs.mkdirSync(DOCUMENTS_DIR, { recursive: true });
     const pdfPath = path.join(DOCUMENTS_DIR, `${docId}.pdf`);
@@ -640,7 +638,7 @@ export class SecretaryService {
     if (!fs.existsSync(templateDir)) fs.mkdirSync(templateDir, { recursive: true });
 
     // Storageからテンプレートファイルを復元（Railway再デプロイ後の復旧）
-    await this.restoreTemplateFromStorage(template.id, templateDir);
+    await this.restoreTemplateFromStorage(tenantId, template.id, templateDir);
 
     const origExt = path.extname(template.templateFile).toLowerCase();
 
@@ -673,7 +671,7 @@ export class SecretaryService {
     }
 
     if (fs.existsSync(layoutPath) || fs.existsSync(convertedPdf)) {
-      await this.generateFromHTMLFull(templateDir, template, data, pdfPath);
+      await this.generateFromHTMLFull(tenantId, templateDir, template, data, pdfPath);
     } else if (['.xlsx', '.xls'].includes(origExt)) {
       await this.generateFromExcel(templateDir, template, data, pdfPath);
     } else {
@@ -682,8 +680,8 @@ export class SecretaryService {
 
     // Supabase Storageにアップロード
     let storagePath = '';
-    if (isStorageAvailable() && this.tenantId && fs.existsSync(pdfPath)) {
-      storagePath = `${this.tenantId}/documents/${docId}.pdf`;
+    if (isStorageAvailable() && tenantId && fs.existsSync(pdfPath)) {
+      storagePath = `${tenantId}/documents/${docId}.pdf`;
       try {
         const admin = getSupabaseAdmin()!;
         const pdfBuffer = fs.readFileSync(pdfPath);
@@ -704,10 +702,10 @@ export class SecretaryService {
     };
 
     // Supabase DBにメタデータ保存
-    if (isSupabaseAvailable() && this.tenantId) {
+    if (isSupabaseAvailable() && tenantId) {
       try {
         await getSupabase().from('secretary_documents').insert({
-          id: docId, tenant_id: this.tenantId, template_id: template.id,
+          id: docId, tenant_id: tenantId, template_id: template.id,
           template_name: template.name, type: template.type, data,
           storage_path: storagePath || null,
         });
@@ -720,6 +718,7 @@ export class SecretaryService {
 
   /** HTMLで請求書を完全生成 → puppeteerでPDF化（フォント統一） */
   private async generateFromHTMLFull(
+    tenantId: TenantId,
     templateDir: string,
     template: DocumentTemplate,
     data: Record<string, any>,
@@ -746,7 +745,7 @@ export class SecretaryService {
     }
 
     // 振込先: 会社設定 > layout.json の順で優先
-    const cs = await loadCompanySettings(this.tenantId || undefined);
+    const cs = await loadCompanySettings(tenantId || undefined);
     const bankFromSettings = cs ? {
       '金融機関名': cs.bankName,
       '支店名': cs.branchName,
@@ -1260,8 +1259,8 @@ body { font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Noto Sans JP', sa
   }
 
   /** 生成済みドキュメント取得 */
-  async getDocument(docId: string): Promise<GeneratedDocument | null> {
-    if (isSupabaseAvailable() && this.tenantId) {
+  async getDocument(tenantId: TenantId, docId: string): Promise<GeneratedDocument | null> {
+    if (isSupabaseAvailable() && tenantId) {
       try {
         const { data } = await getSupabase().from('secretary_documents').select('*').eq('id', docId).single();
         if (data) return { id: data.id, templateId: data.template_id, templateName: data.template_name, type: data.type, data: data.data, pdfPath: data.storage_path || '', createdAt: data.created_at };
@@ -1271,12 +1270,12 @@ body { font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Noto Sans JP', sa
   }
 
   /** ドキュメント削除 */
-  async deleteDocument(id: string): Promise<void> {
+  async deleteDocument(tenantId: TenantId, id: string): Promise<void> {
     if (isSupabaseAvailable()) {
       // Storage削除
-      if (isStorageAvailable() && this.tenantId) {
+      if (isStorageAvailable() && tenantId) {
         try {
-          const storagePath = `${this.tenantId}/documents/${id}.pdf`;
+          const storagePath = `${tenantId}/documents/${id}.pdf`;
           await getSupabaseAdmin()!.storage.from(STORAGE_BUCKET).remove([storagePath]);
         } catch { /* ignore */ }
       }
@@ -1284,23 +1283,23 @@ body { font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Noto Sans JP', sa
     }
   }
 
-  async deleteAllDocuments(): Promise<number> {
-    if (!isSupabaseAvailable() || !this.tenantId) return 0;
-    const { data } = await getSupabase().from('secretary_documents').select('id').eq('tenant_id', this.tenantId);
+  async deleteAllDocuments(tenantId: TenantId): Promise<number> {
+    if (!isSupabaseAvailable() || !tenantId) return 0;
+    const { data } = await getSupabase().from('secretary_documents').select('id').eq('tenant_id', tenantId);
     if (!data || data.length === 0) return 0;
     // Storage削除
     if (isStorageAvailable()) {
-      const paths = data.map((d: any) => `${this.tenantId}/documents/${d.id}.pdf`);
+      const paths = data.map((d: any) => `${tenantId}/documents/${d.id}.pdf`);
       try { await getSupabaseAdmin()!.storage.from(STORAGE_BUCKET).remove(paths); } catch { /* ignore */ }
     }
-    await getSupabase().from('secretary_documents').delete().eq('tenant_id', this.tenantId);
+    await getSupabase().from('secretary_documents').delete().eq('tenant_id', tenantId);
     return data.length;
   }
 
-  async listDocuments(): Promise<GeneratedDocument[]> {
-    if (isSupabaseAvailable() && this.tenantId) {
+  async listDocuments(tenantId: TenantId): Promise<GeneratedDocument[]> {
+    if (isSupabaseAvailable() && tenantId) {
       try {
-        const { data } = await getSupabase().from('secretary_documents').select('*').eq('tenant_id', this.tenantId).order('created_at', { ascending: false });
+        const { data } = await getSupabase().from('secretary_documents').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false });
         return (data || []).map((r: any) => ({ id: r.id, templateId: r.template_id, templateName: r.template_name, type: r.type, data: r.data, pdfPath: r.storage_path || '', createdAt: r.created_at }));
       } catch { /* ignore */ }
     }
@@ -1308,10 +1307,10 @@ body { font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Noto Sans JP', sa
   }
 
   /** Storageからテンプレートファイルをローカルに復元（再デプロイ後の復旧用） */
-  private async restoreTemplateFromStorage(templateId: string, templateDir: string): Promise<void> {
-    if (!isStorageAvailable() || !this.tenantId) return;
+  private async restoreTemplateFromStorage(tenantId: TenantId, templateId: string, templateDir: string): Promise<void> {
+    if (!isStorageAvailable() || !tenantId) return;
     const admin = getSupabaseAdmin()!;
-    const prefix = `${this.tenantId}/templates/${templateId}`;
+    const prefix = `${tenantId}/templates/${templateId}`;
 
     // 復元対象ファイル一覧
     const filesToRestore = ['converted.pdf', 'preview.png', 'original.pdf'];

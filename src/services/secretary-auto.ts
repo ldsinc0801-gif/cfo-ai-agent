@@ -12,8 +12,6 @@ import { getSupabase } from '../clients/supabase.js';
 import { isSupabaseAvailable } from '../clients/supabase.js';
 import type { TenantId } from '../types/auth.js';
 
-let _billingTenantId: TenantId | null = null;
-export function setBillingTenantId(id: TenantId | null): void { _billingTenantId = id; }
 import { googleTasksClient } from '../clients/google-tasks.js';
 import { secretaryService } from './secretary-service.js';
 
@@ -63,14 +61,14 @@ export interface CustomerBilling {
 const BILLING_CONFIG_PATH = path.resolve('data/secretary/billing-config.json');
 
 /** 顧客ごとの請求設定を保存 */
-export async function saveBillingConfig(configs: CustomerBilling[]): Promise<void> {
-  if (isSupabaseAvailable() && _billingTenantId) {
+export async function saveBillingConfig(tenantId: TenantId, configs: CustomerBilling[]): Promise<void> {
+  if (isSupabaseAvailable() && tenantId) {
     try {
-      await getSupabase().from('billing_configs').delete().eq('tenant_id', _billingTenantId);
+      await getSupabase().from('billing_configs').delete().eq('tenant_id', tenantId);
       if (configs.length > 0) {
         await getSupabase().from('billing_configs').insert(
           configs.map(c => ({
-            tenant_id: _billingTenantId, customer_name: c.customerName,
+            tenant_id: tenantId, customer_name: c.customerName,
             closing_day: c.closingDay, invoice_day: c.invoiceDay, due_date_type: c.dueDateType,
           }))
         );
@@ -81,10 +79,10 @@ export async function saveBillingConfig(configs: CustomerBilling[]): Promise<voi
 }
 
 /** 顧客ごとの請求設定を読込 */
-export async function loadBillingConfigs(): Promise<CustomerBilling[]> {
-  if (isSupabaseAvailable() && _billingTenantId) {
+export async function loadBillingConfigs(tenantId: TenantId): Promise<CustomerBilling[]> {
+  if (isSupabaseAvailable() && tenantId) {
     try {
-      const { data } = await getSupabase().from('billing_configs').select('*').eq('tenant_id', _billingTenantId).order('customer_name');
+      const { data } = await getSupabase().from('billing_configs').select('*').eq('tenant_id', tenantId).order('customer_name');
       return (data || []).map((r: any) => ({
         customerName: r.customer_name, closingDay: r.closing_day, invoiceDay: r.invoice_day, dueDateType: r.due_date_type,
       }));
@@ -94,8 +92,8 @@ export async function loadBillingConfigs(): Promise<CustomerBilling[]> {
 }
 
 /** 顧客名で設定を検索 */
-export async function getBillingConfig(customerName: string): Promise<CustomerBilling | null> {
-  const configs = await loadBillingConfigs();
+export async function getBillingConfig(tenantId: TenantId, customerName: string): Promise<CustomerBilling | null> {
+  const configs = await loadBillingConfigs(tenantId);
   return configs.find(c => customerName.includes(c.customerName) || c.customerName.includes(customerName)) || null;
 }
 

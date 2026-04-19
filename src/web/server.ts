@@ -44,6 +44,7 @@ import { authService } from '../services/auth-service.js';
 import { validatePassword, hashPassword, generateInitialPassword } from '../utils/password.js';
 import type { SessionUser } from '../types/auth.js';
 import { asTenantId } from '../types/auth.js';
+import type { TenantId } from '../types/auth.js';
 import { requireSuperAdmin, requireRole, requireTenant, getActiveTenantId } from './auth-middleware.js';
 
 // セッションにユーザー情報を保持するための型拡張
@@ -253,13 +254,7 @@ app.use((req, res, next) => {
     tenantRole: req.session.activeTenantRole || '',
   } : undefined);
 
-  // サービスにテナントIDを設定
-  const currentTid = getActiveTenantId(req);
-  taskService.setTenantId(currentTid);
-  planAnalysisService.setTenantId(currentTid);
-  analysisStore.setTenantId(currentTid);
-  secretaryService.setTenantId(currentTid);
-  setBillingTenantId(currentTid);
+  // tenantId はミドルウェアでは設定しない（各ルートハンドラで明示的に取得）
 
   // 認証不要パス
   const p = req.path;
@@ -613,12 +608,12 @@ async function buildReport(year?: number, month?: number, isDemo: boolean = fals
 }
 
 /** トレンドデータを生成（freee接続時は実データ、未接続時はモック） */
-async function buildTrendData(endYear?: number, endMonth?: number, monthCount: number = 6, isDemo: boolean = false): Promise<import('../types/trend.js').TrendData> {
+async function buildTrendData(endYear?: number, endMonth?: number, monthCount: number = 6, isDemo: boolean = false, tenantId?: TenantId): Promise<import('../types/trend.js').TrendData> {
   // デモモード: セッションがデモユーザーの場合のみ
   const demoProfileEarly = isDemo ? getDemoProfile() : null;
   if (demoProfileEarly) {
     logger.info(`デモモード: ${demoProfileEarly.companyName}のトレンドデータ`);
-    const plan = await planAnalysisService.getPlan();
+    const plan = await planAnalysisService.getPlan(tenantId);
     return {
       months: demoProfileEarly.trendMonths,
       targets: plan.targets.length > 0 ? plan.targets : demoProfileEarly.targets,
@@ -658,7 +653,7 @@ async function buildTrendData(endYear?: number, endMonth?: number, monthCount: n
       const trend = await freeeService.fetchTrendData(companyId, targetYear, targetMonth, monthCount);
 
       // 保存済みの月次目標をマージ
-      const plan = await planAnalysisService.getPlan();
+      const plan = await planAnalysisService.getPlan(tenantId);
       if (plan.targets.length > 0) {
         trend.targets = plan.targets;
       }
@@ -865,7 +860,7 @@ app.get('/', async (req, res) => {
       const [ty, tm] = toMonth.split('-').map(Number);
       if (ty && tm) { trendEndYear = ty; trendEndMonth = tm; }
     }
-    const trend = await buildTrendData(trendEndYear, trendEndMonth, trendMonthCount, isDemo);
+    const trend = await buildTrendData(trendEndYear, trendEndMonth, trendMonthCount, isDemo, getActiveTenantId(req) || undefined);
 
     // 期間合計を算出（KPIカード用）
     const periodTotals = trend.months.length > 0 ? {
@@ -989,7 +984,7 @@ app.get('/report/pdf', async (req, res) => {
 // 事業計画AIエージェント
 app.get('/plan', async (req, res) => {
   try {
-    const trend = await buildTrendData(undefined, undefined, 6, req.session.user?.id === 'demo-user');
+    const trend = await buildTrendData(undefined, undefined, 6, req.session.user?.id === 'demo-user', getActiveTenantId(req) || undefined);
     const files = getUploadedFiles();
     res.send(renderPlanHTML(trend, files));
   } catch (error) {
@@ -1084,23 +1079,23 @@ app.post('/plan/delete-all', (_req, res) => {
 import { planAnalysisService } from '../services/plan-analysis-service.js';
 
 // 計画データ取得
-app.get('/api/plan', async (_req, res) => {
-  res.json(await planAnalysisService.getPlan());
+app.get('/api/plan', async (req, res) => {
+  res.json(await planAnalysisService.getPlan(getActiveTenantId(req) || undefined));
 });
 
 // 月次目標を設定/更新
 app.post('/api/plan/targets', express.json(), async (req, res) => {
   const targets: Array<{ year: number; month: number; revenue: number; grossProfit: number; ordinaryIncome: number }> = req.body.targets || [];
   for (const t of targets) {
-    await planAnalysisService.setTarget(t);
+    await planAnalysisService.setTarget(t, getActiveTenantId(req) || undefined);
   }
   clearCache();
   res.json({ ok: true, count: targets.length });
 });
 
 // 月次目標を全クリア
-app.post('/api/plan/targets/clear', async (_req, res) => {
-  await planAnalysisService.savePlan({ targets: [], updatedAt: '', notes: '' });
+app.post('/api/plan/targets/clear', async (req, res) => {
+  await planAnalysisService.savePlan({ targets: [], updatedAt: '', notes: '' }, getActiveTenantId(req) || undefined);
   clearCache();
   logger.info('月次目標を全クリアしました');
   res.json({ ok: true });
@@ -1114,8 +1109,8 @@ app.post('/api/plan/analyze', express.json(), async (req, res) => {
       return;
     }
 
-    const trend = await buildTrendData(undefined, undefined, 6, req.session.user?.id === 'demo-user');
-    const plan = await planAnalysisService.getPlan();
+    const trend = await buildTrendData(undefined, undefined, 6, req.session.user?.id === 'demo-user', getActiveTenantId(req) || undefined);
+    const plan = await planAnalysisService.getPlan(getActiveTenantId(req) || undefined);
 
     if (plan.targets.length === 0) {
       res.status(400).json({ error: '計画データが未設定です。先に月次目標を入力してください。' });
@@ -1123,7 +1118,7 @@ app.post('/api/plan/analyze', express.json(), async (req, res) => {
     }
 
     const futureMonths = req.body.futureMonths || 3;
-    const result = await planAnalysisService.analyzePlanVariance(
+    const result = await planAnalysisService.analyzePlanVariance(getActiveTenantId(req)!,
       trend.months,
       plan.targets,
       futureMonths,
@@ -1139,7 +1134,7 @@ app.post('/api/plan/analyze', express.json(), async (req, res) => {
 // 修正計画を反映
 app.post('/api/plan/apply', express.json(), async (req, res) => {
   const targets = req.body.targets || [];
-  await planAnalysisService.applyRevisedTargets(targets);
+  await planAnalysisService.applyRevisedTargets(targets, getActiveTenantId(req) || undefined);
   res.json({ ok: true, count: targets.length });
 });
 
@@ -1167,8 +1162,8 @@ app.post('/api/plan/kpi', express.json(), async (req, res) => {
 });
 
 // 分析履歴
-app.get('/api/plan/history', async (_req, res) => {
-  res.json(await planAnalysisService.getHistory());
+app.get('/api/plan/history', async (req, res) => {
+  res.json(await planAnalysisService.getHistory(getActiveTenantId(req) || undefined));
 });
 
 // === 学習ループAPI ===
@@ -1271,7 +1266,7 @@ app.post('/agent/finance/analyze', upload.single('file'), async (req, res) => {
     }
 
     // 分析結果を保存
-    const analysisId = await analysisStore.save({
+    const analysisId = await analysisStore.save(getActiveTenantId(req)!, {
       fileName,
       source: 'upload',
       ratingInput,
@@ -1283,7 +1278,7 @@ app.post('/agent/finance/analyze', upload.single('file'), async (req, res) => {
 
     // 改善アクションからタスクを自動生成
     if (rating.actions.length > 0) {
-      await taskService.generateFromAnalysis(analysisId, rating.actions);
+      await taskService.generateFromAnalysis(getActiveTenantId(req)!, analysisId, rating.actions);
       logger.info(`分析結果から${rating.actions.length}件のタスクを自動生成しました`);
     }
 
@@ -1307,7 +1302,7 @@ app.get('/agent/finance/freee', (_req, res) => {
 });
 
 // 財務分析：freeeデータからAI分析（API）
-app.get('/api/finance/freee', async (_req, res) => {
+app.get('/api/finance/freee', async (req, res) => {
   try {
     let input: import('../types/bank-rating.js').RatingInput;
 
@@ -1408,7 +1403,7 @@ app.get('/api/finance/freee', async (_req, res) => {
       }
     }
 
-    const analysisId = await analysisStore.save({
+    const analysisId = await analysisStore.save(getActiveTenantId(req)!, {
       fileName: null,
       source: 'freee',
       ratingInput: input,
@@ -1432,8 +1427,8 @@ app.get('/api/finance/freee', async (_req, res) => {
 });
 
 // 分析履歴一覧
-app.get('/agent/finance/history', async (_req, res) => {
-  const analyses = await analysisStore.list();
+app.get('/agent/finance/history', async (req, res) => {
+  const analyses = await analysisStore.list(getActiveTenantId(req)!);
   res.send(renderHistoryHTML(analyses));
 });
 
@@ -1461,8 +1456,8 @@ app.post('/agent/finance/history/:id/delete', async (req, res) => {
   res.redirect('/agent/finance/history');
 });
 
-app.post('/agent/finance/history/delete-all', async (_req, res) => {
-  const all = await analysisStore.list();
+app.post('/agent/finance/history/delete-all', async (req, res) => {
+  const all = await analysisStore.list(getActiveTenantId(req)!);
   for (const a of all) {
     await analysisStore.delete(a.id);
   }
@@ -1843,14 +1838,14 @@ import { renderSecretaryPageHTML, renderSecretaryFormHTML, renderGmailDraftHTML,
 import { secretaryService, loadCompanySettings, saveCompanySettings } from '../services/secretary-service.js';
 import type { CompanySettings } from '../services/secretary-service.js';
 import { gmailClient } from '../clients/google-gmail.js';
-import { getServiceList, loadBillingConfigs, saveBillingConfig, getBillingConfig, calcInvoiceDateFromConfig, calcDueDateFromConfig, detectInvoiceTasksFromGoogle, setBillingTenantId } from '../services/secretary-auto.js';
+import { getServiceList, loadBillingConfigs, saveBillingConfig, getBillingConfig, calcInvoiceDateFromConfig, calcDueDateFromConfig, detectInvoiceTasksFromGoogle } from '../services/secretary-auto.js';
 import type { CustomerBilling } from '../services/secretary-auto.js';
 
 // 秘書AI：メインページ（Googleタスク検知付き）
 app.get('/agent/secretary', async (req, res) => {
   const templates = await secretaryService.listTemplates(getActiveTenantId(req) || undefined);
-  const documents = await secretaryService.listDocuments();
-  const billingConfigs = await loadBillingConfigs();
+  const documents = await secretaryService.listDocuments(getActiveTenantId(req)!);
+  const billingConfigs = await loadBillingConfigs(getActiveTenantId(req)!);
   let detectedTasks: Array<{ title: string; customerName: string }> = [];
 
   if (isDemoMode()) {
@@ -1862,8 +1857,8 @@ app.get('/agent/secretary', async (req, res) => {
     // デモ用テンプレートがなければ作成
     if (templates.length === 0) {
       try {
-        await secretaryService.createTemplate('請求書テンプレート', 'invoice', '');
-        await secretaryService.createTemplate('見積書テンプレート', 'estimate', '');
+        await secretaryService.createTemplate(getActiveTenantId(req)!, '請求書テンプレート', 'invoice', '');
+        await secretaryService.createTemplate(getActiveTenantId(req)!, '見積書テンプレート', 'estimate', '');
       } catch { /* skip */ }
     }
     // デモ用会社設定
@@ -1885,7 +1880,7 @@ app.get('/agent/secretary', async (req, res) => {
     }
     // デモ用請求設定
     if (billingConfigs.length === 0) {
-      await saveBillingConfig([
+      await saveBillingConfig(getActiveTenantId(req)!, [
         { customerName: '株式会社ABC', closingDay: 31, invoiceDay: 1, dueDateType: 'end_next' },
         { customerName: 'DEFコンサル', closingDay: 25, invoiceDay: 27, dueDateType: 'end_next' },
         { customerName: '株式会社GHI', closingDay: 31, invoiceDay: 5, dueDateType: 'end_next' },
@@ -1900,7 +1895,7 @@ app.get('/agent/secretary', async (req, res) => {
 
   const companySettings = await loadCompanySettings(getActiveTenantId(req) || undefined);
   const updatedTemplates = await secretaryService.listTemplates(getActiveTenantId(req) || undefined);
-  const updatedConfigs = await loadBillingConfigs();
+  const updatedConfigs = await loadBillingConfigs(getActiveTenantId(req)!);
   res.send(renderSecretaryPageHTML({ templates: updatedTemplates, documents, detectedTasks, billingConfigs: updatedConfigs, companySettings }));
 });
 
@@ -1933,13 +1928,13 @@ app.post('/agent/secretary/template/upload', upload.single('template'), async (r
     const name = req.body.name || '無題のテンプレート';
     const type = req.body.type || 'invoice';
     const uploadedFile = req.file?.path || '';
-    await secretaryService.createTemplate(name, type, uploadedFile || '');
+    await secretaryService.createTemplate(getActiveTenantId(req)!, name, type, uploadedFile || '');
     res.redirect('/agent/secretary');
   } catch (error) {
     logger.error('テンプレート登録エラー', error);
     res.send(renderSecretaryPageHTML({
       templates: await secretaryService.listTemplates(getActiveTenantId(req) || undefined),
-      documents: await secretaryService.listDocuments(),
+      documents: await secretaryService.listDocuments(getActiveTenantId(req)!),
       error: `テンプレート登録に失敗: ${error instanceof Error ? error.message : '不明なエラー'}`,
     }));
   }
@@ -1947,18 +1942,18 @@ app.post('/agent/secretary/template/upload', upload.single('template'), async (r
 
 // 秘書AI：テンプレート削除
 app.post('/agent/secretary/template/:id/delete', async (req, res) => {
-  await secretaryService.deleteTemplate(req.params.id as string);
+  await secretaryService.deleteTemplate(getActiveTenantId(req)!, req.params.id as string);
   res.redirect('/agent/secretary');
 });
 
 // 秘書AI：書類削除
 app.post('/agent/secretary/document/:id/delete', async (req, res) => {
-  await secretaryService.deleteDocument(req.params.id);
+  await secretaryService.deleteDocument(getActiveTenantId(req)!, req.params.id);
   res.redirect('/agent/secretary');
 });
 
-app.post('/agent/secretary/documents/delete-all', async (_req, res) => {
-  const count = await secretaryService.deleteAllDocuments();
+app.post('/agent/secretary/documents/delete-all', async (req, res) => {
+  const count = await secretaryService.deleteAllDocuments(getActiveTenantId(req)!);
   logger.info(`作成済み書類を全件削除: ${count}件`);
   res.redirect('/agent/secretary');
 });
@@ -1979,7 +1974,7 @@ app.post('/agent/secretary/billing-config', async (req, res) => {
     dueDateType: dues[i] || 'end_next',
   })).filter((c: CustomerBilling) => c.customerName.trim());
 
-  await saveBillingConfig(configs);
+  await saveBillingConfig(getActiveTenantId(req)!, configs);
   logger.info(`請求設定を保存: ${configs.length}件`);
   res.redirect('/agent/secretary');
 });
@@ -1990,7 +1985,7 @@ app.get('/agent/secretary/create/:templateId', async (req, res) => {
   if (!template) { res.redirect('/agent/secretary'); return; }
 
   const customerName = (req.query.customer as string) || '';
-  const billingConfig = customerName ? await getBillingConfig(customerName) : null;
+  const billingConfig = customerName ? await getBillingConfig(getActiveTenantId(req)!, customerName) : null;
   const serviceList = getServiceList();
 
   let invoiceDate: string | undefined;
@@ -2107,7 +2102,7 @@ app.post('/agent/secretary/generate', express.urlencoded({ extended: true }), as
         data.invoiceNo = `${data.invoiceNo}-${d.getFullYear()}${(d.getMonth() + 1).toString().padStart(2, '0')}`;
       }
 
-      const doc = await secretaryService.generatePDF(template, data);
+      const doc = await secretaryService.generatePDF(getActiveTenantId(req)!, template, data);
       generatedDocs.push(doc.id);
     }
 
@@ -2117,7 +2112,7 @@ app.post('/agent/secretary/generate', express.urlencoded({ extended: true }), as
       // 複数生成の場合はメインページに戻って結果を表示
       res.send(renderSecretaryPageHTML({
         templates: await secretaryService.listTemplates(getActiveTenantId(req) || undefined),
-        documents: await secretaryService.listDocuments(),
+        documents: await secretaryService.listDocuments(getActiveTenantId(req)!),
         success: `${batchMonths}ヶ月分の${template.name}を生成しました（${generatedDocs.length}件）`,
       }));
     }
@@ -2134,7 +2129,7 @@ app.post('/agent/secretary/generate', express.urlencoded({ extended: true }), as
 
 // 秘書AI：PDFダウンロード
 app.get('/agent/secretary/download/:docId', async (req, res) => {
-  const doc = await secretaryService.getDocument(req.params.docId);
+  const doc = await secretaryService.getDocument(getActiveTenantId(req)!, req.params.docId);
   if (!doc) { res.status(404).send('ドキュメントが見つかりません'); return; }
 
   const fileName = `${doc.templateName}_${doc.data.customerName || 'document'}.pdf`;
@@ -2162,14 +2157,14 @@ app.get('/agent/secretary/download/:docId', async (req, res) => {
 
 // 秘書AI：Gmail下書きフォーム
 app.get('/agent/secretary/gmail/:docId', async (req, res) => {
-  const doc = await secretaryService.getDocument(req.params.docId);
+  const doc = await secretaryService.getDocument(getActiveTenantId(req)!, req.params.docId);
   if (!doc) { res.redirect('/agent/secretary'); return; }
   res.send(renderGmailDraftHTML(doc));
 });
 
 // 秘書AI：Gmail下書き送信
 app.post('/agent/secretary/gmail-draft', express.urlencoded({ extended: true }), async (req, res) => {
-  const doc = await secretaryService.getDocument(req.body.docId);
+  const doc = await secretaryService.getDocument(getActiveTenantId(req)!, req.body.docId);
   if (!doc) { res.redirect('/agent/secretary'); return; }
 
   try {
@@ -2428,7 +2423,7 @@ app.post('/chat/send', express.json(), async (req, res) => {
     if (taskMatch) {
       const title = taskMatch[1]?.trim() || message.replace(/タスクにして|タスク追加|TODO/g, '').trim();
       if (title) {
-        await taskService.addFromChat(title);
+        await taskService.addFromChat(getActiveTenantId(req)!, title);
         res.json({ reply: `タスクを追加しました：「${title}」\n\nタスクボードで確認できます。` });
         return;
       }
@@ -2557,8 +2552,8 @@ app.post('/chat/save-to-os', express.json(), async (req, res) => {
 
 // === タスクボード ===
 app.get('/tasks', async (req, res) => {
-  const tasks = await taskService.list();
-  const summary = await taskService.getSummary();
+  const tasks = await taskService.list(getActiveTenantId(req)!);
+  const summary = await taskService.getSummary(getActiveTenantId(req)!);
   const googleParam = req.query.google as string | undefined;
   const countParam = req.query.count as string | undefined;
   res.send(renderTaskPageHTML(tasks, summary, {
@@ -2568,7 +2563,7 @@ app.get('/tasks', async (req, res) => {
 });
 
 app.post('/tasks/add', express.urlencoded({ extended: true }), async (req, res) => {
-  await taskService.add({
+  await taskService.add(getActiveTenantId(req)!, {
     title: req.body.title,
     description: '',
     priority: req.body.priority || 'medium',
@@ -2624,7 +2619,7 @@ app.post('/tasks/generate-monthly', express.urlencoded({ extended: true }), asyn
   const [year, month] = (req.body.month || '').split('-').map(Number);
   if (!year || !month) { res.redirect('/tasks'); return; }
   const tasks = generateMonthlyTasks(year, month);
-  await taskService.addBatch(tasks);
+  await taskService.addBatch(getActiveTenantId(req)!, tasks);
   logger.info(`${year}年${month}月の定型タスク${tasks.length}件を生成しました`);
   res.redirect('/tasks');
 });
@@ -2723,13 +2718,13 @@ app.post('/tasks/sync-google', express.urlencoded({ extended: true }), async (re
 
 // === 秘書AI連携API ===
 // タスク一覧（秘書AIが取得）
-app.get('/api/tasks', async (_req, res) => {
-  res.json(await taskService.exportForAssistant());
+app.get('/api/tasks', async (req, res) => {
+  res.json(await taskService.exportForAssistant(getActiveTenantId(req)!));
 });
 
 // タスク追加（秘書AIが追加）
 app.post('/api/tasks', express.json(), async (req, res) => {
-  const task = await taskService.add({
+  const task = await taskService.add(getActiveTenantId(req)!, {
     title: req.body.title,
     description: req.body.description || '',
     priority: req.body.priority || 'medium',
@@ -2750,7 +2745,7 @@ app.patch('/api/tasks/:id', express.json(), async (req, res) => {
 // 会社情報（秘書AIが参照）
 app.get('/api/company', async (req, res) => {
   const memory = await chatService.getMemory(getActiveTenantId(req) || undefined);
-  const analyses = await analysisStore.list();
+  const analyses = await analysisStore.list(getActiveTenantId(req)!);
   res.json({ company: memory, latestAnalyses: analyses.slice(0, 5) });
 });
 
