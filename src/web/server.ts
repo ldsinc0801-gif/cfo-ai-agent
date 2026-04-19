@@ -403,6 +403,73 @@ app.post('/api/tenants/:tenantId/financial-admin', express.json(), requireSuperA
   }
 });
 
+// === テナント財務管理者管理API（超管理者のみ） ===
+
+// 財務管理者一覧（全テナントの financial_admin ロールを持つユーザー）
+app.get('/api/financial-admins', requireSuperAdmin, async (req, res) => {
+  try {
+    const { data, error } = await getSupabase()
+      .from('tenant_members')
+      .select('user_id, role, tenants(id, name), users(email, name)')
+      .eq('role', 'financial_admin')
+      .eq('is_active', true);
+    if (error) throw error;
+
+    // ユーザーごとにグループ化
+    const grouped = new Map<string, { userId: string; email: string; name: string; tenants: Array<{ id: string; name: string }> }>();
+    for (const r of (data || []) as any[]) {
+      const uid = r.user_id;
+      if (!grouped.has(uid)) {
+        grouped.set(uid, { userId: uid, email: r.users?.email || '', name: r.users?.name || '', tenants: [] });
+      }
+      grouped.get(uid)!.tenants.push({ id: r.tenants?.id || '', name: r.tenants?.name || '' });
+    }
+
+    res.json({ financialAdmins: Array.from(grouped.values()) });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 財務管理者をテナントに紐付け / 解除
+app.post('/api/financial-admins/:userId/tenants', express.json(), requireSuperAdmin, async (req, res) => {
+  try {
+    const userId = req.params.userId as string;
+    const { tenantIds } = req.body; // 紐付けるテナントIDの配列
+    if (!Array.isArray(tenantIds)) { res.status(400).json({ error: 'tenantIds配列を指定してください' }); return; }
+
+    // 現在の紐付けを取得
+    const { data: current } = await getSupabase()
+      .from('tenant_members')
+      .select('tenant_id')
+      .eq('user_id', userId)
+      .eq('role', 'financial_admin')
+      .eq('is_active', true);
+    const currentTids = new Set((current || []).map((r: any) => r.tenant_id));
+
+    // 追加分
+    for (const tid of tenantIds) {
+      if (!currentTids.has(tid)) {
+        await authService.addTenantMember(asTenantId(tid), userId, 'financial_admin');
+        logger.info(`財務管理者テナント紐付け追加: ${userId} → ${tid}`);
+      }
+    }
+
+    // 削除分
+    for (const tid of currentTids) {
+      if (!tenantIds.includes(tid)) {
+        await getSupabase().from('tenant_members').delete()
+          .eq('user_id', userId).eq('tenant_id', tid).eq('role', 'financial_admin');
+        logger.info(`財務管理者テナント紐付け解除: ${userId} → ${tid}`);
+      }
+    }
+
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // === メンバー管理API ===
 
 // テナント内メンバー招待（管理者→従業員追加、財務管理者→管理者招待）

@@ -16,6 +16,23 @@ export function renderUsersHTML(user?: SidebarUser): string {
 
   const bodyHTML = `
 ${isSuperAdmin ? `
+<!-- 超管理者: テナント財務管理者セクション -->
+<div class="card">
+  <div class="card-header">
+    <h3>テナント財務管理者</h3>
+    <button class="btn-primary" onclick="showModal('addFAUserModal')">+ 財務管理者を登録</button>
+  </div>
+  <div class="card-body">
+    <p style="color:var(--text2);font-size:13px;margin-bottom:12px">複数のテナントを横断して管理できるユーザーです。テナント作成後、各テナントに紐付けてください。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>メール</th><th>名前</th><th>担当テナント</th><th>操作</th></tr></thead>
+        <tbody id="faUsersList"><tr><td colspan="4" class="muted">読み込み中...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <!-- 超管理者: テナント管理セクション -->
 <div class="card">
   <div class="card-header">
@@ -102,6 +119,37 @@ ${isSuperAdmin ? `
   </div>
 </div>
 
+<!-- 財務管理者登録モーダル -->
+<div class="modal-overlay" id="addFAUserModal" style="display:none" onclick="if(event.target===this)hideModal('addFAUserModal')">
+  <div class="modal-card">
+    <h3>テナント財務管理者を登録</h3>
+    <p class="muted" style="margin-bottom:16px">複数テナントを管理できるユーザーを登録します。登録後、各テナントに紐付けてください。</p>
+    <div class="fg"><label>メールアドレス <span style="color:#ef4444">*</span></label>
+      <input type="email" id="faUserEmail" placeholder="user@example.com" autocomplete="off"></div>
+    <div class="fg"><label>名前</label>
+      <input type="text" id="faUserName" placeholder="名前" autocomplete="off"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="hideModal('addFAUserModal')">キャンセル</button>
+      <button class="btn-primary" onclick="registerFAUser()">登録</button>
+    </div>
+  </div>
+</div>
+
+<!-- テナント紐付けモーダル -->
+<div class="modal-overlay" id="linkTenantModal" style="display:none" onclick="if(event.target===this)hideModal('linkTenantModal')">
+  <div class="modal-card">
+    <h3>テナントに紐付け</h3>
+    <p class="muted" id="linkTenantUserName" style="margin-bottom:16px"></p>
+    <div class="fg"><label>紐付けるテナント</label>
+      <div id="linkTenantCheckboxes" style="max-height:200px;overflow-y:auto"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="hideModal('linkTenantModal')">閉じる</button>
+      <button class="btn-primary" onclick="saveTenantLinks()">保存</button>
+    </div>
+  </div>
+</div>
+
 <!-- パスワード表示モーダル -->
 <div class="modal-overlay" id="pwModal" style="display:none">
   <div class="modal-card">
@@ -153,6 +201,10 @@ ${isSuperAdmin ? `
 .t-card-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
 .role-badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:600}
 .role-fa{background:#dbeafe;color:#1d4ed8}
+.tenant-tag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:500;background:#f0f9ff;color:#0369a1;margin:2px}
+.link-checkbox{display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;cursor:pointer;transition:background .1s}
+.link-checkbox:hover{background:var(--bg)}
+.link-checkbox input{width:16px;height:16px}
 .role-admin{background:#d1fae5;color:#065f46}
 .role-emp{background:#f3f4f6;color:#6b7280}
 .act-btn{background:none;border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;color:var(--text2);font-family:inherit;transition:all .15s}
@@ -381,7 +433,85 @@ document.addEventListener('keydown',function(e){
   }
 });
 
-loadTenants();loadMembers();
+// === 財務管理者管理 ===
+var allTenantsList=[];
+var currentLinkUserId='';
+
+function loadFAUsers(){
+  if(!isSA)return;
+  fetch('/api/financial-admins').then(function(r){return r.json()}).then(function(d){
+    var list=d.financialAdmins||[];
+    var el=document.getElementById('faUsersList');
+    if(list.length===0){el.innerHTML='<tr><td colspan="4" class="muted">テナント財務管理者がいません</td></tr>';return;}
+    el.innerHTML=list.map(function(fa){
+      var tenantTags=fa.tenants.map(function(t){return '<span class="tenant-tag">'+t.name+'</span>'}).join(' ');
+      return '<tr><td>'+fa.email+'</td><td>'+(fa.name||'-')+'</td><td>'+(tenantTags||'<span class="muted">未紐付け</span>')+'</td><td><button class="act-btn" onclick="openLinkTenantModal(\\''+fa.userId+'\\',\\''+fa.email+'\\')">テナント紐付け</button></td></tr>';
+    }).join('');
+  });
+}
+
+function registerFAUser(){
+  var em=document.getElementById('faUserEmail').value.trim();
+  var nm=document.getElementById('faUserName').value.trim();
+  if(!em){window.__toast('メールアドレスを入力してください','error');return;}
+  // 最初のテナント（任意）に financial_admin として追加（テナント紐付けは後から調整）
+  // まずテナント一覧を取得して最初のテナントに追加
+  fetch('/api/tenants').then(function(r){return r.json()}).then(function(td){
+    var tenants=td.tenants||[];
+    if(tenants.length===0){window.__toast('テナントを先に作成してください','error');return;}
+    var firstTid=tenants[0].id;
+    fetch('/api/tenants/'+firstTid+'/financial-admin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:em,name:nm})})
+      .then(function(r){return r.json()}).then(function(d){
+        if(d.error){window.__toast(d.error,'error');return;}
+        hideModal('addFAUserModal');
+        if(d.isExistingUser){
+          window.__toast(em+' を財務管理者として登録しました（既存ユーザー）','success');
+        } else {
+          showPw(em+' を財務管理者として登録しました。',d.initialPassword);
+        }
+        loadFAUsers();loadTenants();
+      });
+  });
+}
+
+function openLinkTenantModal(userId,email){
+  currentLinkUserId=userId;
+  document.getElementById('linkTenantUserName').textContent=email+' のテナント紐付け';
+  // テナント一覧とユーザーの現在の紐付けを取得
+  Promise.all([
+    fetch('/api/tenants').then(function(r){return r.json()}),
+    fetch('/api/financial-admins').then(function(r){return r.json()})
+  ]).then(function(results){
+    var tenants=results[0].tenants||[];
+    var fas=results[1].financialAdmins||[];
+    allTenantsList=tenants;
+    var currentFA=fas.find(function(f){return f.userId===userId});
+    var linkedTids=new Set((currentFA?currentFA.tenants:[]).map(function(t){return t.id}));
+    var html=tenants.map(function(t){
+      var tid=t.id||t.tenantId;
+      var nm=t.name||t.tenantName;
+      var checked=linkedTids.has(tid)?'checked':'';
+      return '<label class="link-checkbox"><input type="checkbox" value="'+tid+'" '+checked+'/><span>'+nm+'</span></label>';
+    }).join('');
+    document.getElementById('linkTenantCheckboxes').innerHTML=html;
+    showModal('linkTenantModal');
+  });
+}
+
+function saveTenantLinks(){
+  var checks=document.querySelectorAll('#linkTenantCheckboxes input[type=checkbox]:checked');
+  var tids=[];
+  for(var i=0;i<checks.length;i++) tids.push(checks[i].value);
+  fetch('/api/financial-admins/'+currentLinkUserId+'/tenants',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenantIds:tids})})
+    .then(function(r){return r.json()}).then(function(d){
+      if(d.error){window.__toast(d.error,'error');return;}
+      hideModal('linkTenantModal');
+      window.__toast('テナント紐付けを更新しました','success');
+      loadFAUsers();
+    });
+}
+
+loadTenants();loadMembers();loadFAUsers();
 </script>`;
 
   return agentPageShell({
