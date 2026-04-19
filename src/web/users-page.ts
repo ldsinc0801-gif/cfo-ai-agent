@@ -242,7 +242,13 @@ function addFA(){
   fetch('/api/tenants/'+curFATid+'/financial-admin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:em,name:nm})})
     .then(function(r){return r.json()}).then(function(d){
       if(d.error){window.__toast(d.error,'error');return;}
-      hideModal('addFAModal');showPw(em+' を財務管理者として追加しました。',d.initialPassword);loadTenants();
+      hideModal('addFAModal');
+      if(d.isExistingUser){
+        window.__toast(em+' を財務管理者として追加しました（既存ユーザー、パスワード変更なし）','success');
+      } else {
+        showPw(em+' を財務管理者として追加しました。',d.initialPassword);
+      }
+      loadTenants();
     });
 }
 
@@ -308,7 +314,11 @@ function invite(){
     .then(function(r){return r.json()}).then(function(d){
       if(d.error){window.__toast(d.error,'error');return;}
       hideModal('inviteModal');
-      if(d.initialPassword) showPw(em+' を追加しました。',d.initialPassword);
+      if(d.isExistingUser){
+        window.__toast(em+' を追加しました（既存ユーザー、パスワード変更なし）','success');
+      } else if(d.initialPassword){
+        showPw(em+' を追加しました。',d.initialPassword);
+      }
       loadMembers();
     });
 }

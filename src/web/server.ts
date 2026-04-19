@@ -374,9 +374,16 @@ app.post('/api/tenants/:tenantId/financial-admin', express.json(), requireSuperA
 
     // ユーザーが既に存在するか確認
     let user = await authService.getUserByEmail(email);
-    const initialPassword = generateInitialPassword();
+    let initialPassword: string | null = null;
+    let isExistingUser = false;
 
-    if (!user) {
+    if (user) {
+      // 既存ユーザー: パスワードは変更しない、テナント紐付けのみ
+      isExistingUser = true;
+      logger.info(`既存ユーザーをテナントに追加: ${email}`);
+    } else {
+      // 新規ユーザー: 初期パスワードを生成して作成
+      initialPassword = generateInitialPassword();
       const passwordHash = await hashPassword(initialPassword);
       user = await authService.createUser(email, name || email, passwordHash);
     }
@@ -384,9 +391,13 @@ app.post('/api/tenants/:tenantId/financial-admin', express.json(), requireSuperA
     // テナントメンバーとして追加
     await authService.addTenantMember(asTenantId(tenantId), user.id, 'financial_admin');
 
-    logger.info(`テナント財務管理者を追加: ${email} → テナント ${tenantId}`);
-    // 初期パスワードをレスポンスに含める（画面に表示してメール送信は別途）
-    res.json({ success: true, userId: user.id, initialPassword });
+    logger.info(`テナント財務管理者を追加: ${email} → テナント ${tenantId}${isExistingUser ? ' (既存ユーザー)' : ' (新規ユーザー)'}`);
+    res.json({
+      success: true,
+      userId: user.id,
+      isExistingUser,
+      initialPassword, // 既存ユーザーの場合はnull
+    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -415,18 +426,21 @@ app.post('/api/tenant/invite', express.json(), requireRole('admin'), async (req,
     }
 
     let user = await authService.getUserByEmail(email);
-    // 初期パスワードは画面表示で運用（手動伝達）
-    const initialPassword = generateInitialPassword();
+    let initialPassword: string | null = null;
+    let isExistingUser = false;
 
-    if (!user) {
+    if (user) {
+      isExistingUser = true;
+      logger.info(`既存ユーザーをテナントに追加: ${email} (${role})`);
+    } else {
+      initialPassword = generateInitialPassword();
       const ph = await hashPassword(initialPassword);
       user = await authService.createUser(email, name || email, ph);
     }
 
     await authService.addTenantMember(tenantId, user.id, role);
-    // パスワード平文をログに出力しない
-    logger.info(`メンバー追加: ${email} (${role}) → テナント ${tenantId}`);
-    res.json({ success: true, userId: user.id, initialPassword });
+    logger.info(`メンバー追加: ${email} (${role}) → テナント ${tenantId}${isExistingUser ? ' (既存)' : ' (新規)'}`);
+    res.json({ success: true, userId: user.id, isExistingUser, initialPassword });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
