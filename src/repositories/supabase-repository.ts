@@ -124,19 +124,21 @@ export async function getMonthlyTargets(tenantId: TenantId): Promise<MonthlyTarg
 
 // ========== チャット履歴 ==========
 
-export async function saveChatMessage(tenantId: TenantId, role: string, content: string): Promise<void> {
+export async function saveChatMessage(tenantId: TenantId, role: string, content: string, userId?: string): Promise<void> {
   const { error } = await getSupabase()
     .from('chat_messages')
-    .insert({ tenant_id: tenantId, role, content });
+    .insert({ tenant_id: tenantId, role, content, user_id: userId || null });
 
   if (error) throw new Error(`チャット保存に失敗: ${error.message}`);
 }
 
-export async function getChatHistory(tenantId: TenantId, limit: number = 50): Promise<ChatMessage[]> {
-  const { data, error } = await getSupabase()
+export async function getChatHistory(tenantId: TenantId, limit: number = 50, userId?: string): Promise<ChatMessage[]> {
+  let query = getSupabase()
     .from('chat_messages')
     .select('*')
-    .eq('tenant_id', tenantId)
+    .eq('tenant_id', tenantId);
+  if (userId) query = query.eq('user_id', userId);
+  const { data, error } = await query
     .order('created_at', { ascending: false })
     .limit(limit);
 
@@ -149,11 +151,13 @@ export async function getChatHistory(tenantId: TenantId, limit: number = 50): Pr
   }));
 }
 
-export async function clearChatHistory(tenantId: TenantId): Promise<void> {
-  const { error } = await getSupabase()
+export async function clearChatHistory(tenantId: TenantId, userId?: string): Promise<void> {
+  let query = getSupabase()
     .from('chat_messages')
     .delete()
     .eq('tenant_id', tenantId);
+  if (userId) query = query.eq('user_id', userId);
+  const { error } = await query;
 
   if (error) throw new Error(`チャット履歴の削除に失敗: ${error.message}`);
 }

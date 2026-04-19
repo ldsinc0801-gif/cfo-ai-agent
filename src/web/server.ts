@@ -2514,7 +2514,8 @@ app.post('/settings/company', express.urlencoded({ extended: true }), async (req
 // === チャット ===
 app.get('/chat', async (req, res) => {
   const tid = getActiveTenantId(req) || undefined;
-  const history = await chatService.getHistory(tid);
+  const uid = req.session.user?.id;
+  const history = await chatService.getHistory(tid, uid);
   const memory = await chatService.getMemory(tid);
   res.send(renderChatHTML(history, memory, chatService.isAvailable()));
 });
@@ -2548,7 +2549,7 @@ app.post('/chat/send', express.json(), async (req, res) => {
       trendMonths = trend.months || [];
     } catch { /* ignore */ }
 
-    const result = await chatService.sendMessage(message, tid, freeeCtx, trendMonths);
+    const result = await chatService.sendMessage(message, tid, freeeCtx, trendMonths, req.session.user?.id);
     res.json(result);
   } catch (error) {
     logger.error('チャットエラー', error);
@@ -2648,7 +2649,7 @@ app.post('/chat/memory', express.urlencoded({ extended: true }), async (req, res
 });
 
 app.post('/chat/clear', async (req, res) => {
-  await chatService.clearHistory(getActiveTenantId(req) || undefined);
+  await chatService.clearHistory(getActiveTenantId(req) || undefined, req.session.user?.id);
   res.json({ ok: true });
 });
 

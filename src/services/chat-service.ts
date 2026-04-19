@@ -118,7 +118,6 @@ export class ChatService {
   // ========== メモリ ==========
 
   async getMemory(tenantId?: TenantId): Promise<CompanyMemory> {
-    // Supabase接続時はDBのみ参照（JSONフォールバック禁止: テナント間データ混在防止）
     if (this.useSupabase && tenantId) {
       try { return await repo.getCompanyMemory(tenantId); } catch (e) { logger.warn('Supabaseメモリ取得失敗'); }
     }
@@ -127,46 +126,45 @@ export class ChatService {
 
   async saveMemory(memory: CompanyMemory, tenantId?: TenantId): Promise<void> {
     memory.lastUpdated = new Date().toISOString();
-    // Supabase接続時はDBのみ保存（JSONフォールバック禁止）
     if (this.useSupabase && tenantId) {
       try { await repo.saveCompanyMemory(tenantId, memory); return; } catch (e) { logger.warn('Supabaseメモリ保存失敗'); }
     }
   }
 
-  // ========== 履歴 ==========
+  // ========== 履歴（ユーザー単位で分離） ==========
 
-  async getHistory(tenantId?: TenantId): Promise<ChatMessage[]> {
+  async getHistory(tenantId?: TenantId, userId?: string): Promise<ChatMessage[]> {
     if (this.useSupabase && tenantId) {
-      try { return await repo.getChatHistory(tenantId, 50); } catch (e) { logger.warn('Supabase履歴取得失敗'); }
+      try { return await repo.getChatHistory(tenantId, 50, userId); } catch (e) { logger.warn('Supabase履歴取得失敗'); }
     }
     return [];
   }
 
-  private async saveHistory(history: ChatMessage[], tenantId?: TenantId): Promise<void> {
+  private async saveHistory(history: ChatMessage[], tenantId?: TenantId, userId?: string): Promise<void> {
     if (this.useSupabase && tenantId) {
       const latest = history.slice(-2);
       try {
         for (const m of latest) {
-          await repo.saveChatMessage(tenantId, m.role, m.content);
+          await repo.saveChatMessage(tenantId, m.role, m.content, userId);
         }
         return;
       } catch (e) { logger.warn('Supabase履歴保存失敗'); }
     }
   }
 
-  async clearHistory(tenantId?: TenantId): Promise<void> {
+  async clearHistory(tenantId?: TenantId, userId?: string): Promise<void> {
     if (this.useSupabase && tenantId) {
-      try { await repo.clearChatHistory(tenantId); return; } catch (e) { logger.warn('Supabase履歴削除失敗'); }
+      try { await repo.clearChatHistory(tenantId, userId); return; } catch (e) { logger.warn('Supabase履歴削除失敗'); }
     }
   }
 
   // ========== チャット送信 ==========
 
-  async sendMessage(userMessage: string, tenantId?: TenantId, freeeContext?: FreeeContextData | null, trendMonths?: any[]): Promise<ChatResponse> {
+  async sendMessage(userMessage: string, tenantId?: TenantId, freeeContext?: FreeeContextData | null, trendMonths?: any[], userId?: string): Promise<ChatResponse> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     const memory = await this.getMemory(tenantId);
-    const history = await this.getHistory(tenantId);
+    const history = await this.getHistory(tenantId, userId);
 
     const analyses = tenantId ? await analysisStore.list(tenantId) : [];
     const latestAnalysis = analyses.length > 0 ? await analysisStore.get(analyses[0].id) : null;
@@ -208,8 +206,9 @@ export class ChatService {
       { role: 'user', content: userMessage, timestamp: new Date().toISOString() },
       { role: 'assistant', content: assistantMessage, timestamp: new Date().toISOString() },
     );
-    await this.saveHistory(history, tenantId);
+    await this.saveHistory(history, tenantId, userId);
 
+    // company_memoryの更新はテナント共通（全ユーザーのチャットからAIが学習）
     await this.tryUpdateMemory(userMessage, assistantMessage, memory, tenantId);
 
     return { reply: assistantMessage, proposals: [] };
