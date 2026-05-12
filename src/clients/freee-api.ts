@@ -131,6 +131,34 @@ export class FreeeApiClient {
   }
 
   /**
+   * 税区分名（例: "課対仕入10%"）からそのまま freee の tax_code を引き当てる。
+   * 名前マッチで見つからなければ部分一致も試し、最終的に findTaxCode にフォールバック。
+   */
+  async findTaxCodeByName(
+    companyId: number,
+    taxCategoryName: string,
+    fallbackDealType: 'income' | 'expense' = 'expense',
+    fallbackRate: number = 10,
+  ): Promise<number> {
+    try {
+      const taxes = await this.getTaxCodes(companyId);
+      // 完全一致
+      let target = taxes.find(t => t.name === taxCategoryName);
+      // 部分一致（"課対仕入10%" を含む等）
+      if (!target) target = taxes.find(t => t.name.includes(taxCategoryName) || taxCategoryName.includes(t.name));
+      if (target) {
+        logger.info(`税区分マッチ(name): ${taxCategoryName} → ${target.name} (code=${target.code})`);
+        return target.code;
+      }
+      logger.warn(`税区分名で見つからず: ${taxCategoryName}、フォールバック検索`);
+      return await this.findTaxCode(companyId, fallbackDealType, fallbackRate);
+    } catch (e) {
+      logger.warn('税区分名検索に失敗、フォールバック', e);
+      return await this.findTaxCode(companyId, fallbackDealType, fallbackRate);
+    }
+  }
+
+  /**
    * 取引種別(income/expense)と税率(10/8/0)から、その事業所の正しい tax_code を解決する。
    * 「課対仕入10%」「課対売上10%」のような名前で検索することで、テナント固有のコードでも正しく動く。
    * 見つからなければ 0（対象外）を返す。

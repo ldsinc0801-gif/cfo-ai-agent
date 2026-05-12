@@ -1780,7 +1780,7 @@ app.post('/agent/accounting/confirm', express.json({ limit: '5mb' }), async (req
         debitAccount: e.debitAccount,
         creditAccount: e.creditAccount,
         amount: Number(e.amount) || 0,
-        taxRate: Number(e.taxRate) || 10,
+        taxCategory: e.taxCategory || undefined, taxRate: Number(e.taxRate) || 10,
         taxAmount: Number(e.taxAmount) || 0,
         description: e.description || '',
         partnerName: e.partnerName || '',
@@ -1852,7 +1852,7 @@ app.post('/agent/accounting/batch/:id/update', express.json({ limit: '5mb' }), a
       debitAccount: e.debitAccount,
       creditAccount: e.creditAccount,
       amount: Number(e.amount) || 0,
-      taxRate: Number(e.taxRate) || 10,
+      taxCategory: e.taxCategory || undefined, taxRate: Number(e.taxRate) || 10,
       taxAmount: Number(e.taxAmount) || 0,
       description: e.description || '',
       partnerName: e.partnerName || '',
@@ -2222,8 +2222,10 @@ async function sendEntriesToFreee(
       continue;
     }
     const dealType = entry.debitAccount.includes('売上') ? 'income' : 'expense';
-    // 税区分はfreee側の名前ベースで動的に解決（事業所ごとのコード差異に対応）
-    const taxCode = await apiClient.findTaxCode(companyId, dealType, entry.taxRate);
+    // 税区分: entry.taxCategory が指定されていれば名前一致で、無ければ rate/dealType から推測
+    const taxCode = entry.taxCategory
+      ? await apiClient.findTaxCodeByName(companyId, entry.taxCategory, dealType, entry.taxRate)
+      : await apiClient.findTaxCode(companyId, dealType, entry.taxRate);
     const wallet = await apiClient.findWalletable(companyId, entry.creditAccount);
     const payments = wallet ? [{
       amount: entry.amount,
@@ -2338,7 +2340,7 @@ app.post('/agent/accounting/send-freee', express.urlencoded({ extended: true }),
           debitAccount: e.debitAccount,
           creditAccount: e.creditAccount,
           amount: Number(e.amount) || 0,
-          taxRate: Number(e.taxRate) || 10,
+          taxCategory: e.taxCategory || undefined, taxRate: Number(e.taxRate) || 10,
           taxAmount: Number(e.taxAmount) || 0,
           description: e.description || '',
           partnerName: e.partnerName || '',
@@ -2401,6 +2403,7 @@ app.post('/agent/accounting/batch/:id/send-freee', express.urlencoded({ extended
       debitAccount: e.debitAccount,
       creditAccount: e.creditAccount,
       amount: e.amount,
+      taxCategory: e.taxCategory || '',
       taxRate: e.taxRate,
       taxAmount: e.taxAmount,
       description: e.description,

@@ -4,6 +4,7 @@ import { usageTracker } from './usage-tracker.js';
 import { accountRulesToPrompt } from '../config/account-rules.js';
 import { journalLearningService } from './journal-learning-service.js';
 import { getAllAccountNames } from '../config/freee-accounts.js';
+import { TAX_CATEGORIES, getAllTaxCategoryNames, rateFromTaxCategory, inferTaxCategory } from '../config/tax-categories.js';
 
 /** 仕訳データ */
 export interface JournalEntry {
@@ -11,7 +12,9 @@ export interface JournalEntry {
   debitAccount: string;   // 借方勘定科目
   creditAccount: string;  // 貸方勘定科目
   amount: number;
-  taxRate: number;        // 消費税率 (0, 8, 10)
+  /** 税区分名（freee/弥生互換）。例: 課対仕入10%, 課税売上10%, 対象外 */
+  taxCategory: string;
+  taxRate: number;        // 消費税率 (0, 8, 10) — taxCategory から自動算出
   taxAmount: number;
   description: string;    // 摘要
   partnerName: string;    // 取引先名
@@ -214,20 +217,17 @@ ${basePrompt}`,
    */
   toYayoiCSV(entries: JournalEntry[], includeCounterAccount: boolean = true): string {
     const headers = includeCounterAccount
-      ? '日付,摘要,勘定科目,金額,相手勘定科目'
-      : '日付,摘要,勘定科目,金額';
+      ? '日付,摘要,勘定科目,金額,税区分,相手勘定科目'
+      : '日付,摘要,勘定科目,金額,税区分';
 
     const rows = entries.map(e => {
-      // 日付を「2026年1月1日」形式に変換
       const [y, m, d] = e.date.split('-').map(Number);
       const dateStr = `${y}年${m}月${d}日`;
 
-      // 摘要: 取引先 + 内容
       const description = e.partnerName
         ? `${e.partnerName} ${e.description}`.trim()
         : e.description;
 
-      // 売上系はプラス、経費系はマイナス
       const isIncome = e.debitAccount.includes('売上') || e.creditAccount.includes('売上');
       const amount = isIncome ? e.amount : -e.amount;
 
@@ -236,6 +236,7 @@ ${basePrompt}`,
         `"${description}"`,
         e.debitAccount,
         amount,
+        e.taxCategory || (e.taxRate === 10 ? '課対仕入10%' : e.taxRate === 8 ? '課対仕入8%(軽)' : '対象外'),
       ];
       if (includeCounterAccount) {
         cols.push(e.creditAccount);
@@ -321,7 +322,7 @@ ${userMessage}
 - debitAccount: 借方勘定科目（上記有効な勘定科目一覧から）
 - creditAccount: 貸方勘定科目（上記有効な勘定科目一覧から）
 - amount: 金額（円、整数）
-- taxRate: 税率（10 / 8 / 0 のいずれか整数）
+- taxCategory: 税区分名（${TAX_CATEGORIES.map(c => c.name).join(' / ')}）
 - taxAmount: 消費税額（円、整数）
 - description: 摘要（文字列）
 - partnerName: 取引先（文字列）
@@ -352,7 +353,8 @@ ${userMessage}
     const text = response.text || '';
     this.recordUsage(response, '仕訳修正解釈(Gemini)');
 
-    const VALID_FIELDS = new Set(['date', 'debitAccount', 'creditAccount', 'amount', 'taxRate', 'taxAmount', 'description', 'partnerName']);
+    const VALID_FIELDS = new Set(['date', 'debitAccount', 'creditAccount', 'amount', 'taxCategory', 'taxAmount', 'description', 'partnerName']);
+    const taxCategoryNames = new Set(getAllTaxCategoryNames());
 
     try {
       const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, text];
@@ -372,11 +374,9 @@ ${userMessage}
             value = normalizeDate(value, fiscalMonth, fiscalYear);
           } else if (c.field === 'amount' || c.field === 'taxAmount') {
             value = Math.max(0, Math.round(Number(value) || 0));
-          } else if (c.field === 'taxRate') {
-            const r = Number(value);
-            value = [0, 8, 10].includes(r) ? r : 10;
+          } else if (c.field === 'taxCategory') {
+            if (!taxCategoryNames.has(String(value))) return null;
           } else if (c.field === 'debitAccount' || c.field === 'creditAccount') {
-            // 無効な勘定科目はスキップ
             if (!accountNames.includes(value)) return null;
           } else {
             value = String(value ?? '');
@@ -420,17 +420,35 @@ ${userMessage}
       if (!jsonMatch) throw new Error('JSON not found');
       const parsed = JSON.parse(jsonMatch[0]);
       return {
-        entries: (parsed.entries || []).map((e: any) => ({
-          date: normalizeDate(e.date, fiscalMonth, fiscalYear),
-          debitAccount: e.debitAccount || '未分類',
-          creditAccount: e.creditAccount || '現金',
-          amount: Number(e.amount) || 0,
-          taxRate: Number(e.taxRate) || 10,
-          taxAmount: Number(e.taxAmount) || 0,
-          description: e.description || '',
-          partnerName: e.partnerName || '',
-          receiptType: e.receiptType || '領収書',
-        })),
+        entries: (parsed.entries || []).map((e: any) => {
+          const validNames = getAllTaxCategoryNames();
+          const debitAccount = e.debitAccount || '未分類';
+          // 税区分の決定: AIが返した taxCategory > 旧 taxRate からの推定
+          let taxCategory = typeof e.taxCategory === 'string' && validNames.includes(e.taxCategory)
+            ? e.taxCategory
+            : inferTaxCategory(debitAccount, Number(e.taxRate) || 10);
+          const taxRate = rateFromTaxCategory(taxCategory);
+          // taxAmount: AIが返したものを優先、無ければ内税逆算
+          let taxAmount = Number(e.taxAmount);
+          if (!taxAmount && taxRate > 0) {
+            const amount = Number(e.amount) || 0;
+            taxAmount = amount - Math.round(amount / (1 + taxRate / 100));
+          } else if (!taxAmount) {
+            taxAmount = 0;
+          }
+          return {
+            date: normalizeDate(e.date, fiscalMonth, fiscalYear),
+            debitAccount,
+            creditAccount: e.creditAccount || '現金',
+            amount: Number(e.amount) || 0,
+            taxCategory,
+            taxRate,
+            taxAmount,
+            description: e.description || '',
+            partnerName: e.partnerName || '',
+            receiptType: e.receiptType || '領収書',
+          };
+        }),
         rawText: text,
         confidence: parsed.confidence || 'medium',
         notes: parsed.notes || [],
@@ -555,7 +573,20 @@ function getReceiptPrompt(fiscalMonth?: number | null, fiscalYear?: number | nul
     yearMissingDefault = `事業年度コンテキスト（${fy.start.y}/${fy.start.m}〜${fy.end.y}/${fy.end.m}）に基づいて推定`;
   }
 
+  const taxCategoryList = TAX_CATEGORIES.map(c => `"${c.name}"`).join(' / ');
+
   return `この領収書・レシートの内容を読み取り、以下のJSON形式で仕訳データを生成してください。
+
+【消費税区分の判定（重要）】
+- taxCategory には次のいずれかを必ず指定してください: ${taxCategoryList}
+- 借方が「売上」系の科目（売上高、売上、売掛金など売上に紐づくもの）→ 課税売上系
+- 借方が経費・資産・買掛系（旅費交通費、車両費、消耗品費、仕入高など）→ 課対仕入系
+- 軽減税率8%（食料品・新聞）→ 「課対仕入8%(軽)」または「課税売上8%(軽)」
+- 標準税率10% → 「課対仕入10%」または「課税売上10%」
+- 印紙税・収入印紙・登録免許税・保険料・賃金・給与・社会保険料 → 「不課税」
+- 国民健康保険料・住宅家賃 → 「非課仕入」
+- 海外取引・受取利息 → 「対象外」
+- taxRate は taxCategory に対応する税率を整数で（10 / 8 / 0）
 
 【日付の解釈ルール（最重要）】
 - 必ず 4桁西暦の YYYY-MM-DD 形式で返すこと（例: 2025-10-12）
@@ -594,6 +625,7 @@ JSONのみ返してください：
       "debitAccount": "上記ルールに基づく借方勘定科目",
       "creditAccount": "現金",
       "amount": 税込金額,
+      "taxCategory": "課対仕入10%",
       "taxRate": 10,
       "taxAmount": 消費税額,
       "description": "摘要（店名＋購入内容の要約）",

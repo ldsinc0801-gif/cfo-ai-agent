@@ -2,6 +2,18 @@ import type { JournalEntry, ReceiptAnalysis } from '../services/receipt-service.
 import { agentPageShell, esc } from './shared.js';
 import { accountSelectOptions } from '../config/freee-accounts.js';
 import { csrfFormHidden, getCurrentCsrfToken } from './security.js';
+import { TAX_CATEGORIES } from '../config/tax-categories.js';
+
+/** 税区分セレクトのHTML生成（optgroupで売上/仕入/その他をグループ化） */
+function taxCategorySelectOptions(selected: string): string {
+  const groups: Record<string, typeof TAX_CATEGORIES> = { '売上': [], '仕入': [], 'その他': [] };
+  for (const c of TAX_CATEGORIES) groups[c.group].push(c);
+  return Object.entries(groups).map(([label, items]) =>
+    `<optgroup label="${label}">${items.map(c =>
+      `<option value="${esc(c.name)}" ${c.name === selected ? 'selected' : ''}>${esc(c.name)}</option>`
+    ).join('')}</optgroup>`
+  ).join('');
+}
 
 function csrfInput(): string {
   return csrfFormHidden(getCurrentCsrfToken() || '');
@@ -209,18 +221,23 @@ function updateYayoiLink(){
   btn.setAttribute('href', href.replace(/counter=[01]/, 'counter=' + (checked ? '1' : '0')));
 }
 
+// 税区分名 → 税率 のマップ（クライアント側でも逆算するため埋め込む）
+var TAX_RATE_BY_CATEGORY = ${JSON.stringify(Object.fromEntries(TAX_CATEGORIES.map(c => [c.name, c.rate])))};
+
 // 全フィールドの編集状態を集約して返す
 function getCurrentEntries(){
   var rows = document.querySelectorAll('tr[data-original]');
   var entries = [];
   rows.forEach(function(tr){
     var orig = JSON.parse(tr.dataset.original);
+    var taxCategory = tr.querySelector('.edit-taxcat').value;
     entries.push(Object.assign({}, orig, {
       date: tr.querySelector('.edit-date').value,
       debitAccount: tr.querySelector('.edit-debit').value,
       creditAccount: tr.querySelector('.edit-credit').value,
       amount: Number(tr.querySelector('.edit-amount').value) || 0,
-      taxRate: Number(tr.querySelector('.edit-taxrate').value),
+      taxCategory: taxCategory,
+      taxRate: TAX_RATE_BY_CATEGORY[taxCategory] || 0,
       taxAmount: Number(tr.querySelector('.edit-tax').value) || 0,
       description: tr.querySelector('.edit-desc').value,
       partnerName: tr.querySelector('.edit-partner').value,
@@ -238,7 +255,7 @@ function onCellChange(el){
     tr.querySelector('.edit-debit').value !== orig.debitAccount ||
     tr.querySelector('.edit-credit').value !== orig.creditAccount ||
     Number(tr.querySelector('.edit-amount').value) !== orig.amount ||
-    Number(tr.querySelector('.edit-taxrate').value) !== orig.taxRate ||
+    tr.querySelector('.edit-taxcat').value !== orig.taxCategory ||
     Number(tr.querySelector('.edit-tax').value) !== orig.taxAmount ||
     tr.querySelector('.edit-desc').value !== orig.description ||
     tr.querySelector('.edit-partner').value !== orig.partnerName
@@ -248,13 +265,13 @@ function onCellChange(el){
   syncExportTargets();
 }
 
-// 金額または税率変更時、内税前提で消費税額を自動再計算
+// 金額または税区分変更時、内税前提で消費税額を自動再計算
 function onAmountOrTaxChange(el){
   var tr = el.closest('tr');
   var amount = Number(tr.querySelector('.edit-amount').value) || 0;
-  var rate = Number(tr.querySelector('.edit-taxrate').value);
+  var taxCategory = tr.querySelector('.edit-taxcat').value;
+  var rate = TAX_RATE_BY_CATEGORY[taxCategory] || 0;
   if(amount && rate){
-    // 内税: 税抜 = 税込 / (1+r/100), 税額 = 税込 - 税抜
     var net = Math.round(amount / (1 + rate/100));
     tr.querySelector('.edit-tax').value = amount - net;
   } else {
@@ -305,7 +322,7 @@ function sendChatCorrection(){
     if(data.success && data.corrections && data.corrections.length > 0){
       var FIELD_MAP = {
         debitAccount: '.edit-debit', creditAccount: '.edit-credit',
-        date: '.edit-date', amount: '.edit-amount', taxRate: '.edit-taxrate',
+        date: '.edit-date', amount: '.edit-amount', taxCategory: '.edit-taxcat',
         taxAmount: '.edit-tax', description: '.edit-desc', partnerName: '.edit-partner',
       };
       data.corrections.forEach(function(c){
@@ -340,12 +357,14 @@ function sendChatCorrection(){
 function saveCorrection(idx){
   var tr = document.querySelector('tr[data-idx="'+idx+'"]');
   var original = JSON.parse(tr.dataset.original);
+  var taxCategory = tr.querySelector('.edit-taxcat').value;
   var corrected = Object.assign({}, original, {
     date: tr.querySelector('.edit-date').value,
     debitAccount: tr.querySelector('.edit-debit').value,
     creditAccount: tr.querySelector('.edit-credit').value,
     amount: Number(tr.querySelector('.edit-amount').value) || 0,
-    taxRate: Number(tr.querySelector('.edit-taxrate').value),
+    taxCategory: taxCategory,
+    taxRate: TAX_RATE_BY_CATEGORY[taxCategory] || 0,
     taxAmount: Number(tr.querySelector('.edit-tax').value) || 0,
     description: tr.querySelector('.edit-desc').value,
     partnerName: tr.querySelector('.edit-partner').value,
@@ -422,7 +441,7 @@ ${analysis.notes.length > 0 ? `
             <th>借方</th>
             <th>貸方</th>
             <th>金額</th>
-            <th>税率</th>
+            <th>税区分</th>
             <th>消費税</th>
             <th>摘要</th>
             <th>取引先</th>
@@ -436,7 +455,7 @@ ${entries.map((e, i) => `
             <td><select class="edit-select edit-debit" onchange="onCellChange(this)">${accountSelectOptions(e.debitAccount)}</select></td>
             <td><select class="edit-select edit-credit" onchange="onCellChange(this)">${accountSelectOptions(e.creditAccount)}</select></td>
             <td class="num"><input type="number" class="edit-input edit-amount num-input" value="${e.amount}" step="1" onchange="onAmountOrTaxChange(this)"/></td>
-            <td class="num"><select class="edit-select edit-taxrate" onchange="onAmountOrTaxChange(this)"><option value="10" ${e.taxRate===10?'selected':''}>10%</option><option value="8" ${e.taxRate===8?'selected':''}>8%</option><option value="0" ${e.taxRate===0?'selected':''}>0%</option></select></td>
+            <td><select class="edit-select edit-taxcat" onchange="onAmountOrTaxChange(this)">${taxCategorySelectOptions(e.taxCategory || '')}</select></td>
             <td class="num"><input type="number" class="edit-input edit-tax num-input" value="${e.taxAmount}" step="1" onchange="onCellChange(this)"/></td>
             <td><input type="text" class="edit-input edit-desc" value="${esc(e.description)}" onchange="onCellChange(this)" placeholder="摘要"/></td>
             <td><input type="text" class="edit-input edit-partner" value="${esc(e.partnerName)}" onchange="onCellChange(this)" placeholder="取引先"/></td>
@@ -660,7 +679,7 @@ function renderBatchHistory(batches: Array<{ id: string; label: string; entryCou
  */
 export function renderBatchDetailHTML(opts: {
   batch: { id: string; label: string; entryCount: number; totalAmount: number; createdAt: string; freeeSentAt: string | null; freeeSkipCount?: number };
-  entries: Array<{ id: string; entryDate: string; debitAccount: string; creditAccount: string; amount: number; taxRate: number; taxAmount: number; description: string; partnerName: string; receiptType: string | null }>;
+  entries: Array<{ id: string; entryDate: string; debitAccount: string; creditAccount: string; amount: number; taxCategory?: string | null; taxRate: number; taxAmount: number; description: string; partnerName: string; receiptType: string | null }>;
   fiscalMonth?: number | null;
   /** freee送信結果バナー表示用 */
   freeeStatus?: 'success' | 'already' | 'demo' | 'noauth' | 'nocompany' | 'error';
@@ -734,7 +753,7 @@ ${statusBanner}
     <div class="table-wrap">
       <table class="journal-table">
         <thead>
-          <tr><th>日付</th><th>借方</th><th>貸方</th><th>金額</th><th>税率</th><th>消費税</th><th>摘要</th><th>取引先</th></tr>
+          <tr><th>日付</th><th>借方</th><th>貸方</th><th>金額</th><th>税区分</th><th>消費税</th><th>摘要</th><th>取引先</th></tr>
         </thead>
         <tbody>
           ${entries.map((e, i) => `
@@ -743,7 +762,7 @@ ${statusBanner}
             <td><select class="edit-select edit-debit">${accountSelectOptions(e.debitAccount)}</select></td>
             <td><select class="edit-select edit-credit">${accountSelectOptions(e.creditAccount)}</select></td>
             <td class="num"><input type="number" class="edit-input edit-amount num-input" value="${e.amount}" step="1"/></td>
-            <td class="num"><select class="edit-select edit-taxrate"><option value="10" ${e.taxRate===10?'selected':''}>10%</option><option value="8" ${e.taxRate===8?'selected':''}>8%</option><option value="0" ${e.taxRate===0?'selected':''}>0%</option></select></td>
+            <td><select class="edit-select edit-taxcat">${taxCategorySelectOptions(e.taxCategory || '')}</select></td>
             <td class="num"><input type="number" class="edit-input edit-tax num-input" value="${e.taxAmount}" step="1"/></td>
             <td><input type="text" class="edit-input edit-desc" value="${esc(e.description)}" placeholder="摘要"/></td>
             <td><input type="text" class="edit-input edit-partner" value="${esc(e.partnerName)}" placeholder="取引先"/></td>
@@ -802,16 +821,19 @@ function closeFreeeConfirm(){
   var m = document.getElementById('freeeConfirmModal');
   if(m) m.style.display = 'none';
 }
+var BATCH_TAX_RATE_BY_CATEGORY = ${JSON.stringify(Object.fromEntries(TAX_CATEGORIES.map(c => [c.name, c.rate])))};
 function collectEntries(){
   var rows = document.querySelectorAll('tr[data-idx]');
   var arr = [];
   rows.forEach(function(tr){
+    var taxCategory = tr.querySelector('.edit-taxcat').value;
     arr.push({
       date: tr.querySelector('.edit-date').value,
       debitAccount: tr.querySelector('.edit-debit').value,
       creditAccount: tr.querySelector('.edit-credit').value,
       amount: Number(tr.querySelector('.edit-amount').value) || 0,
-      taxRate: Number(tr.querySelector('.edit-taxrate').value),
+      taxCategory: taxCategory,
+      taxRate: BATCH_TAX_RATE_BY_CATEGORY[taxCategory] || 0,
       taxAmount: Number(tr.querySelector('.edit-tax').value) || 0,
       description: tr.querySelector('.edit-desc').value,
       partnerName: tr.querySelector('.edit-partner').value,

@@ -106,6 +106,7 @@ export interface JournalEntryRow {
   debitAccount: string;
   creditAccount: string;
   amount: number;
+  taxCategory: string | null;
   taxRate: number;
   taxAmount: number;
   description: string;
@@ -122,7 +123,7 @@ export async function createJournalBatch(
     createdBy?: string;
     entries: Array<{
       date: string; debitAccount: string; creditAccount: string;
-      amount: number; taxRate: number; taxAmount: number;
+      amount: number; taxCategory?: string; taxRate: number; taxAmount: number;
       description: string; partnerName: string; receiptType?: string;
     }>;
   }
@@ -150,6 +151,7 @@ export async function createJournalBatch(
     debit_account: e.debitAccount,
     credit_account: e.creditAccount,
     amount: e.amount,
+    tax_category: e.taxCategory ?? null,
     tax_rate: e.taxRate,
     tax_amount: e.taxAmount,
     description: e.description,
@@ -228,7 +230,8 @@ export async function getJournalEntries(tenantId: TenantId, batchId: string): Pr
   return (data || []).map((r: any) => ({
     id: r.id, batchId: r.batch_id, entryDate: r.entry_date,
     debitAccount: r.debit_account, creditAccount: r.credit_account,
-    amount: Number(r.amount), taxRate: r.tax_rate, taxAmount: Number(r.tax_amount),
+    amount: Number(r.amount), taxCategory: r.tax_category,
+    taxRate: r.tax_rate, taxAmount: Number(r.tax_amount),
     description: r.description, partnerName: r.partner_name, receiptType: r.receipt_type,
   }));
 }
@@ -239,7 +242,7 @@ export async function replaceJournalEntries(
   batchId: string,
   entries: Array<{
     date: string; debitAccount: string; creditAccount: string;
-    amount: number; taxRate: number; taxAmount: number;
+    amount: number; taxCategory?: string; taxRate: number; taxAmount: number;
     description: string; partnerName: string; receiptType?: string;
   }>
 ): Promise<void> {
@@ -261,12 +264,15 @@ export async function replaceJournalEntries(
       debit_account: e.debitAccount,
       credit_account: e.creditAccount,
       amount: e.amount,
+      tax_category: e.taxCategory ?? null,
       tax_rate: e.taxRate,
       tax_amount: e.taxAmount,
       description: e.description,
       partner_name: e.partnerName,
-      receipt_type: e.receiptType ?? null,
+      receiptType: e.receiptType ?? null,
     }));
+    // typo修正: receiptType → receipt_type
+    rows.forEach((r: any) => { r.receipt_type = r.receiptType; delete r.receiptType; });
     const { error: insErr } = await supabase.from('journal_entries').insert(rows);
     if (insErr) throw new Error(`仕訳の再挿入に失敗: ${insErr.message}`);
   }

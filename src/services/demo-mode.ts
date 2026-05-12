@@ -437,27 +437,27 @@ const DEMO_PROFILES: DemoProfile[] = [
 export const DEMO_JOURNAL_ENTRIES = [
   {
     date: '2026-04-01', debitAccount: '旅費交通費', creditAccount: '現金',
-    amount: 12800, taxRate: 10, taxAmount: 1164, description: '東京出張 新幹線往復', partnerName: 'JR東海', receiptType: '領収書',
+    amount: 12800, taxCategory: '課対仕入10%', taxRate: 10, taxAmount: 1164, description: '東京出張 新幹線往復', partnerName: 'JR東海', receiptType: '領収書',
   },
   {
     date: '2026-04-01', debitAccount: '会議費', creditAccount: '現金',
-    amount: 3500, taxRate: 10, taxAmount: 318, description: 'クライアント打合せ カフェ代', partnerName: 'スターバックス', receiptType: 'レシート',
+    amount: 3500, taxCategory: '課対仕入10%', taxRate: 10, taxAmount: 318, description: 'クライアント打合せ カフェ代', partnerName: 'スターバックス', receiptType: 'レシート',
   },
   {
     date: '2026-04-02', debitAccount: '消耗品費', creditAccount: '普通預金',
-    amount: 32780, taxRate: 10, taxAmount: 2980, description: 'コピー用紙・トナー', partnerName: 'アスクル', receiptType: '請求書',
+    amount: 32780, taxCategory: '課対仕入10%', taxRate: 10, taxAmount: 2980, description: 'コピー用紙・トナー', partnerName: 'アスクル', receiptType: '請求書',
   },
   {
     date: '2026-04-03', debitAccount: '通信費', creditAccount: '普通預金',
-    amount: 8800, taxRate: 10, taxAmount: 800, description: 'インターネット回線 4月分', partnerName: 'NTT東日本', receiptType: '請求書',
+    amount: 8800, taxCategory: '課対仕入10%', taxRate: 10, taxAmount: 800, description: 'インターネット回線 4月分', partnerName: 'NTT東日本', receiptType: '請求書',
   },
   {
     date: '2026-04-05', debitAccount: '接待交際費', creditAccount: '現金',
-    amount: 25000, taxRate: 10, taxAmount: 2273, description: '取引先接待 会食', partnerName: '鮨処 さくら', receiptType: '領収書',
+    amount: 25000, taxCategory: '課対仕入10%', taxRate: 10, taxAmount: 2273, description: '取引先接待 会食', partnerName: '鮨処 さくら', receiptType: '領収書',
   },
   {
     date: '2026-04-05', debitAccount: '地代家賃', creditAccount: '普通預金',
-    amount: 150000, taxRate: 10, taxAmount: 13636, description: '事務所家賃 4月分', partnerName: '三井不動産リアルティ', receiptType: '請求書',
+    amount: 150000, taxCategory: '課対仕入10%', taxRate: 10, taxAmount: 13636, description: '事務所家賃 4月分', partnerName: '三井不動産リアルティ', receiptType: '請求書',
   },
 ];
 
