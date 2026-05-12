@@ -2221,8 +2221,9 @@ async function sendEntriesToFreee(
       skipCount++;
       continue;
     }
-    const taxCode = entry.taxRate === 10 ? 21 : entry.taxRate === 8 ? 23 : 0;
     const dealType = entry.debitAccount.includes('売上') ? 'income' : 'expense';
+    // 税区分はfreee側の名前ベースで動的に解決（事業所ごとのコード差異に対応）
+    const taxCode = await apiClient.findTaxCode(companyId, dealType, entry.taxRate);
     const wallet = await apiClient.findWalletable(companyId, entry.creditAccount);
     const payments = wallet ? [{
       amount: entry.amount,

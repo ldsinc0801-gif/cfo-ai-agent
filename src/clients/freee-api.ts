@@ -117,6 +117,54 @@ export class FreeeApiClient {
   }
 
   /**
+   * 事業所固有の税区分一覧を取得。
+   * freee API: GET /api/1/taxes/companies/{company_id}
+   * 課税仕入/課税売上を区別した正確な tax_code を取得するために使用する。
+   */
+  async getTaxCodes(companyId: number): Promise<Array<{ code: number; name: string; display_category: string }>> {
+    return this.requestWithRetry(async () => {
+      const response = await this.client.get<{ taxes: Array<{ code: number; name: string; display_category: string }> }>(
+        `/api/1/taxes/companies/${companyId}`,
+      );
+      return response.data.taxes || [];
+    });
+  }
+
+  /**
+   * 取引種別(income/expense)と税率(10/8/0)から、その事業所の正しい tax_code を解決する。
+   * 「課対仕入10%」「課対売上10%」のような名前で検索することで、テナント固有のコードでも正しく動く。
+   * 見つからなければ 0（対象外）を返す。
+   */
+  async findTaxCode(companyId: number, dealType: 'income' | 'expense', rate: number): Promise<number> {
+    try {
+      const taxes = await this.getTaxCodes(companyId);
+      const side = dealType === 'income' ? ['課税売上', '課対売上'] : ['課税仕入', '課対仕入'];
+      const matches = taxes.filter(t => side.some(k => t.name.includes(k)));
+      // 軽減税率「軽」付き、対象外、を除外しつつ、率（%）を含むものを優先
+      let target: { code: number; name: string } | undefined;
+      if (rate === 8) {
+        target = matches.find(t => t.name.includes('8%') && (t.name.includes('軽') || t.name.includes('軽減')));
+      } else if (rate === 10) {
+        target = matches.find(t => t.name.includes('10%') && !t.name.includes('軽'));
+      } else if (rate === 0) {
+        target = taxes.find(t => t.name === '対象外' || t.name.includes('不課税'));
+      }
+      if (!target) target = matches.find(t => t.name.includes(`${rate}%`));
+      if (target) {
+        logger.info(`税区分マッチ: ${dealType} ${rate}% → ${target.name} (code=${target.code})`);
+        return target.code;
+      }
+      logger.warn(`税区分が見つかりません: ${dealType} ${rate}%、対象外(0)で送信`);
+      return 0;
+    } catch (e) {
+      logger.warn('税区分取得に失敗、フォールバック値を使用', e);
+      // フォールバック: freee標準値
+      if (dealType === 'expense') return rate === 10 ? 21 : rate === 8 ? 23 : 0;
+      return rate === 10 ? 11 : rate === 8 ? 12 : 0;
+    }
+  }
+
+  /**
    * 試算表（損益計算書）を取得
    *
    * freee API: GET /api/1/reports/trial_pl
