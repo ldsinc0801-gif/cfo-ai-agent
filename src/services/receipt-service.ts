@@ -57,13 +57,13 @@ export class ReceiptService {
   /**
    * 画像（領収書・レシート）から仕訳データを生成
    */
-  async analyzeReceiptImage(imageBuffer: Buffer, mimeType: string, fileName: string, industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null): Promise<ReceiptAnalysis> {
+  async analyzeReceiptImage(imageBuffer: Buffer, mimeType: string, fileName: string, industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null, customRules?: string[]): Promise<ReceiptAnalysis> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`領収書画像を解析中（Gemini）: ${fileName}`);
 
     const base64 = imageBuffer.toString('base64');
-    const prompt = await this.buildPrompt(industry, fiscalMonth, fiscalYear);
+    const prompt = await this.buildPrompt(industry, fiscalMonth, fiscalYear, customRules);
 
     const response = await this.ai!.models.generateContent({
       model: config.ai.geminiModel,
@@ -83,13 +83,13 @@ export class ReceiptService {
   /**
    * PDFの領収書・請求書から仕訳データを生成
    */
-  async analyzeReceiptPDF(pdfBuffer: Buffer, fileName: string, industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null): Promise<ReceiptAnalysis> {
+  async analyzeReceiptPDF(pdfBuffer: Buffer, fileName: string, industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null, customRules?: string[]): Promise<ReceiptAnalysis> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`領収書PDFを解析中（Gemini）: ${fileName}`);
 
     const base64 = pdfBuffer.toString('base64');
-    const prompt = await this.buildPrompt(industry, fiscalMonth, fiscalYear);
+    const prompt = await this.buildPrompt(industry, fiscalMonth, fiscalYear, customRules);
 
     const response = await this.ai!.models.generateContent({
       model: config.ai.geminiModel,
@@ -110,13 +110,13 @@ export class ReceiptService {
    * Geminiは動画を直接入力できるため、フレーム抽出不要。
    * 動画内の領収書・レシートを自動認識して仕訳データを生成する。
    */
-  async analyzeVideo(videoBuffer: Buffer, mimeType: string, fileName: string, industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null): Promise<ReceiptAnalysis> {
+  async analyzeVideo(videoBuffer: Buffer, mimeType: string, fileName: string, industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null, customRules?: string[]): Promise<ReceiptAnalysis> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`動画を解析中（Gemini）: ${fileName}`);
 
     const base64 = videoBuffer.toString('base64');
-    const prompt = await this.buildPrompt(industry, fiscalMonth, fiscalYear);
+    const prompt = await this.buildPrompt(industry, fiscalMonth, fiscalYear, customRules);
 
     const response = await this.ai!.models.generateContent({
       model: config.ai.geminiModel,
@@ -138,12 +138,12 @@ ${prompt}` },
   /**
    * 複数画像を一括解析（動画フレーム互換）
    */
-  async analyzeVideoFrames(frames: { buffer: Buffer; mimeType: string }[], industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null): Promise<ReceiptAnalysis> {
+  async analyzeVideoFrames(frames: { buffer: Buffer; mimeType: string }[], industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null, customRules?: string[]): Promise<ReceiptAnalysis> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`画像${frames.length}枚を一括解析中（Gemini）...`);
 
-    const prompt = await this.buildPrompt(industry, fiscalMonth, fiscalYear);
+    const prompt = await this.buildPrompt(industry, fiscalMonth, fiscalYear, customRules);
 
     const parts = [
       ...frames.map(f => ({
@@ -169,12 +169,12 @@ ${prompt}` },
   /**
    * CSV（カード明細・銀行取引明細）から仕訳データを生成
    */
-  async analyzeCSV(csvText: string, fileName: string, industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null): Promise<ReceiptAnalysis> {
+  async analyzeCSV(csvText: string, fileName: string, industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null, customRules?: string[]): Promise<ReceiptAnalysis> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`CSV明細を解析中（Gemini）: ${fileName}`);
 
-    const basePrompt = await this.buildPrompt(industry, fiscalMonth, fiscalYear);
+    const basePrompt = await this.buildPrompt(industry, fiscalMonth, fiscalYear, customRules);
 
     const response = await this.ai!.models.generateContent({
       model: config.ai.geminiModel,
@@ -265,15 +265,18 @@ ${basePrompt}`,
   /**
    * 業種に応じた学習済みルールを含むプロンプトを生成
    */
-  private async buildPrompt(industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null): Promise<string> {
-    const basePrompt = getReceiptPrompt(fiscalMonth, fiscalYear);
-    if (!industry) return basePrompt;
+  private async buildPrompt(industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null, customRules?: string[]): Promise<string> {
+    let prompt = getReceiptPrompt(fiscalMonth, fiscalYear);
 
+    // テナント固有の仕訳ルール（ユーザー登録）を最優先で適用
+    if (customRules && customRules.length > 0) {
+      prompt += `\n\n【この会社固有の仕訳ルール（最優先で適用してください）】\n${customRules.map((r, i) => `${i + 1}. ${r}`).join('\n')}\n以上のルールは標準ルールよりも優先します。該当する取引はこれらのルールに従って仕訳してください。`;
+    }
+
+    if (!industry) return prompt;
     const learnedRules = await journalLearningService.getLearnedRulesForPrompt(industry);
-    if (!learnedRules) return basePrompt;
-
-    // 基本プロンプトの勘定科目ルールの後に学習済みルールを挿入
-    return `${basePrompt}\n\n${learnedRules}`;
+    if (!learnedRules) return prompt;
+    return `${prompt}\n\n${learnedRules}`;
   }
 
   /**

@@ -1741,6 +1741,19 @@ function fetchFiscalYear(req: express.Request): number | null {
   return req.session.activeFiscalYear ?? null;
 }
 
+/** テナントの仕訳ルール一覧を取得（有効なものだけ）。AIプロンプトに渡す用 */
+async function fetchActiveJournalRules(req: express.Request): Promise<string[]> {
+  const tid = getActiveTenantId(req);
+  if (!tid || !isSupabaseAvailable()) return [];
+  try {
+    const rules = await repo.listJournalRules(tid);
+    return rules.filter(r => r.enabled).map(r => r.ruleText);
+  } catch (e) {
+    logger.warn('仕訳ルール取得失敗', e);
+    return [];
+  }
+}
+
 /** テナントの確定済みバッチ最近分を取得（Supabase未接続なら空配列） */
 async function fetchRecentBatches(req: express.Request): Promise<repo.JournalBatchRow[]> {
   const tid = getActiveTenantId(req);
@@ -1756,6 +1769,61 @@ app.get('/agent/accounting', async (req, res) => {
     fiscalYear: req.session.activeFiscalYear ?? null,
     recentBatches: await fetchRecentBatches(req),
   }));
+});
+
+// ========== 仕訳ルール API ==========
+app.get('/api/journal-rules', async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.json({ rules: [] }); return; }
+    const rules = await repo.listJournalRules(tid);
+    res.json({ rules });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message });
+  }
+});
+
+app.post('/api/journal-rules', express.json(), async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.status(403).json({ error: 'テナント未選択' }); return; }
+    const { ruleText, tags } = req.body as { ruleText?: string; tags?: string[] };
+    if (!ruleText || !ruleText.trim()) { res.status(400).json({ error: 'ルール本文を入力してください' }); return; }
+    const id = await repo.createJournalRule(tid, {
+      ruleText: ruleText.trim(),
+      tags: Array.isArray(tags) ? tags.map(t => String(t).trim()).filter(Boolean) : [],
+    });
+    res.json({ success: true, id });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message });
+  }
+});
+
+app.patch('/api/journal-rules/:id', express.json(), async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.status(403).json({ error: 'テナント未選択' }); return; }
+    const { ruleText, tags, enabled } = req.body as { ruleText?: string; tags?: string[]; enabled?: boolean };
+    await repo.updateJournalRule(tid, req.params.id, {
+      ruleText: ruleText !== undefined ? String(ruleText).trim() : undefined,
+      tags: tags !== undefined ? (Array.isArray(tags) ? tags.map(t => String(t).trim()).filter(Boolean) : []) : undefined,
+      enabled,
+    });
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message });
+  }
+});
+
+app.delete('/api/journal-rules/:id', async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.status(403).json({ error: 'テナント未選択' }); return; }
+    await repo.deleteJournalRule(tid, req.params.id);
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message });
+  }
 });
 
 // 仕訳バッチを確定保存
@@ -1886,6 +1954,7 @@ app.get('/settings/company-info', async (req, res) => {
     const profile = await repo.getTenantProfile(tid);
     const fiscalMonth = await fetchFiscalMonth(req);
     const fiscalYear = fetchFiscalYear(req);
+    const customRules = await fetchActiveJournalRules(req);
     res.send(renderCompanyInfoHTML({
       profile, fiscalMonth,
       success: req.query.saved === '1' ? '保存しました' : undefined,
@@ -1981,6 +2050,7 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
     const industry = memory.industry || undefined;
     const fiscalMonth = await fetchFiscalMonth(req);
     const fiscalYear = fetchFiscalYear(req);
+    const customRules = await fetchActiveJournalRules(req);
 
     if (files.length === 1) {
       // 1ファイルの場合：従来通り個別解析
@@ -1992,12 +2062,12 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
       let analysis;
       if (ext === '.csv') {
         const csvText = fs.readFileSync(file.path, 'utf-8');
-        analysis = await receiptService.analyzeCSV(csvText, file.originalname, industry, fiscalMonth, fiscalYear);
+        analysis = await receiptService.analyzeCSV(csvText, file.originalname, industry, fiscalMonth, fiscalYear, customRules);
       } else if (ext === '.pdf') {
-        analysis = await receiptService.analyzeReceiptPDF(buffer, file.originalname, industry, fiscalMonth, fiscalYear);
+        analysis = await receiptService.analyzeReceiptPDF(buffer, file.originalname, industry, fiscalMonth, fiscalYear, customRules);
       } else {
         const mimeType = mimeMap[ext] || 'image/jpeg';
-        analysis = await receiptService.analyzeReceiptImage(buffer, mimeType, file.originalname, industry, fiscalMonth, fiscalYear);
+        analysis = await receiptService.analyzeReceiptImage(buffer, mimeType, file.originalname, industry, fiscalMonth, fiscalYear, customRules);
       }
       // レシートファイル情報を仕訳データに付与（freee添付用）
       for (const entry of analysis.entries) {
@@ -2025,7 +2095,7 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
           const mimeMap: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
           return { buffer: fs.readFileSync(f.path), mimeType: mimeMap[ext] || 'image/jpeg' };
         });
-        const imgAnalysis = await receiptService.analyzeVideoFrames(frames, industry, fiscalMonth, fiscalYear);
+        const imgAnalysis = await receiptService.analyzeVideoFrames(frames, industry, fiscalMonth, fiscalYear, customRules);
         allEntries.push(...imgAnalysis.entries);
         allNotes.push(...imgAnalysis.notes);
       }
@@ -2033,7 +2103,7 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
       // PDFは1件ずつ解析して結果をマージ
       for (const pdfFile of pdfFiles) {
         const pdfAnalysis = await receiptService.analyzeReceiptPDF(
-          fs.readFileSync(pdfFile.path), pdfFile.originalname, industry, fiscalMonth, fiscalYear,
+          fs.readFileSync(pdfFile.path), pdfFile.originalname, industry, fiscalMonth, fiscalYear, customRules,
         );
         allEntries.push(...pdfAnalysis.entries);
         allNotes.push(...pdfAnalysis.notes);
@@ -2042,7 +2112,7 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
       // CSVは1件ずつ解析して結果をマージ
       for (const csvFile of csvFiles) {
         const csvText = fs.readFileSync(csvFile.path, 'utf-8');
-        const csvAnalysis = await receiptService.analyzeCSV(csvText, csvFile.originalname, industry, fiscalMonth, fiscalYear);
+        const csvAnalysis = await receiptService.analyzeCSV(csvText, csvFile.originalname, industry, fiscalMonth, fiscalYear, customRules);
         allEntries.push(...csvAnalysis.entries);
         allNotes.push(...csvAnalysis.notes);
       }
@@ -2089,9 +2159,10 @@ app.post('/agent/accounting/analyze-video', upload.single('video'), async (req, 
     const industry = memory.industry || undefined;
     const fiscalMonth = await fetchFiscalMonth(req);
     const fiscalYear = fetchFiscalYear(req);
+    const customRules = await fetchActiveJournalRules(req);
 
     // Geminiで動画を直接解析
-    const analysis = await receiptService.analyzeVideo(buffer, mimeType, req.file.originalname, industry, fiscalMonth, fiscalYear);
+    const analysis = await receiptService.analyzeVideo(buffer, mimeType, req.file.originalname, industry, fiscalMonth, fiscalYear, customRules);
 
     res.send(renderAccountingPageHTML({
       aiAvailable: true,
@@ -2137,6 +2208,7 @@ app.post('/agent/accounting/chat-correct', express.json({ limit: '5mb' }), async
     // Geminiで修正内容を解釈（日付正規化用に決算月コンテキストを渡す）
     const fiscalMonth = await fetchFiscalMonth(req);
     const fiscalYear = fetchFiscalYear(req);
+    const customRules = await fetchActiveJournalRules(req);
     const result = await receiptService.interpretCorrection(entries, message, fiscalMonth, fiscalYear);
 
     // 修正があれば学習データとして記録（勘定科目の修正のみ学習対象）

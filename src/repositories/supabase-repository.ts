@@ -85,6 +85,71 @@ function mapSnapshot(r: any): MonthlySnapshot {
   };
 }
 
+// ========== 仕訳ルール（テナント固有） ==========
+
+export interface JournalRule {
+  id: string;
+  ruleText: string;
+  tags: string[];
+  enabled: boolean;
+  sortOrder: number;
+  createdAt: string;
+}
+
+export async function listJournalRules(tenantId: TenantId): Promise<JournalRule[]> {
+  const { data, error } = await getSupabase()
+    .from('journal_rules')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .order('sort_order', { ascending: true })
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(`仕訳ルールの取得に失敗: ${error.message}`);
+  return (data || []).map((r: any) => ({
+    id: r.id,
+    ruleText: r.rule_text,
+    tags: r.tags || [],
+    enabled: !!r.enabled,
+    sortOrder: r.sort_order || 0,
+    createdAt: r.created_at,
+  }));
+}
+
+export async function createJournalRule(tenantId: TenantId, args: { ruleText: string; tags: string[] }): Promise<string> {
+  const { data, error } = await getSupabase()
+    .from('journal_rules')
+    .insert({
+      tenant_id: tenantId,
+      rule_text: args.ruleText,
+      tags: args.tags || [],
+    })
+    .select()
+    .single();
+  if (error || !data) throw new Error(`仕訳ルールの作成に失敗: ${error?.message}`);
+  return data.id;
+}
+
+export async function updateJournalRule(tenantId: TenantId, ruleId: string, args: { ruleText?: string; tags?: string[]; enabled?: boolean }): Promise<void> {
+  const update: any = { updated_at: new Date().toISOString() };
+  if (args.ruleText !== undefined) update.rule_text = args.ruleText;
+  if (args.tags !== undefined) update.tags = args.tags;
+  if (args.enabled !== undefined) update.enabled = args.enabled;
+  const { error } = await getSupabase()
+    .from('journal_rules')
+    .update(update)
+    .eq('id', ruleId)
+    .eq('tenant_id', tenantId);
+  if (error) throw new Error(`仕訳ルールの更新に失敗: ${error.message}`);
+}
+
+export async function deleteJournalRule(tenantId: TenantId, ruleId: string): Promise<void> {
+  const { error } = await getSupabase()
+    .from('journal_rules')
+    .delete()
+    .eq('id', ruleId)
+    .eq('tenant_id', tenantId);
+  if (error) throw new Error(`仕訳ルールの削除に失敗: ${error.message}`);
+}
+
 // ========== 仕訳バッチ（取り込み履歴） ==========
 
 export interface JournalBatchRow {

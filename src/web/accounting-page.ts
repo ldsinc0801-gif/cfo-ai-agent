@@ -50,6 +50,8 @@ export function renderAccountingPageHTML(options: AccountingPageOptions = { aiAv
 
 ${renderFiscalYearSelector(options.fiscalMonth, options.fiscalYear)}
 
+${renderJournalRulesSection()}
+
 ${options.error ? `<div class="acc-error">${esc(options.error)}</div>` : ''}
 ${options.success ? `<div class="acc-success">${esc(options.success)}</div>` : ''}
 
@@ -588,6 +590,202 @@ ${entries.map((e, i) => `
     </script>
   </div>
 </div>`;
+}
+
+/** 仕訳ルール セクション（クライアント側で API から取得して描画する） */
+function renderJournalRulesSection(): string {
+  return `<div class="card" style="margin-bottom:20px">
+  <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
+    <div>
+      <h3 style="font-size:15px;font-weight:700">仕訳ルール</h3>
+      <span class="card-sub" style="font-size:12px">この会社固有の仕訳判定ルールを登録すると、AIが優先的に参照します</span>
+    </div>
+    <button type="button" class="btn-primary btn-sm" onclick="openRuleEditor()">＋ ルールを追加</button>
+  </div>
+  <div class="card-body">
+    <div class="rule-filter-bar" id="ruleFilterBar"></div>
+    <div id="rulesListContainer">
+      <p style="font-size:12px;color:var(--text2);text-align:center;padding:16px 0">読み込み中...</p>
+    </div>
+  </div>
+</div>
+
+<!-- ルール追加・編集モーダル -->
+<div class="rule-modal-overlay" id="ruleModalOverlay" style="display:none">
+  <div class="rule-modal">
+    <div class="rule-modal-header">
+      <h3 id="ruleModalTitle">仕訳ルールを追加</h3>
+      <button type="button" onclick="closeRuleEditor()" style="background:none;border:none;font-size:22px;color:var(--text2);cursor:pointer">&times;</button>
+    </div>
+    <div class="rule-modal-body">
+      <div class="form-group">
+        <label>ルール本文</label>
+        <textarea id="ruleText" rows="4" placeholder="例: ガソリン代、洗車、車の備品10万円以下は車両費とする。高速代・有料道路・駐車場代は旅費交通費とする。"></textarea>
+      </div>
+      <div class="form-group">
+        <label>タグ（カンマ区切り）</label>
+        <input type="text" id="ruleTags" placeholder="例: 経費, 車両費"/>
+        <span style="font-size:11px;color:var(--text2)">タグでグループ化されて表示されます。「経費」「売上」「地代家賃」など自由に設定できます。</span>
+      </div>
+    </div>
+    <div class="rule-modal-actions">
+      <button type="button" class="btn-secondary" onclick="closeRuleEditor()">キャンセル</button>
+      <button type="button" class="btn-primary" id="ruleSaveBtn" onclick="saveRule()">保存</button>
+    </div>
+  </div>
+</div>
+
+<style>
+.rule-filter-bar{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+.rule-filter-bar button{padding:5px 12px;border-radius:16px;border:1px solid var(--border);background:#fff;font-size:12px;cursor:pointer;color:var(--text)}
+.rule-filter-bar button.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+.rule-group{margin-bottom:20px}
+.rule-group-title{font-size:13px;font-weight:700;color:var(--primary);margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.rule-card{background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:flex;align-items:flex-start;gap:12px}
+.rule-card-body{flex:1;min-width:0}
+.rule-card-text{font-size:13px;color:var(--text);line-height:1.6;margin-bottom:6px;white-space:pre-wrap;word-break:break-word}
+.rule-card-tags{display:flex;flex-wrap:wrap;gap:4px}
+.rule-card-tag{font-size:10px;font-weight:600;background:var(--primary-light);color:var(--primary);padding:2px 8px;border-radius:8px}
+.rule-card-actions{display:flex;gap:4px;flex-shrink:0}
+.rule-card-actions button{padding:4px 10px;font-size:11px;border-radius:6px;border:1px solid var(--border);background:#fff;cursor:pointer;color:var(--text2)}
+.rule-card-actions button:hover{border-color:var(--primary);color:var(--primary)}
+.rule-card-actions button.danger:hover{border-color:var(--red);color:var(--red)}
+.rule-empty{font-size:13px;color:var(--text2);text-align:center;padding:24px;background:var(--bg);border-radius:8px;border:1px dashed var(--border)}
+.rule-modal-overlay{position:fixed;inset:0;background:rgba(15,23,42,0.5);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px}
+.rule-modal{background:#fff;border-radius:14px;max-width:520px;width:100%;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,0.2);overflow:hidden}
+.rule-modal-header{padding:18px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.rule-modal-header h3{font-size:16px;font-weight:700}
+.rule-modal-body{padding:24px}
+.rule-modal-body .form-group{margin-bottom:16px}
+.rule-modal-body label{display:block;font-size:12px;font-weight:600;color:var(--text2);margin-bottom:6px}
+.rule-modal-body input,.rule-modal-body textarea{width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;background:#fff;resize:vertical}
+.rule-modal-body input:focus,.rule-modal-body textarea:focus{border-color:var(--primary);outline:none;box-shadow:0 0 0 2px rgba(34,152,174,0.15)}
+.rule-modal-actions{padding:14px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;background:var(--bg)}
+</style>
+
+<script>
+var _allRules = [];
+var _activeTag = null;
+function loadRules(){
+  fetch('/api/journal-rules').then(function(r){return r.json();}).then(function(d){
+    _allRules = d.rules || [];
+    renderRules();
+  }).catch(function(){
+    document.getElementById('rulesListContainer').innerHTML = '<p class="rule-empty">読み込みに失敗しました</p>';
+  });
+}
+function renderRules(){
+  var container = document.getElementById('rulesListContainer');
+  if(_allRules.length === 0){
+    document.getElementById('ruleFilterBar').innerHTML = '';
+    container.innerHTML = '<div class="rule-empty">仕訳ルールが登録されていません。<br>「＋ ルールを追加」から会社固有のルールを登録してください。</div>';
+    return;
+  }
+  // タグ集計
+  var tagSet = new Set();
+  _allRules.forEach(function(r){ (r.tags || []).forEach(function(t){ tagSet.add(t); }); });
+  var tags = Array.from(tagSet).sort();
+  var filterBar = '<button class="' + (_activeTag === null ? 'active' : '') + '" onclick="setActiveTag(null)">すべて (' + _allRules.length + ')</button>';
+  tags.forEach(function(t){
+    var c = _allRules.filter(function(r){ return (r.tags || []).indexOf(t) >= 0; }).length;
+    filterBar += '<button class="' + (_activeTag === t ? 'active' : '') + '" onclick="setActiveTag(' + JSON.stringify(t) + ')">' + escapeHtml(t) + ' (' + c + ')</button>';
+  });
+  // タグなしも
+  var untagged = _allRules.filter(function(r){ return !r.tags || r.tags.length === 0; }).length;
+  if(untagged > 0) filterBar += '<button class="' + (_activeTag === '__none__' ? 'active' : '') + '" onclick="setActiveTag(\\'__none__\\')">タグなし (' + untagged + ')</button>';
+  document.getElementById('ruleFilterBar').innerHTML = filterBar;
+
+  // フィルタ適用
+  var filtered = _allRules;
+  if(_activeTag === '__none__') filtered = _allRules.filter(function(r){ return !r.tags || r.tags.length === 0; });
+  else if(_activeTag !== null) filtered = _allRules.filter(function(r){ return (r.tags || []).indexOf(_activeTag) >= 0; });
+
+  // タグごとにグループ化（タグが複数あれば最初のタグを代表に）
+  var groups = {};
+  filtered.forEach(function(r){
+    var key = (r.tags && r.tags.length > 0) ? r.tags[0] : 'タグなし';
+    if(!groups[key]) groups[key] = [];
+    groups[key].push(r);
+  });
+
+  var html = '';
+  Object.keys(groups).sort().forEach(function(g){
+    html += '<div class="rule-group"><div class="rule-group-title">' + escapeHtml(g) + ' (' + groups[g].length + ')</div>';
+    groups[g].forEach(function(r){
+      var tagsHtml = (r.tags || []).map(function(t){ return '<span class="rule-card-tag">#' + escapeHtml(t) + '</span>'; }).join('');
+      html += '<div class="rule-card">' +
+        '<div class="rule-card-body">' +
+          '<div class="rule-card-text">' + escapeHtml(r.ruleText) + '</div>' +
+          '<div class="rule-card-tags">' + tagsHtml + '</div>' +
+        '</div>' +
+        '<div class="rule-card-actions">' +
+          '<button onclick="editRule(' + JSON.stringify(r.id) + ')">編集</button>' +
+          '<button class="danger" onclick="deleteRule(' + JSON.stringify(r.id) + ')">削除</button>' +
+        '</div>' +
+      '</div>';
+    });
+    html += '</div>';
+  });
+  document.getElementById('rulesListContainer').innerHTML = html;
+}
+function setActiveTag(t){ _activeTag = t; renderRules(); }
+function escapeHtml(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+var _editingId = null;
+function openRuleEditor(){
+  _editingId = null;
+  document.getElementById('ruleModalTitle').textContent = '仕訳ルールを追加';
+  document.getElementById('ruleText').value = '';
+  document.getElementById('ruleTags').value = '';
+  document.getElementById('ruleModalOverlay').style.display = 'flex';
+}
+function editRule(id){
+  var r = _allRules.find(function(x){ return x.id === id; });
+  if(!r) return;
+  _editingId = id;
+  document.getElementById('ruleModalTitle').textContent = '仕訳ルールを編集';
+  document.getElementById('ruleText').value = r.ruleText;
+  document.getElementById('ruleTags').value = (r.tags || []).join(', ');
+  document.getElementById('ruleModalOverlay').style.display = 'flex';
+}
+function closeRuleEditor(){ document.getElementById('ruleModalOverlay').style.display = 'none'; }
+function saveRule(){
+  var text = document.getElementById('ruleText').value.trim();
+  if(!text){ window.__toast && window.__toast('ルール本文を入力してください', 'error'); return; }
+  var tags = document.getElementById('ruleTags').value.split(',').map(function(t){ return t.trim(); }).filter(Boolean);
+  var btn = document.getElementById('ruleSaveBtn');
+  btn.disabled = true; btn.textContent = '保存中...';
+  var url = _editingId ? ('/api/journal-rules/' + _editingId) : '/api/journal-rules';
+  var method = _editingId ? 'PATCH' : 'POST';
+  fetch(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ruleText: text, tags: tags }) })
+    .then(function(r){ return r.json(); }).then(function(d){
+      btn.disabled = false; btn.textContent = '保存';
+      if(d.success !== false){
+        closeRuleEditor();
+        window.__toast && window.__toast('保存しました', 'success');
+        loadRules();
+      } else {
+        window.__toast && window.__toast(d.error || '保存に失敗しました', 'error');
+      }
+    }).catch(function(){
+      btn.disabled = false; btn.textContent = '保存';
+      window.__toast && window.__toast('通信エラー', 'error');
+    });
+}
+function deleteRule(id){
+  if(!confirm('このルールを削除しますか？')) return;
+  fetch('/api/journal-rules/' + id, { method: 'DELETE' })
+    .then(function(r){ return r.json(); }).then(function(d){
+      if(d.success !== false){
+        window.__toast && window.__toast('削除しました', 'success');
+        loadRules();
+      } else {
+        window.__toast && window.__toast(d.error || '削除に失敗しました', 'error');
+      }
+    });
+}
+loadRules();
+</script>`;
 }
 
 /**
