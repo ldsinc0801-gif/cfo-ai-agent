@@ -1004,11 +1004,23 @@ app.get('/', async (req, res) => {
       if (y && m) { reportYear = y; reportMonth = m; }
     }
     const isDemo = req.session.user?.id === 'demo-user';
-    const report = await buildReport(reportYear, reportMonth, isDemo, getActiveTenantId(req) || undefined);
+    const tenantIdForDash = getActiveTenantId(req) || undefined;
+    const report = await buildReport(reportYear, reportMonth, isDemo, tenantIdForDash);
 
-    // freee未接続・デモモードOFFの場合、データなしページを表示
+    // freee未接続・デモモードOFFの場合: DB(monthly_actuals)にアップロード済みデータがあるか確認
     if (!report) {
-      res.send(renderNoDataDashboard());
+      if (tenantIdForDash && isSupabaseAvailable()) {
+        try {
+          const snapshots = await repo.getAllMonthlyActuals(tenantIdForDash);
+          if (snapshots.length > 0) {
+            res.send(renderUploadedDashboard(snapshots, req));
+            return;
+          }
+        } catch (e) {
+          logger.warn('DB読み込みに失敗', e);
+        }
+      }
+      res.send(renderNoDataDashboard(req));
       return;
     }
 
@@ -1379,6 +1391,76 @@ app.get('/agent/finance', async (req, res) => {
 });
 
 // 財務分析：決算書アップロード → AI分析
+/**
+ * ダッシュボード用: 単月試算表 or 年度決算書のアップロード。
+ * Gemini で PL/BS を1件抽出し monthly_actuals に upsert。
+ */
+app.post('/agent/finance/upload-snapshot', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) { res.redirect('/?upload_error=' + encodeURIComponent('ファイルが選択されていません')); return; }
+    if (!anthropicService.isAvailable()) { res.redirect('/?upload_error=' + encodeURIComponent('Vertex AIが未設定です')); return; }
+    const tenantId = getActiveTenantId(req);
+    if (!tenantId) { res.redirect('/?upload_error=' + encodeURIComponent('テナントが選択されていません')); return; }
+
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    let text: string;
+    if (ext === '.pdf') {
+      text = await anthropicService.extractTextFromPDF(fs.readFileSync(req.file.path), req.file.originalname);
+    } else {
+      text = fs.readFileSync(req.file.path, 'utf-8');
+    }
+
+    const { snapshot, extractionNotes } = await anthropicService.extractMonthlySnapshot(text, req.file.originalname);
+    await repo.upsertMonthlyActual(tenantId, snapshot);
+    logger.info(`単月スナップショット保存: ${snapshot.year}年${snapshot.month}月 (${req.file.originalname})`);
+
+    clearCache();
+    const noteParam = extractionNotes.length > 0 ? '&notes=' + encodeURIComponent(extractionNotes.join('; ')) : '';
+    res.redirect(`/?uploaded=snapshot&period=${snapshot.year}-${snapshot.month}${noteParam}`);
+  } catch (error: any) {
+    logger.error('単月アップロードエラー', error);
+    res.redirect('/?upload_error=' + encodeURIComponent(error?.message || 'アップロード処理に失敗しました'));
+  }
+});
+
+/**
+ * ダッシュボード用: 月次推移試算表のアップロード。
+ * Gemini で複数月分の PL/BS を抽出し monthly_actuals に upsert。
+ */
+app.post('/agent/finance/upload-trend', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) { res.redirect('/?upload_error=' + encodeURIComponent('ファイルが選択されていません')); return; }
+    if (!anthropicService.isAvailable()) { res.redirect('/?upload_error=' + encodeURIComponent('Vertex AIが未設定です')); return; }
+    const tenantId = getActiveTenantId(req);
+    if (!tenantId) { res.redirect('/?upload_error=' + encodeURIComponent('テナントが選択されていません')); return; }
+
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    let text: string;
+    if (ext === '.pdf') {
+      text = await anthropicService.extractTextFromPDF(fs.readFileSync(req.file.path), req.file.originalname);
+    } else {
+      text = fs.readFileSync(req.file.path, 'utf-8');
+    }
+
+    const { snapshots, extractionNotes } = await anthropicService.extractMonthlyTrend(text, req.file.originalname);
+    if (snapshots.length === 0) {
+      res.redirect('/?upload_error=' + encodeURIComponent('月次データを抽出できませんでした'));
+      return;
+    }
+    for (const s of snapshots) {
+      await repo.upsertMonthlyActual(tenantId, s);
+    }
+    logger.info(`月次推移保存: ${snapshots.length}か月分 (${req.file.originalname})`);
+
+    clearCache();
+    const noteParam = extractionNotes.length > 0 ? '&notes=' + encodeURIComponent(extractionNotes.join('; ')) : '';
+    res.redirect(`/?uploaded=trend&count=${snapshots.length}${noteParam}`);
+  } catch (error: any) {
+    logger.error('月次推移アップロードエラー', error);
+    res.redirect('/?upload_error=' + encodeURIComponent(error?.message || 'アップロード処理に失敗しました'));
+  }
+});
+
 app.post('/agent/finance/analyze', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
@@ -2966,24 +3048,260 @@ app.get('/api/usage', (_req, res) => {
 import { renderErrorHTML } from './error-page.js';
 
 /** freee未接続・デモモードOFF時のダッシュボード */
-function renderNoDataDashboard(): string {
-  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI CFO</title><style>${SHARED_CSS}</style></head><body>
+function renderNoDataDashboard(req?: express.Request): string {
+  const csrf = req?.session.csrfToken || '';
+  const uploadError = req?.query.upload_error ? String(req.query.upload_error) : '';
+  const escMsg = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI CFO</title><style>${SHARED_CSS}
+.upload-modal-overlay{position:fixed;inset:0;background:rgba(15,23,42,0.5);display:none;align-items:center;justify-content:center;z-index:9999;padding:16px}
+.upload-modal-overlay.open{display:flex}
+.upload-modal{background:#fff;border-radius:14px;max-width:760px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,0.2);overflow:hidden}
+.upload-modal-header{padding:20px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+.upload-modal-header h3{font-size:17px;font-weight:700}
+.upload-modal-close{background:none;border:none;font-size:24px;color:var(--text2);cursor:pointer;line-height:1;padding:0 4px}
+.upload-modal-body{padding:24px;overflow-y:auto;flex:1}
+.upload-modal-intro{font-size:13px;color:var(--text2);margin-bottom:20px;line-height:1.7}
+.upload-choice-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.upload-choice{display:flex;flex-direction:column;padding:24px;border:2px solid var(--border);border-radius:12px;background:#fff;cursor:pointer;transition:all .15s;text-align:left;min-height:240px}
+.upload-choice:hover{border-color:var(--primary);background:var(--primary-light);transform:translateY(-2px)}
+.upload-choice.recommend{border-color:#2298ae;background:rgba(34,152,174,0.04)}
+.upload-choice-badge{align-self:flex-start;font-size:10px;font-weight:700;background:#2298ae;color:#fff;padding:3px 10px;border-radius:10px;margin-bottom:8px}
+.upload-choice-icon{font-size:28px;margin-bottom:8px}
+.upload-choice h4{font-size:15px;font-weight:700;margin-bottom:8px}
+.upload-choice-desc{font-size:13px;color:var(--text2);line-height:1.6;flex:1}
+.upload-choice-features{margin-top:12px;font-size:12px;color:var(--text2)}
+.upload-choice-features li{padding:2px 0}
+.upload-choice-features li.ok::before{content:'✓ ';color:#2298ae;font-weight:700}
+.upload-choice-features li.no::before{content:'– ';color:#9ca3af}
+.upload-form-section{display:none;padding-top:20px;border-top:1px solid var(--border);margin-top:20px}
+.upload-form-section.active{display:block}
+.upload-form-section h4{font-size:14px;font-weight:700;margin-bottom:12px}
+.upload-form-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.upload-form-row input[type=file]{flex:1;font-size:13px}
+.upload-form-row button{padding:10px 20px;border-radius:8px;border:none;background:var(--primary);color:#fff;font-size:13px;font-weight:600;cursor:pointer}
+.upload-form-row button:disabled{opacity:0.5;cursor:wait}
+.upload-form-hint{font-size:11px;color:var(--text2);margin-top:8px}
+.upload-error{background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px}
+@media(max-width:640px){.upload-choice-grid{grid-template-columns:1fr}}
+</style></head><body>
 ${renderSidebar('dashboard')}
 <div class="main"><div class="content" style="display:flex;align-items:center;justify-content:center;min-height:calc(100vh - 80px)">
-  <div style="text-align:center;max-width:500px;padding:40px">
+  <div style="text-align:center;max-width:560px;padding:40px">
     <div style="font-size:48px;margin-bottom:16px">
       <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
     </div>
     <h2 style="font-size:20px;font-weight:700;margin-bottom:8px">データがまだありません</h2>
     <p style="color:#6b7280;font-size:14px;line-height:1.7;margin-bottom:24px">
-      ダッシュボードを表示するには、freee APIと連携して会計データを取得するか、デモモードでサンプルデータをお試しください。
+      ダッシュボードを表示するには、freee API連携、決算書/試算表のアップロード、またはデモモードで開始してください。
     </p>
-    <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
-      <a href="/settings/company" class="btn-primary">freee事業所設定</a>
-      <a href="/auth/demo" class="btn-secondary">デモモードで試す</a>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <button type="button" class="btn-primary" onclick="document.getElementById('uploadModal').classList.add('open')" style="border:none;font-family:inherit">決算書もしくは試算表を登録する</button>
+      <a href="/settings/company" class="btn-secondary">freee事業所設定</a>
+      <form method="POST" action="/auth/demo" style="margin:0;display:inline">
+        <input type="hidden" name="_csrf" value="${csrf}">
+        <button type="submit" class="btn-secondary" style="border:1px solid var(--border);background:var(--bg);font-family:inherit">デモモードで試す</button>
+      </form>
     </div>
   </div>
-</div></div></body></html>`;
+</div></div>
+
+<!-- アップロードモーダル -->
+<div class="upload-modal-overlay${uploadError ? ' open' : ''}" id="uploadModal">
+  <div class="upload-modal">
+    <div class="upload-modal-header">
+      <h3>決算書 / 試算表を登録</h3>
+      <button type="button" class="upload-modal-close" onclick="document.getElementById('uploadModal').classList.remove('open');resetUploadChoice()">&times;</button>
+    </div>
+    <div class="upload-modal-body">
+      ${uploadError ? `<div class="upload-error">${escMsg(uploadError)}</div>` : ''}
+      <p class="upload-modal-intro">登録する資料の種類を選択してください。資料に応じてダッシュボードの表示内容が変わります。</p>
+      <div class="upload-choice-grid">
+        <button type="button" class="upload-choice recommend" onclick="selectUpload('trend')">
+          <span class="upload-choice-badge">おすすめ</span>
+          <div class="upload-choice-icon">📊</div>
+          <h4>月次推移試算表を登録</h4>
+          <p class="upload-choice-desc">複数月分のPL/BSが入った試算表。詳細なダッシュボードが表示できます。</p>
+          <ul class="upload-choice-features">
+            <li class="ok">月次推移グラフ</li>
+            <li class="ok">前月比較・異常検知</li>
+            <li class="ok">単月PL/BS・銀行評価</li>
+          </ul>
+        </button>
+        <button type="button" class="upload-choice" onclick="selectUpload('snapshot')">
+          <div class="upload-choice-icon">📄</div>
+          <h4>単月試算表 / 決算書を登録</h4>
+          <p class="upload-choice-desc">ある時点の数値だけが入った資料。簡易ダッシュボードを表示します。</p>
+          <ul class="upload-choice-features">
+            <li class="no">月次推移グラフ（要freee or 月次推移）</li>
+            <li class="no">前月比較</li>
+            <li class="ok">単月PL/BS・銀行評価</li>
+          </ul>
+        </button>
+      </div>
+
+      <div class="upload-form-section" id="uploadForm-trend">
+        <h4>月次推移試算表のアップロード</h4>
+        <form method="POST" action="/agent/finance/upload-trend?_csrf=${encodeURIComponent(csrf)}" enctype="multipart/form-data" onsubmit="onUploadSubmit(this)">
+          <div class="upload-form-row">
+            <input type="file" name="file" accept=".pdf,.csv,.txt" required>
+            <button type="submit">アップロードして解析</button>
+          </div>
+          <p class="upload-form-hint">PDF / CSV / TXT 対応。Gemini AI が月ごとのPL/BSを抽出して保存します（数十秒かかります）。</p>
+        </form>
+      </div>
+
+      <div class="upload-form-section" id="uploadForm-snapshot">
+        <h4>単月試算表 / 決算書のアップロード</h4>
+        <form method="POST" action="/agent/finance/upload-snapshot?_csrf=${encodeURIComponent(csrf)}" enctype="multipart/form-data" onsubmit="onUploadSubmit(this)">
+          <div class="upload-form-row">
+            <input type="file" name="file" accept=".pdf,.csv,.txt" required>
+            <button type="submit">アップロードして解析</button>
+          </div>
+          <p class="upload-form-hint">PDF / CSV / TXT 対応。Gemini AI が単月のPL/BSを抽出して保存します。</p>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function selectUpload(t){
+  resetUploadChoice();
+  document.getElementById('uploadForm-'+t).classList.add('active');
+  document.querySelectorAll('.upload-choice').forEach(function(b){b.style.borderColor='';});
+  event.currentTarget.style.borderColor='#2298ae';
+}
+function resetUploadChoice(){
+  document.querySelectorAll('.upload-form-section').forEach(function(s){s.classList.remove('active');});
+}
+function onUploadSubmit(form){
+  var btn=form.querySelector('button[type=submit]');
+  btn.disabled=true;btn.textContent='解析中...（数十秒かかります）';
+  return true;
+}
+</script>
+</body></html>`;
+}
+
+/**
+ * アップロードした月次データだけがある場合の簡易ダッシュボード。
+ * - 1件のみ → 単月スナップショット表示（推移グラフは出ない）
+ * - 複数月 → トレンドグラフ + 最新月の主要KPI
+ */
+function renderUploadedDashboard(snapshots: import('../types/trend.js').MonthlySnapshot[], req: express.Request): string {
+  const csrf = req.session.csrfToken || '';
+  const fmt = (n: number) => new Intl.NumberFormat('ja-JP').format(Math.round(n));
+  const latest = snapshots[snapshots.length - 1];
+  const isSingle = snapshots.length === 1;
+  const uploaded = req.query.uploaded as string | undefined;
+  const period = req.query.period as string | undefined;
+  const count = req.query.count as string | undefined;
+  const notes = req.query.notes as string | undefined;
+  const escMsg = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  const successBanner = uploaded ? `
+    <div style="background:#ecf6f8;border:1px solid #a8d8e0;color:#1b7f8e;border-radius:10px;padding:14px 18px;margin-bottom:20px;font-size:14px">
+      <strong>✓ アップロード完了</strong>
+      ${uploaded === 'trend' ? ` ${escMsg(count || '0')}か月分のデータを取り込みました` : ` ${escMsg(period || '')}のデータを取り込みました`}
+      ${notes ? `<div style="font-size:12px;margin-top:6px;color:#555">AIメモ: ${escMsg(notes)}</div>` : ''}
+    </div>` : '';
+
+  const upgradeNotice = isSingle ? `
+    <div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:10px;padding:16px 20px;margin-top:20px;font-size:13px;line-height:1.7">
+      <strong>📈 詳細な月次推移を見るには</strong><br>
+      現在は単月のスナップショットのみが登録されています。月次推移グラフ・前月比較・異常検知などをご覧になるには、<strong>freee連携</strong>または<strong>月次推移試算表のアップロード</strong>をお願いします。
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <a href="/settings/company" class="btn-primary btn-sm" style="text-decoration:none">freee事業所設定</a>
+        <button type="button" class="btn-secondary btn-sm" onclick="document.getElementById('uploadModal').classList.add('open')" style="border:1px solid #e5e7eb;background:#fff;cursor:pointer;font-family:inherit">月次推移をアップロード</button>
+      </div>
+    </div>` : '';
+
+  const trendChart = !isSingle ? `
+    <div class="card" style="margin-top:20px">
+      <div class="card-header"><h3>月次推移（売上・経常利益）</h3><span class="card-sub">登録された${snapshots.length}か月</span></div>
+      <div class="card-chart"><canvas id="trendChart"></canvas></div>
+    </div>
+    <script>
+    (function(){
+      var ctx=document.getElementById('trendChart');
+      if(!ctx||!window.Chart)return;
+      new Chart(ctx,{
+        type:'line',
+        data:{
+          labels:${JSON.stringify(snapshots.map(s => `${s.year}/${s.month}`))},
+          datasets:[
+            {label:'売上高',data:${JSON.stringify(snapshots.map(s => s.revenue))},borderColor:'#2298ae',backgroundColor:'rgba(34,152,174,0.1)',tension:0.3},
+            {label:'経常利益',data:${JSON.stringify(snapshots.map(s => s.ordinaryIncome))},borderColor:'#f59e0b',backgroundColor:'rgba(245,158,11,0.1)',tension:0.3}
+          ]
+        },
+        options:{responsive:true,maintainAspectRatio:false}
+      });
+    })();
+    </script>` : '';
+
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI CFO</title><script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script><style>${SHARED_CSS}
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:20px}
+.kpi-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
+.kpi-label{font-size:12px;color:var(--text2);font-weight:600;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em}
+.kpi-value{font-size:24px;font-weight:800;color:var(--text);font-variant-numeric:tabular-nums}
+.kpi-unit{font-size:13px;color:var(--text2);margin-left:4px}
+.snap-badge{display:inline-block;background:#2298ae;color:#fff;font-size:11px;font-weight:700;padding:3px 10px;border-radius:10px;margin-left:8px;vertical-align:middle}
+</style></head><body>
+${renderSidebar('dashboard')}
+<div class="main">
+  <header class="header">
+    <div class="header-left"><h1 class="header-title">ダッシュボード${isSingle ? '<span class="snap-badge">単月スナップショット</span>' : `<span class="snap-badge">登録データ ${snapshots.length}か月</span>`}</h1></div>
+    <div class="header-right">
+      <button type="button" class="btn-secondary" onclick="document.getElementById('uploadModal').classList.add('open')" style="border:1px solid var(--border);background:var(--bg);cursor:pointer;font-family:inherit">データを追加</button>
+    </div>
+  </header>
+  <div class="content">
+    ${successBanner}
+    <div class="kpi-grid">
+      <div class="kpi-card"><div class="kpi-label">${latest.year}年${latest.month}月 売上高</div><div class="kpi-value">${fmt(latest.revenue || 0)}<span class="kpi-unit">円</span></div></div>
+      <div class="kpi-card"><div class="kpi-label">営業利益</div><div class="kpi-value">${fmt(latest.operatingIncome || 0)}<span class="kpi-unit">円</span></div></div>
+      <div class="kpi-card"><div class="kpi-label">経常利益</div><div class="kpi-value">${fmt(latest.ordinaryIncome || 0)}<span class="kpi-unit">円</span></div></div>
+      <div class="kpi-card"><div class="kpi-label">現金・預金</div><div class="kpi-value">${fmt(latest.cashAndDeposits || 0)}<span class="kpi-unit">円</span></div></div>
+    </div>
+    <div class="kpi-grid">
+      <div class="kpi-card"><div class="kpi-label">総資産</div><div class="kpi-value">${fmt(latest.totalAssets || 0)}<span class="kpi-unit">円</span></div></div>
+      <div class="kpi-card"><div class="kpi-label">純資産</div><div class="kpi-value">${fmt(latest.netAssets || 0)}<span class="kpi-unit">円</span></div></div>
+      <div class="kpi-card"><div class="kpi-label">流動資産</div><div class="kpi-value">${fmt(latest.currentAssets || 0)}<span class="kpi-unit">円</span></div></div>
+      <div class="kpi-card"><div class="kpi-label">流動負債</div><div class="kpi-value">${fmt(latest.currentLiabilities || 0)}<span class="kpi-unit">円</span></div></div>
+    </div>
+    ${trendChart}
+    ${upgradeNotice}
+  </div>
+</div>
+
+<!-- アップロード追加モーダル（renderNoDataDashboardと同じ） -->
+<div class="upload-modal-overlay" id="uploadModal" style="position:fixed;inset:0;background:rgba(15,23,42,0.5);display:none;align-items:center;justify-content:center;z-index:9999;padding:16px">
+  <div style="background:#fff;border-radius:14px;max-width:760px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,0.2);overflow:hidden">
+    <div style="padding:20px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <h3 style="font-size:17px;font-weight:700">データを追加</h3>
+      <button type="button" onclick="document.getElementById('uploadModal').classList.remove('open');document.getElementById('uploadModal').style.display='none'" style="background:none;border:none;font-size:24px;color:var(--text2);cursor:pointer">&times;</button>
+    </div>
+    <div style="padding:24px;overflow-y:auto;flex:1">
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px">追加する資料の種類を選んでください。</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <form method="POST" action="/agent/finance/upload-trend?_csrf=${encodeURIComponent(csrf)}" enctype="multipart/form-data" style="padding:16px;border:2px solid var(--border);border-radius:10px" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='解析中...'">
+          <h4 style="font-size:14px;font-weight:700;margin-bottom:8px">📊 月次推移試算表</h4>
+          <p style="font-size:12px;color:var(--text2);margin-bottom:10px">複数月分。詳細表示。</p>
+          <input type="file" name="file" accept=".pdf,.csv,.txt" required style="width:100%;font-size:12px;margin-bottom:8px">
+          <button type="submit" class="btn-primary btn-sm" style="width:100%;border:none;font-family:inherit;cursor:pointer">アップロード</button>
+        </form>
+        <form method="POST" action="/agent/finance/upload-snapshot?_csrf=${encodeURIComponent(csrf)}" enctype="multipart/form-data" style="padding:16px;border:2px solid var(--border);border-radius:10px" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='解析中...'">
+          <h4 style="font-size:14px;font-weight:700;margin-bottom:8px">📄 単月試算表/決算書</h4>
+          <p style="font-size:12px;color:var(--text2);margin-bottom:10px">1時点。簡易表示。</p>
+          <input type="file" name="file" accept=".pdf,.csv,.txt" required style="width:100%;font-size:12px;margin-bottom:8px">
+          <button type="submit" class="btn-secondary btn-sm" style="width:100%;border:1px solid var(--border);background:var(--bg);font-family:inherit;cursor:pointer">アップロード</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+<style>.upload-modal-overlay.open{display:flex !important}</style>
+</body></html>`;
 }
 
 /** 汎用「データなし」ページ（各AIエージェント用） */

@@ -169,6 +169,149 @@ ${additionalJson}
     return text;
   }
 
+  /**
+   * 単月試算表 or 年度決算書から PL/BS スナップショットを1件抽出する。
+   * 月次推移ではなく「ある時点」の数値として保存する。
+   */
+  async extractMonthlySnapshot(documentText: string, fileName: string): Promise<{
+    snapshot: import('../types/trend.js').MonthlySnapshot;
+    extractionNotes: string[];
+  }> {
+    if (!this.ai) throw new Error('Gemini APIが初期化されていません');
+
+    const today = new Date();
+    const prompt = `以下の試算表または決算書から、PL/BS の主要科目を抽出してJSON形式で返してください。
+
+【ルール】
+- 数値は円単位の整数。不明な項目は null。
+- year/month は資料の対象期間。月次試算表なら対象月、年度決算書なら期末年月（不明なら ${today.getFullYear()}/${today.getMonth() + 1}）。
+- 売上総利益が無ければ 売上高 - 売上原価 で計算。
+- 経常利益が無ければ営業利益で代用。
+
+【出力JSON】
+{
+  "year": 2026, "month": 3,
+  "revenue": 売上高,
+  "costOfSales": 売上原価,
+  "grossProfit": 売上総利益,
+  "sgaExpenses": 販管費,
+  "operatingIncome": 営業利益,
+  "ordinaryIncome": 経常利益,
+  "cashAndDeposits": 現金預金,
+  "currentAssets": 流動資産,
+  "currentLiabilities": 流動負債,
+  "totalAssets": 総資産,
+  "netAssets": 純資産,
+  "extractionNotes": ["注意点や推定箇所"]
+}
+
+【資料】
+ファイル名: ${fileName}
+${documentText}
+
+JSONのみ返してください。`;
+
+    logger.info(`単月スナップショット抽出中（Gemini）: ${fileName}`);
+    const response = await this.ai.models.generateContent({
+      model: config.ai.geminiModel,
+      contents: prompt,
+    });
+    const text = response.text || '';
+    this.recordUsage(response, '単月試算表抽出(Gemini)');
+
+    const jsonStr = (text.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1] || text);
+    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('AIからの応答からJSONを解析できませんでした');
+
+    const p = JSON.parse(jsonMatch[0]);
+    return {
+      snapshot: {
+        year: p.year ?? today.getFullYear(),
+        month: p.month ?? today.getMonth() + 1,
+        revenue: p.revenue ?? 0,
+        costOfSales: p.costOfSales ?? 0,
+        grossProfit: p.grossProfit ?? ((p.revenue ?? 0) - (p.costOfSales ?? 0)),
+        sgaExpenses: p.sgaExpenses ?? 0,
+        operatingIncome: p.operatingIncome ?? 0,
+        ordinaryIncome: p.ordinaryIncome ?? p.operatingIncome ?? 0,
+        cashAndDeposits: p.cashAndDeposits ?? 0,
+        currentAssets: p.currentAssets ?? 0,
+        currentLiabilities: p.currentLiabilities ?? 0,
+        totalAssets: p.totalAssets ?? 0,
+        netAssets: p.netAssets ?? 0,
+      },
+      extractionNotes: p.extractionNotes || [],
+    };
+  }
+
+  /**
+   * 月次推移試算表から複数月分のPL/BSを抽出する。
+   */
+  async extractMonthlyTrend(documentText: string, fileName: string): Promise<{
+    snapshots: import('../types/trend.js').MonthlySnapshot[];
+    extractionNotes: string[];
+  }> {
+    if (!this.ai) throw new Error('Gemini APIが初期化されていません');
+
+    const prompt = `以下の月次推移試算表から、月ごとのPL/BSを配列形式でJSONで返してください。
+
+【ルール】
+- 各月の数値は円単位の整数。不明な項目は null（数値が0なら0）。
+- 売上総利益が無ければ 売上高 - 売上原価 で計算。
+- 経常利益が無ければ営業利益で代用。
+- 月の並びは古い順（昇順）にソート。
+
+【出力JSON】
+{
+  "snapshots": [
+    {
+      "year": 2025, "month": 10,
+      "revenue": ..., "costOfSales": ..., "grossProfit": ...,
+      "sgaExpenses": ..., "operatingIncome": ..., "ordinaryIncome": ...,
+      "cashAndDeposits": ..., "currentAssets": ..., "currentLiabilities": ...,
+      "totalAssets": ..., "netAssets": ...
+    }
+  ],
+  "extractionNotes": ["注意点"]
+}
+
+【資料】
+ファイル名: ${fileName}
+${documentText}
+
+JSONのみ返してください。`;
+
+    logger.info(`月次推移抽出中（Gemini）: ${fileName}`);
+    const response = await this.ai.models.generateContent({
+      model: config.ai.geminiModel,
+      contents: prompt,
+    });
+    const text = response.text || '';
+    this.recordUsage(response, '月次推移試算表抽出(Gemini)');
+
+    const jsonStr = (text.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1] || text);
+    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('AIからの応答からJSONを解析できませんでした');
+
+    const p = JSON.parse(jsonMatch[0]);
+    const snapshots: import('../types/trend.js').MonthlySnapshot[] = (p.snapshots || []).map((s: any) => ({
+      year: s.year, month: s.month,
+      revenue: s.revenue ?? 0,
+      costOfSales: s.costOfSales ?? 0,
+      grossProfit: s.grossProfit ?? ((s.revenue ?? 0) - (s.costOfSales ?? 0)),
+      sgaExpenses: s.sgaExpenses ?? 0,
+      operatingIncome: s.operatingIncome ?? 0,
+      ordinaryIncome: s.ordinaryIncome ?? s.operatingIncome ?? 0,
+      cashAndDeposits: s.cashAndDeposits ?? 0,
+      currentAssets: s.currentAssets ?? 0,
+      currentLiabilities: s.currentLiabilities ?? 0,
+      totalAssets: s.totalAssets ?? 0,
+      netAssets: s.netAssets ?? 0,
+    }));
+    snapshots.sort((a, b) => (a.year * 100 + a.month) - (b.year * 100 + b.month));
+    return { snapshots, extractionNotes: p.extractionNotes || [] };
+  }
+
   async extractTextFromPDF(pdfBuffer: Buffer, fileName: string): Promise<string> {
     if (!this.ai) throw new Error('Gemini APIが初期化されていません');
 
