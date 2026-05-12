@@ -270,7 +270,10 @@ ${basePrompt}`,
 
     // テナント固有の仕訳ルール（ユーザー登録）を最優先で適用
     if (customRules && customRules.length > 0) {
+      logger.info(`仕訳ルールをプロンプトに適用: ${customRules.length}件`);
       prompt += `\n\n【この会社固有の仕訳ルール（最優先で適用してください）】\n${customRules.map((r, i) => `${i + 1}. ${r}`).join('\n')}\n以上のルールは標準ルールよりも優先します。該当する取引はこれらのルールに従って仕訳してください。`;
+    } else {
+      logger.info('仕訳ルール: 未登録（標準ルールのみで生成）');
     }
 
     if (!industry) return prompt;

@@ -1736,9 +1736,22 @@ async function fetchFiscalMonth(req: express.Request): Promise<number | null> {
   }
 }
 
-/** セッションから選択中の会計年度（決算月期末年）を取得 */
-function fetchFiscalYear(req: express.Request): number | null {
-  return req.session.activeFiscalYear ?? null;
+/**
+ * 選択中の会計年度を取得。
+ * セッションにあればそれ、無ければDBから復元してセッションに戻す。
+ */
+async function fetchFiscalYear(req: express.Request): Promise<number | null> {
+  if (req.session.activeFiscalYear) return req.session.activeFiscalYear;
+  const tid = getActiveTenantId(req);
+  if (!tid || !isSupabaseAvailable()) return null;
+  try {
+    const year = await repo.getTenantActiveFiscalYear(tid);
+    if (year) req.session.activeFiscalYear = year;
+    return year;
+  } catch (e) {
+    logger.warn('会計年度復元失敗', e);
+    return null;
+  }
 }
 
 /** テナントの仕訳ルール一覧を取得（有効なものだけ）。AIプロンプトに渡す用 */
@@ -1766,7 +1779,7 @@ app.get('/agent/accounting', async (req, res) => {
   res.send(renderAccountingPageHTML({
     aiAvailable: receiptService.isAvailable() || isDemoMode(),
     fiscalMonth: await fetchFiscalMonth(req),
-    fiscalYear: req.session.activeFiscalYear ?? null,
+    fiscalYear: await fetchFiscalYear(req),
     recentBatches: await fetchRecentBatches(req),
   }));
 });
@@ -1953,7 +1966,7 @@ app.get('/settings/company-info', async (req, res) => {
     if (!tid) { res.redirect('/'); return; }
     const profile = await repo.getTenantProfile(tid);
     const fiscalMonth = await fetchFiscalMonth(req);
-    const fiscalYear = fetchFiscalYear(req);
+    const fiscalYear = await fetchFiscalYear(req);
     const customRules = await fetchActiveJournalRules(req);
     res.send(renderCompanyInfoHTML({
       profile, fiscalMonth,
@@ -1999,12 +2012,18 @@ app.post('/settings/company-info', express.urlencoded({ extended: true }), async
   }
 });
 
-// 仕訳生成対象の会計年度を切り替え（セッション保持）
+// 仕訳生成対象の会計年度を切り替え（セッション + DB 両方に保存）
 app.post('/agent/accounting/fiscal-year', express.urlencoded({ extended: true }), async (req, res) => {
   const raw = req.body.fiscalYear as string | undefined;
   const year = raw && raw !== '' ? parseInt(raw, 10) : NaN;
   if (!isNaN(year) && year >= 1900 && year <= 3000) {
     req.session.activeFiscalYear = year;
+    // DBにも永続化（次回ログイン時のデフォルト表示用）
+    const tid = getActiveTenantId(req);
+    if (tid && isSupabaseAvailable()) {
+      try { await repo.setTenantActiveFiscalYear(tid, year); }
+      catch (e) { logger.warn('会計年度のDB保存失敗', e); }
+    }
   }
   req.session.save(() => res.redirect('/agent/accounting'));
 });
@@ -2049,7 +2068,7 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
     const memory = await chatService.getMemory(getActiveTenantId(req) || undefined);
     const industry = memory.industry || undefined;
     const fiscalMonth = await fetchFiscalMonth(req);
-    const fiscalYear = fetchFiscalYear(req);
+    const fiscalYear = await fetchFiscalYear(req);
     const customRules = await fetchActiveJournalRules(req);
 
     if (files.length === 1) {
@@ -2158,7 +2177,7 @@ app.post('/agent/accounting/analyze-video', upload.single('video'), async (req, 
     const memory = await chatService.getMemory(getActiveTenantId(req) || undefined);
     const industry = memory.industry || undefined;
     const fiscalMonth = await fetchFiscalMonth(req);
-    const fiscalYear = fetchFiscalYear(req);
+    const fiscalYear = await fetchFiscalYear(req);
     const customRules = await fetchActiveJournalRules(req);
 
     // Geminiで動画を直接解析
@@ -2207,7 +2226,7 @@ app.post('/agent/accounting/chat-correct', express.json({ limit: '5mb' }), async
 
     // Geminiで修正内容を解釈（日付正規化用に決算月コンテキストを渡す）
     const fiscalMonth = await fetchFiscalMonth(req);
-    const fiscalYear = fetchFiscalYear(req);
+    const fiscalYear = await fetchFiscalYear(req);
     const customRules = await fetchActiveJournalRules(req);
     const result = await receiptService.interpretCorrection(entries, message, fiscalMonth, fiscalYear);
 
