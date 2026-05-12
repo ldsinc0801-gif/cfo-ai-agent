@@ -18,7 +18,7 @@ export interface AccountingPageOptions {
   /** 仕訳生成対象の会計年度（決算月期末年）。未指定なら現在進行中の事業年度 */
   fiscalYear?: number | null;
   /** 確定済みバッチ（最近順） */
-  recentBatches?: Array<{ id: string; label: string; entryCount: number; totalAmount: number; createdAt: string }>;
+  recentBatches?: Array<{ id: string; label: string; entryCount: number; totalAmount: number; createdAt: string; freeeSentAt?: string | null; freeeSkipCount?: number }>;
 }
 
 export function renderAccountingPageHTML(options: AccountingPageOptions = { aiAvailable: false }): string {
@@ -617,13 +617,24 @@ function renderFiscalYearSelector(fiscalMonth: number | null | undefined, fiscal
   </div>`;
 }
 
+/** バッチのfreee登録状態を判定してバッジHTMLを返す */
+function freeeBadge(freeeSentAt?: string | null, skipCount?: number): string {
+  if (!freeeSentAt) {
+    return `<span class="freee-badge freee-badge-none">freee未登録</span>`;
+  }
+  if (skipCount && skipCount > 0) {
+    return `<span class="freee-badge freee-badge-partial">freee一部登録（${skipCount}件スキップ）</span>`;
+  }
+  return `<span class="freee-badge freee-badge-done">freee登録済み</span>`;
+}
+
 /** 過去の確定済みバッチを一覧表示するフッター */
-function renderBatchHistory(batches: Array<{ id: string; label: string; entryCount: number; totalAmount: number; createdAt: string }>): string {
+function renderBatchHistory(batches: Array<{ id: string; label: string; entryCount: number; totalAmount: number; createdAt: string; freeeSentAt?: string | null; freeeSkipCount?: number }>): string {
   if (!batches || batches.length === 0) {
     return `<div class="batch-history">
       <div class="batch-history-header">
         <strong>確定済みの仕訳データ</strong>
-        <span style="font-size:12px;color:var(--text2)">まだ確定済みのデータはありません。生成した仕訳を「確定して保存」すると、ここに履歴が並びます。</span>
+        <span style="font-size:12px;color:var(--text2)">まだ確定済みのデータはありません。生成した仕訳を「確定して保存」または「freeeに送信」すると、ここに履歴が並びます。</span>
       </div>
     </div>`;
   }
@@ -638,6 +649,7 @@ function renderBatchHistory(batches: Array<{ id: string; label: string; entryCou
           <div class="batch-card-label">${esc(b.label)}</div>
           <div class="batch-card-meta">${b.entryCount}件 / ${fmt(b.totalAmount)}円</div>
           <div class="batch-card-date">${new Date(b.createdAt).toLocaleString('ja-JP')}</div>
+          <div style="margin-top:8px">${freeeBadge(b.freeeSentAt, b.freeeSkipCount)}</div>
         </a>`).join('')}
     </div>
   </div>`;
@@ -647,26 +659,68 @@ function renderBatchHistory(batches: Array<{ id: string; label: string; entryCou
  * バッチ詳細ページ。確定済み仕訳の編集・削除・freee再送・CSV再ダウンロードができる。
  */
 export function renderBatchDetailHTML(opts: {
-  batch: { id: string; label: string; entryCount: number; totalAmount: number; createdAt: string; freeeSentAt: string | null };
+  batch: { id: string; label: string; entryCount: number; totalAmount: number; createdAt: string; freeeSentAt: string | null; freeeSkipCount?: number };
   entries: Array<{ id: string; entryDate: string; debitAccount: string; creditAccount: string; amount: number; taxRate: number; taxAmount: number; description: string; partnerName: string; receiptType: string | null }>;
   fiscalMonth?: number | null;
+  /** freee送信結果バナー表示用 */
+  freeeStatus?: 'success' | 'already' | 'demo' | 'noauth' | 'nocompany' | 'error';
+  freeeStatusMessage?: string;
 }): string {
   const { batch, entries } = opts;
   const fmt = (n: number) => new Intl.NumberFormat('ja-JP').format(n);
+  const total = entries.reduce((s, e) => s + (e.amount || 0), 0);
+
+  // freee送信結果バナー
+  let statusBanner = '';
+  if (opts.freeeStatus === 'success') {
+    statusBanner = `<div style="background:#ecf6f8;border:1px solid #a8d8e0;color:#1b7f8e;border-radius:10px;padding:14px 18px;margin-bottom:16px;font-size:14px">
+      <strong>✓ freee送信完了</strong> ${esc(opts.freeeStatusMessage || '')}
+    </div>`;
+  } else if (opts.freeeStatus === 'already') {
+    statusBanner = `<div style="background:#fef3c7;border:1px solid #fde68a;color:#92400e;border-radius:10px;padding:14px 18px;margin-bottom:16px;font-size:14px">
+      このバッチは既に freee に送信済みです。重複送信を避けるため再送できません。
+    </div>`;
+  } else if (opts.freeeStatus === 'noauth') {
+    statusBanner = `<div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:10px;padding:14px 18px;margin-bottom:16px;font-size:14px">
+      freee連携が未設定です。「freee連携設定」から認証してください。
+    </div>`;
+  } else if (opts.freeeStatus === 'nocompany') {
+    statusBanner = `<div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:10px;padding:14px 18px;margin-bottom:16px;font-size:14px">
+      freee事業所が未選択です。「freee事業所設定」から選択してください。
+    </div>`;
+  } else if (opts.freeeStatus === 'demo') {
+    statusBanner = `<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:10px;padding:14px 18px;margin-bottom:16px;font-size:14px">
+      デモモードのため freee 送信は実行されません。
+    </div>`;
+  } else if (opts.freeeStatus === 'error') {
+    statusBanner = `<div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:10px;padding:14px 18px;margin-bottom:16px;font-size:14px">
+      <strong>freee送信エラー:</strong> ${esc(opts.freeeStatusMessage || '不明なエラー')}
+    </div>`;
+  }
+
+  // freee送信ボタン（未送信時のみ）
+  const freeeButton = batch.freeeSentAt ? '' : `
+    <button type="button" class="btn-primary" onclick="openFreeeConfirm()" title="このバッチをfreee APIに送信します">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+      freeeに登録
+    </button>`;
 
   const bodyHTML = `
 <style>${PAGE_CSS}</style>
 
+${statusBanner}
+
 <div class="batch-detail-header">
   <div>
     <a href="/agent/accounting" class="batch-back-link">← 会計AIに戻る</a>
-    <h2 style="font-size:20px;font-weight:700;margin-top:6px">${esc(batch.label)}</h2>
+    <h2 style="font-size:20px;font-weight:700;margin-top:6px">${esc(batch.label)} ${freeeBadge(batch.freeeSentAt, batch.freeeSkipCount)}</h2>
     <div style="font-size:13px;color:var(--text2);margin-top:4px">
       ${batch.entryCount}件 / 合計 ${fmt(batch.totalAmount)}円 / 確定日時: ${new Date(batch.createdAt).toLocaleString('ja-JP')}
-      ${batch.freeeSentAt ? ` / <span style="color:#1b7f8e;font-weight:600">freee送信済み (${new Date(batch.freeeSentAt).toLocaleString('ja-JP')})</span>` : ''}
+      ${batch.freeeSentAt ? ` / freee送信日時: ${new Date(batch.freeeSentAt).toLocaleString('ja-JP')}` : ''}
     </div>
   </div>
-  <div style="display:flex;gap:8px;align-items:center">
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    ${freeeButton}
     <button type="button" class="btn-primary" onclick="saveBatchEdits()">変更を保存</button>
     <form action="/agent/accounting/batch/${esc(batch.id)}/delete" method="post" style="margin:0" onsubmit="return confirm('このバッチを削除しますか？元に戻せません。')">
       ${csrfInput()}
@@ -700,7 +754,54 @@ export function renderBatchDetailHTML(opts: {
   </div>
 </div>
 
+${batch.freeeSentAt ? '' : `
+<!-- freee送信確認モーダル -->
+<div class="freee-modal-overlay" id="freeeConfirmModal" style="display:none">
+  <div class="freee-modal">
+    <div class="freee-modal-header">
+      <h3>freee に送信する前に確認してください</h3>
+    </div>
+    <div class="freee-modal-body">
+      <p class="freee-modal-warn">
+        <strong>※AI生成の仕訳です。</strong>送信後は freee 側で取消・修正が必要になります。<br>
+        内容に問題がないか必ずご確認のうえ、送信してください。
+      </p>
+      <div class="freee-modal-summary">
+        <div class="freee-summary-row"><span>送信件数</span><strong>${entries.length} 件</strong></div>
+        <div class="freee-summary-row"><span>合計金額</span><strong>${fmt(total)} 円</strong></div>
+        <div class="freee-summary-row"><span>対象期間</span><strong>${entries.length > 0 ? `${esc(entries[0].entryDate)} 〜 ${esc(entries[entries.length - 1].entryDate)}` : '-'}</strong></div>
+      </div>
+      <div class="freee-modal-detail">
+        <table class="freee-detail-table">
+          <thead><tr><th>日付</th><th>借方</th><th>金額</th><th>摘要</th></tr></thead>
+          <tbody>
+            ${entries.slice(0, 20).map(e => `<tr><td>${esc(e.entryDate)}</td><td>${esc(e.debitAccount)}</td><td class="num">${fmt(e.amount)}円</td><td>${esc(e.description).slice(0, 24)}</td></tr>`).join('')}
+            ${entries.length > 20 ? `<tr><td colspan="4" style="text-align:center;color:#6b7280">…他 ${entries.length - 20} 件</td></tr>` : ''}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="freee-modal-actions">
+      <button type="button" class="btn-secondary" onclick="closeFreeeConfirm()">キャンセル</button>
+      <form action="/agent/accounting/batch/${esc(batch.id)}/send-freee" method="post" style="display:inline">
+        ${csrfInput()}
+        <input type="hidden" name="confirmed" value="1"/>
+        <button type="submit" class="btn-primary" id="freeeSubmitBtn">freee に送信する</button>
+      </form>
+    </div>
+  </div>
+</div>
+`}
+
 <script>
+function openFreeeConfirm(){
+  var m = document.getElementById('freeeConfirmModal');
+  if(m) m.style.display = 'flex';
+}
+function closeFreeeConfirm(){
+  var m = document.getElementById('freeeConfirmModal');
+  if(m) m.style.display = 'none';
+}
 function collectEntries(){
   var rows = document.querySelectorAll('tr[data-idx]');
   var arr = [];
@@ -827,6 +928,11 @@ const PAGE_CSS = `
 .freee-detail-table td.num{text-align:right;font-variant-numeric:tabular-nums}
 .freee-modal-actions{padding:16px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;background:var(--bg)}
 .freee-modal-actions .btn-primary,.freee-modal-actions .btn-secondary{padding:10px 24px;font-size:14px}
+
+.freee-badge{display:inline-block;font-size:11px;font-weight:700;padding:3px 10px;border-radius:10px;letter-spacing:0.02em;margin-left:6px;vertical-align:middle}
+.freee-badge-done{background:#d5eef3;color:#1b7f8e}
+.freee-badge-partial{background:#fef3c7;color:#92400e}
+.freee-badge-none{background:#f3f4f6;color:#6b7280}
 
 .batch-history{margin-top:32px;padding-top:24px;border-top:2px solid var(--border)}
 .batch-history-header{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}

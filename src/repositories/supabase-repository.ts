@@ -95,6 +95,7 @@ export interface JournalBatchRow {
   entryCount: number;
   totalAmount: number;
   freeeSentAt: string | null;
+  freeeSkipCount: number;
   createdAt: string;
 }
 
@@ -175,7 +176,8 @@ export async function listJournalBatches(tenantId: TenantId, limit: number = 50)
   return (data || []).map((r: any) => ({
     id: r.id, tenantId: r.tenant_id, label: r.label, source: r.source,
     entryCount: r.entry_count, totalAmount: Number(r.total_amount),
-    freeeSentAt: r.freee_sent_at, createdAt: r.created_at,
+    freeeSentAt: r.freee_sent_at, freeeSkipCount: r.freee_skip_count || 0,
+    createdAt: r.created_at,
   }));
 }
 
@@ -194,8 +196,24 @@ export async function getJournalBatch(tenantId: TenantId, batchId: string): Prom
   return {
     id: data.id, tenantId: data.tenant_id, label: data.label, source: data.source,
     entryCount: data.entry_count, totalAmount: Number(data.total_amount),
-    freeeSentAt: data.freee_sent_at, createdAt: data.created_at,
+    freeeSentAt: data.freee_sent_at, freeeSkipCount: data.freee_skip_count || 0,
+    createdAt: data.created_at,
   };
+}
+
+/** バッチのfreee送信完了をマーク（送信日時とスキップ件数を保存） */
+export async function markBatchFreeeSent(tenantId: TenantId, batchId: string, skipCount: number = 0): Promise<void> {
+  const { error } = await getSupabase()
+    .from('journal_batches')
+    .update({
+      freee_sent_at: new Date().toISOString(),
+      freee_skip_count: skipCount,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', batchId)
+    .eq('tenant_id', tenantId);
+  if (error) throw new Error(`freee送信日時の保存に失敗: ${error.message}`);
+  logger.info(`バッチ ${batchId} を freee送信済みに設定（スキップ${skipCount}件）`);
 }
 
 /** バッチ内の仕訳一覧 */

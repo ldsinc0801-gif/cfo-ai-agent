@@ -1815,9 +1815,20 @@ app.get('/agent/accounting/batch/:id', async (req, res) => {
     if (!batch) { res.status(404).send(renderErrorHTML(404, 'バッチが見つかりません')); return; }
     const entries = await repo.getJournalEntries(tid, req.params.id);
     const fiscalMonth = await fetchFiscalMonth(req);
-    const fiscalYear = fetchFiscalYear(req);
+
+    // freee送信結果バナー（リダイレクト経由で受け取る）
+    const freeeQuery = req.query.freee as string | undefined;
+    const summary = req.query.summary as string | undefined;
+    let freeeStatus: 'success' | 'already' | 'demo' | 'noauth' | 'nocompany' | 'error' | undefined;
+    if (freeeQuery === '1') freeeStatus = 'success';
+    else if (freeeQuery === 'already') freeeStatus = 'already';
+    else if (freeeQuery === 'demo') freeeStatus = 'demo';
+    else if (freeeQuery === 'noauth') freeeStatus = 'noauth';
+    else if (freeeQuery === 'nocompany') freeeStatus = 'nocompany';
+    else if (freeeQuery === 'error') freeeStatus = 'error';
+
     const { renderBatchDetailHTML } = await import('./accounting-page.js');
-    res.send(renderBatchDetailHTML({ batch, entries, fiscalMonth }));
+    res.send(renderBatchDetailHTML({ batch, entries, fiscalMonth, freeeStatus, freeeStatusMessage: summary }));
   } catch (e: any) {
     logger.error('バッチ詳細表示エラー', e);
     res.status(500).send(renderErrorHTML(500, 'バッチ表示に失敗しました'));
@@ -2182,7 +2193,85 @@ app.get('/agent/accounting/yayoi-csv', (req, res) => {
   }
 });
 
-// 会計AI：freee APIに仕訳送信
+/**
+ * 仕訳の配列を freee に送信する内部処理。
+ * 成功件数とスキップ件数を返す。バッチ作成・マークは呼び出し側で行う。
+ */
+async function sendEntriesToFreee(
+  entries: JournalEntry[],
+  companyId: number,
+  freeeToken: { access_token: string; refresh_token: string },
+): Promise<{ results: string[]; sentCount: number; skipCount: number }> {
+  const { FreeeAuthClient } = await import('../clients/freee-auth.js');
+  const { FreeeApiClient } = await import('../clients/freee-api.js');
+  const auth = new FreeeAuthClient({
+    accessToken: freeeToken.access_token,
+    refreshToken: freeeToken.refresh_token,
+  });
+  const apiClient = new FreeeApiClient(auth);
+
+  const results: string[] = [];
+  let sentCount = 0;
+  let skipCount = 0;
+
+  for (const entry of entries) {
+    const accountId = await apiClient.findAccountItemId(companyId, entry.debitAccount);
+    if (!accountId) {
+      results.push(`[スキップ] ${entry.description}: 勘定科目「${entry.debitAccount}」がfreeeに見つかりません`);
+      skipCount++;
+      continue;
+    }
+    const taxCode = entry.taxRate === 10 ? 21 : entry.taxRate === 8 ? 23 : 0;
+    const dealType = entry.debitAccount.includes('売上') ? 'income' : 'expense';
+    const wallet = await apiClient.findWalletable(companyId, entry.creditAccount);
+    const payments = wallet ? [{
+      amount: entry.amount,
+      from_walletable_id: wallet.id,
+      from_walletable_type: wallet.type,
+      date: entry.date,
+    }] : undefined;
+    const dealResponse = await apiClient.createDeal(companyId, {
+      issue_date: entry.date,
+      type: dealType,
+      details: [{
+        account_item_id: accountId,
+        tax_code: taxCode,
+        amount: entry.amount,
+        description: `${entry.description} (${entry.partnerName})`,
+      }],
+      payments,
+    });
+
+    let receiptStatus = '';
+    const dealId = dealResponse?.deal?.id;
+    if (dealId && entry.receiptFilePath) {
+      try {
+        const receiptBuffer = fs.readFileSync(entry.receiptFilePath);
+        const receiptId = await apiClient.uploadReceipt(
+          companyId, receiptBuffer,
+          entry.receiptFileName || 'receipt.jpg',
+          entry.receiptMimeType || 'image/jpeg',
+        );
+        await apiClient.linkReceiptToDeal(companyId, dealId, receiptId);
+        receiptStatus = ' [レシート添付済]';
+      } catch (e: any) {
+        const errMsg = e?.message || String(e);
+        logger.warn('レシート添付に失敗:', errMsg);
+        receiptStatus = errMsg.includes('上限') || errMsg.includes('有料プラン')
+          ? ' [レシート添付失敗: freeeファイルボックスの上限超過]'
+          : ` [レシート添付失敗: ${errMsg}]`;
+      }
+    }
+
+    const paymentStatus = wallet ? `→ ${entry.creditAccount}で決済済み` : '→ 未決済（口座未設定）';
+    results.push(`[送信完了] ${entry.date} ${entry.debitAccount} ${entry.amount}円 ${paymentStatus} - ${entry.description}${receiptStatus}`);
+    sentCount++;
+  }
+
+  return { results, sentCount, skipCount };
+}
+
+// 会計AI：freee APIに仕訳送信（解析結果画面から）
 app.post('/agent/accounting/send-freee', express.urlencoded({ extended: true }), async (req, res) => {
   try {
     // 確認ダイアログを経由しない自動送信を拒否（AI生成仕訳の誤送信防止）
@@ -2233,78 +2322,39 @@ app.post('/agent/accounting/send-freee', express.urlencoded({ extended: true }),
       return;
     }
 
-    const { FreeeAuthClient } = await import('../clients/freee-auth.js');
-    const { FreeeApiClient } = await import('../clients/freee-api.js');
-    const auth = new FreeeAuthClient({
-      accessToken: token.access_token,
-      refreshToken: token.refresh_token,
-    });
-    const apiClient = new FreeeApiClient(auth);
+    const { results, sentCount, skipCount } = await sendEntriesToFreee(entries, companyId, token);
 
-    const results: string[] = [];
-    for (const entry of entries) {
-      // 借方の勘定科目IDを検索
-      const accountId = await apiClient.findAccountItemId(companyId, entry.debitAccount);
-      if (!accountId) {
-        results.push(`[スキップ] ${entry.description}: 勘定科目「${entry.debitAccount}」がfreeeに見つかりません`);
-        continue;
-      }
-
-      // 税区分コード: 10%→課対仕入10%, 8%→課対仕入8%(軽), 0%→対象外
-      const taxCode = entry.taxRate === 10 ? 21 : entry.taxRate === 8 ? 23 : 0;
-      const dealType = entry.debitAccount.includes('売上') ? 'income' : 'expense';
-
-      // 貸方（相手勘定科目）に対応する口座を検索して決済済みにする
-      const wallet = await apiClient.findWalletable(companyId, entry.creditAccount);
-      const payments = wallet ? [{
-        amount: entry.amount,
-        from_walletable_id: wallet.id,
-        from_walletable_type: wallet.type,
-        date: entry.date,
-      }] : undefined;
-
-      const dealResponse = await apiClient.createDeal(companyId, {
-        issue_date: entry.date,
-        type: dealType,
-        details: [{
-          account_item_id: accountId,
-          tax_code: taxCode,
-          amount: entry.amount,
-          description: `${entry.description} (${entry.partnerName})`,
-        }],
-        payments,
+    // 送信成功した（1件でも）ならバッチを自動作成 + freee_sent_at をマーク
+    const tid = getActiveTenantId(req);
+    if (tid && sentCount > 0) {
+      const dateLabel = new Date().toISOString().slice(0, 10);
+      const batchId = await repo.createJournalBatch(tid, {
+        label: `仕訳データ ${dateLabel}`,
+        source: 'freee',
+        createdBy: req.session.user?.id,
+        entries: entries.map(e => ({
+          date: e.date,
+          debitAccount: e.debitAccount,
+          creditAccount: e.creditAccount,
+          amount: Number(e.amount) || 0,
+          taxRate: Number(e.taxRate) || 10,
+          taxAmount: Number(e.taxAmount) || 0,
+          description: e.description || '',
+          partnerName: e.partnerName || '',
+          receiptType: e.receiptType,
+        })),
       });
-
-      // レシート画像をfreeeに添付
-      let receiptStatus = '';
-      const dealId = dealResponse?.deal?.id;
-      if (dealId && entry.receiptFilePath) {
-        try {
-          const receiptBuffer = fs.readFileSync(entry.receiptFilePath);
-          const receiptId = await apiClient.uploadReceipt(
-            companyId,
-            receiptBuffer,
-            entry.receiptFileName || 'receipt.jpg',
-            entry.receiptMimeType || 'image/jpeg'
-          );
-          await apiClient.linkReceiptToDeal(companyId, dealId, receiptId);
-          receiptStatus = ' [レシート添付済]';
-        } catch (receiptErr: any) {
-          const errMsg = receiptErr?.message || String(receiptErr);
-          logger.warn('レシート添付に失敗:', errMsg);
-          receiptStatus = errMsg.includes('上限') || errMsg.includes('有料プラン')
-            ? ' [レシート添付失敗: freeeファイルボックスの上限超過。有料プランへの変更または既存ファイルの削除が必要です]'
-            : ` [レシート添付失敗: ${errMsg}]`;
-        }
-      }
-
-      const paymentStatus = wallet ? `→ ${entry.creditAccount}で決済済み` : '→ 未決済（口座未設定）';
-      results.push(`[送信完了] ${entry.date} ${entry.debitAccount} ${entry.amount}円 ${paymentStatus} - ${entry.description}${receiptStatus}`);
+      await repo.markBatchFreeeSent(tid, batchId, skipCount);
+      // 結果サマリをクエリ経由で詳細画面へ
+      const summary = `freee送信完了: 成功${sentCount}件 / スキップ${skipCount}件`;
+      res.redirect(`/agent/accounting/batch/${batchId}?freee=1&summary=${encodeURIComponent(summary)}`);
+      return;
     }
 
+    // 全件スキップ等で何も送信できなかった場合は解析結果画面に戻る
     res.send(renderAccountingPageHTML({
       aiAvailable: true,
-      success: results.length > 0 ? `freee送信結果:\n${results.join('\n')}` : 'freeeへの送信が完了しました。',
+      error: `freee送信完了: 成功${sentCount}件 / スキップ${skipCount}件\n${results.join('\n')}`,
     }));
   } catch (error) {
     logger.error('freee送信エラー', error);
@@ -2312,6 +2362,59 @@ app.post('/agent/accounting/send-freee', express.urlencoded({ extended: true }),
       aiAvailable: true,
       error: `freee送信に失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`,
     }));
+  }
+});
+
+// 既存バッチをfreeeに登録（バッチ詳細画面の「freeeに登録」ボタンから）
+app.post('/agent/accounting/batch/:id/send-freee', express.urlencoded({ extended: true }), async (req, res) => {
+  try {
+    if (req.body.confirmed !== '1') {
+      res.redirect(`/agent/accounting/batch/${req.params.id}`);
+      return;
+    }
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.redirect('/agent/accounting'); return; }
+    const batch = await repo.getJournalBatch(tid, req.params.id);
+    if (!batch) { res.status(404).send(renderErrorHTML(404, 'バッチが見つかりません')); return; }
+    if (batch.freeeSentAt) {
+      res.redirect(`/agent/accounting/batch/${req.params.id}?freee=already`);
+      return;
+    }
+    if (isDemoMode()) {
+      res.redirect(`/agent/accounting/batch/${req.params.id}?freee=demo`);
+      return;
+    }
+    const token = await getFreeeToken(tid);
+    if (!token) {
+      res.redirect(`/agent/accounting/batch/${req.params.id}?freee=noauth`);
+      return;
+    }
+    const companyId = await getSelectedCompanyId(tid);
+    if (!companyId) {
+      res.redirect(`/agent/accounting/batch/${req.params.id}?freee=nocompany`);
+      return;
+    }
+    const dbEntries = await repo.getJournalEntries(tid, req.params.id);
+    const entries: JournalEntry[] = dbEntries.map(e => ({
+      date: e.entryDate,
+      debitAccount: e.debitAccount,
+      creditAccount: e.creditAccount,
+      amount: e.amount,
+      taxRate: e.taxRate,
+      taxAmount: e.taxAmount,
+      description: e.description,
+      partnerName: e.partnerName,
+      receiptType: e.receiptType || '領収書',
+    }));
+    const { sentCount, skipCount } = await sendEntriesToFreee(entries, companyId, token);
+    if (sentCount > 0) {
+      await repo.markBatchFreeeSent(tid, req.params.id, skipCount);
+    }
+    const summary = `freee送信完了: 成功${sentCount}件 / スキップ${skipCount}件`;
+    res.redirect(`/agent/accounting/batch/${req.params.id}?freee=1&summary=${encodeURIComponent(summary)}`);
+  } catch (error: any) {
+    logger.error('バッチfreee送信エラー', error);
+    res.redirect(`/agent/accounting/batch/${req.params.id}?freee=error&summary=${encodeURIComponent(error?.message || 'freee送信に失敗')}`);
   }
 });
 
