@@ -85,6 +85,194 @@ function mapSnapshot(r: any): MonthlySnapshot {
   };
 }
 
+// ========== 仕訳バッチ（取り込み履歴） ==========
+
+export interface JournalBatchRow {
+  id: string;
+  tenantId: string;
+  label: string;
+  source: string | null;
+  entryCount: number;
+  totalAmount: number;
+  freeeSentAt: string | null;
+  createdAt: string;
+}
+
+export interface JournalEntryRow {
+  id: string;
+  batchId: string;
+  entryDate: string;
+  debitAccount: string;
+  creditAccount: string;
+  amount: number;
+  taxRate: number;
+  taxAmount: number;
+  description: string;
+  partnerName: string;
+  receiptType: string | null;
+}
+
+/** バッチを作成し、個別仕訳をまとめて挿入する */
+export async function createJournalBatch(
+  tenantId: TenantId,
+  args: {
+    label: string;
+    source?: string;
+    createdBy?: string;
+    entries: Array<{
+      date: string; debitAccount: string; creditAccount: string;
+      amount: number; taxRate: number; taxAmount: number;
+      description: string; partnerName: string; receiptType?: string;
+    }>;
+  }
+): Promise<string> {
+  const totalAmount = args.entries.reduce((s, e) => s + (e.amount || 0), 0);
+  const supabase = getSupabase();
+  const { data: batch, error: batchErr } = await supabase
+    .from('journal_batches')
+    .insert({
+      tenant_id: tenantId,
+      label: args.label,
+      source: args.source ?? null,
+      entry_count: args.entries.length,
+      total_amount: totalAmount,
+      created_by: args.createdBy ?? null,
+    })
+    .select()
+    .single();
+  if (batchErr || !batch) throw new Error(`バッチ作成に失敗: ${batchErr?.message}`);
+
+  const rows = args.entries.map(e => ({
+    tenant_id: tenantId,
+    batch_id: batch.id,
+    entry_date: e.date,
+    debit_account: e.debitAccount,
+    credit_account: e.creditAccount,
+    amount: e.amount,
+    tax_rate: e.taxRate,
+    tax_amount: e.taxAmount,
+    description: e.description,
+    partner_name: e.partnerName,
+    receipt_type: e.receiptType ?? null,
+  }));
+  if (rows.length > 0) {
+    const { error: entryErr } = await supabase.from('journal_entries').insert(rows);
+    if (entryErr) throw new Error(`仕訳保存に失敗: ${entryErr.message}`);
+  }
+  logger.info(`仕訳バッチ作成: ${args.label} (${args.entries.length}件)`);
+  return batch.id;
+}
+
+/** テナント内の確定済みバッチを新しい順に取得 */
+export async function listJournalBatches(tenantId: TenantId, limit: number = 50): Promise<JournalBatchRow[]> {
+  const { data, error } = await getSupabase()
+    .from('journal_batches')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`バッチ一覧の取得に失敗: ${error.message}`);
+  return (data || []).map((r: any) => ({
+    id: r.id, tenantId: r.tenant_id, label: r.label, source: r.source,
+    entryCount: r.entry_count, totalAmount: Number(r.total_amount),
+    freeeSentAt: r.freee_sent_at, createdAt: r.created_at,
+  }));
+}
+
+/** バッチを取得（テナント検証込み） */
+export async function getJournalBatch(tenantId: TenantId, batchId: string): Promise<JournalBatchRow | null> {
+  const { data, error } = await getSupabase()
+    .from('journal_batches')
+    .select('*')
+    .eq('id', batchId)
+    .eq('tenant_id', tenantId)
+    .single();
+  if (error) {
+    if (error.code === 'PGRST116') return null;
+    throw new Error(`バッチ取得に失敗: ${error.message}`);
+  }
+  return {
+    id: data.id, tenantId: data.tenant_id, label: data.label, source: data.source,
+    entryCount: data.entry_count, totalAmount: Number(data.total_amount),
+    freeeSentAt: data.freee_sent_at, createdAt: data.created_at,
+  };
+}
+
+/** バッチ内の仕訳一覧 */
+export async function getJournalEntries(tenantId: TenantId, batchId: string): Promise<JournalEntryRow[]> {
+  const { data, error } = await getSupabase()
+    .from('journal_entries')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .eq('batch_id', batchId)
+    .order('entry_date', { ascending: true });
+  if (error) throw new Error(`仕訳取得に失敗: ${error.message}`);
+  return (data || []).map((r: any) => ({
+    id: r.id, batchId: r.batch_id, entryDate: r.entry_date,
+    debitAccount: r.debit_account, creditAccount: r.credit_account,
+    amount: Number(r.amount), taxRate: r.tax_rate, taxAmount: Number(r.tax_amount),
+    description: r.description, partnerName: r.partner_name, receiptType: r.receipt_type,
+  }));
+}
+
+/** バッチの仕訳を一括置換（更新画面で「保存」を押した時用） */
+export async function replaceJournalEntries(
+  tenantId: TenantId,
+  batchId: string,
+  entries: Array<{
+    date: string; debitAccount: string; creditAccount: string;
+    amount: number; taxRate: number; taxAmount: number;
+    description: string; partnerName: string; receiptType?: string;
+  }>
+): Promise<void> {
+  const supabase = getSupabase();
+  // 既存を削除
+  const { error: delErr } = await supabase
+    .from('journal_entries')
+    .delete()
+    .eq('tenant_id', tenantId)
+    .eq('batch_id', batchId);
+  if (delErr) throw new Error(`既存仕訳の削除に失敗: ${delErr.message}`);
+
+  // 新規挿入
+  if (entries.length > 0) {
+    const rows = entries.map(e => ({
+      tenant_id: tenantId,
+      batch_id: batchId,
+      entry_date: e.date,
+      debit_account: e.debitAccount,
+      credit_account: e.creditAccount,
+      amount: e.amount,
+      tax_rate: e.taxRate,
+      tax_amount: e.taxAmount,
+      description: e.description,
+      partner_name: e.partnerName,
+      receipt_type: e.receiptType ?? null,
+    }));
+    const { error: insErr } = await supabase.from('journal_entries').insert(rows);
+    if (insErr) throw new Error(`仕訳の再挿入に失敗: ${insErr.message}`);
+  }
+
+  // バッチのメタデータ更新
+  const totalAmount = entries.reduce((s, e) => s + (e.amount || 0), 0);
+  await supabase
+    .from('journal_batches')
+    .update({ entry_count: entries.length, total_amount: totalAmount, updated_at: new Date().toISOString() })
+    .eq('id', batchId)
+    .eq('tenant_id', tenantId);
+}
+
+/** バッチごと削除（journal_entries は ON DELETE CASCADE で自動削除） */
+export async function deleteJournalBatch(tenantId: TenantId, batchId: string): Promise<void> {
+  const { error } = await getSupabase()
+    .from('journal_batches')
+    .delete()
+    .eq('id', batchId)
+    .eq('tenant_id', tenantId);
+  if (error) throw new Error(`バッチ削除に失敗: ${error.message}`);
+  logger.info(`仕訳バッチ削除: ${batchId}`);
+}
+
 // ========== テナント設定 ==========
 
 /** テナントの決算月（1-12）を取得。未設定なら null。 */

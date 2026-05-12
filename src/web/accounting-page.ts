@@ -15,6 +15,8 @@ export interface AccountingPageOptions {
   success?: string;
   /** 設定済みの決算月（1-12）。未設定なら null */
   fiscalMonth?: number | null;
+  /** 確定済みバッチ（最近順） */
+  recentBatches?: Array<{ id: string; label: string; entryCount: number; totalAmount: number; createdAt: string }>;
 }
 
 export function renderAccountingPageHTML(options: AccountingPageOptions = { aiAvailable: false }): string {
@@ -390,7 +392,10 @@ function saveCorrection(idx){
     msg.style.display='block';
   });
 }
-</script>`;
+</script>
+
+${renderBatchHistory(options.recentBatches || [])}
+`;
 
   return agentPageShell({
     active: 'accounting',
@@ -473,6 +478,10 @@ ${entries.map((e, i) => `
 
     <!-- Actions -->
     <div class="result-actions">
+      <button type="button" class="btn-primary" id="confirmBatchBtn" onclick="confirmBatch()" title="この仕訳を確定して保存します（後から一覧で見れます）">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        確定して保存
+      </button>
       <form action="/agent/accounting/send-freee" method="post" style="display:inline" id="freeeForm">
         ${csrfInput()}
         <input type="hidden" name="entries" value='${esc(JSON.stringify(entries))}'/>
@@ -533,6 +542,31 @@ ${entries.map((e, i) => `
       </div>
     </div>
     <script>
+    function confirmBatch(){
+      var btn = document.getElementById('confirmBatchBtn');
+      btn.disabled = true; btn.textContent = '保存中...';
+      var entries = (typeof getCurrentEntries === 'function') ? getCurrentEntries() : [];
+      if(entries.length === 0){
+        btn.disabled = false; btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/></svg> 確定して保存';
+        window.__toast && window.__toast('仕訳がありません', 'error');
+        return;
+      }
+      fetch('/agent/accounting/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entries: entries }),
+      }).then(function(r){ return r.json(); }).then(function(data){
+        if(data.success && data.batchId){
+          window.location.href = '/agent/accounting/batch/' + data.batchId;
+        } else {
+          btn.disabled = false; btn.textContent = '確定して保存';
+          window.__toast && window.__toast(data.error || '保存に失敗しました', 'error');
+        }
+      }).catch(function(){
+        btn.disabled = false; btn.textContent = '確定して保存';
+        window.__toast && window.__toast('通信エラー', 'error');
+      });
+    }
     function openFreeeConfirm(){
       // 編集後の最新値をhidden inputに反映してから確認モーダルを開く
       if(typeof syncExportTargets==='function') syncExportTargets();
@@ -547,6 +581,132 @@ ${entries.map((e, i) => `
     </script>
   </div>
 </div>`;
+}
+
+/** 過去の確定済みバッチを一覧表示するフッター */
+function renderBatchHistory(batches: Array<{ id: string; label: string; entryCount: number; totalAmount: number; createdAt: string }>): string {
+  if (!batches || batches.length === 0) {
+    return `<div class="batch-history">
+      <div class="batch-history-header">
+        <strong>確定済みの仕訳データ</strong>
+        <span style="font-size:12px;color:var(--text2)">まだ確定済みのデータはありません。生成した仕訳を「確定して保存」すると、ここに履歴が並びます。</span>
+      </div>
+    </div>`;
+  }
+  const fmt = (n: number) => new Intl.NumberFormat('ja-JP').format(n);
+  return `<div class="batch-history">
+    <div class="batch-history-header">
+      <strong>確定済みの仕訳データ（${batches.length}件）</strong>
+    </div>
+    <div class="batch-history-list">
+      ${batches.map(b => `
+        <a href="/agent/accounting/batch/${esc(b.id)}" class="batch-card">
+          <div class="batch-card-label">${esc(b.label)}</div>
+          <div class="batch-card-meta">${b.entryCount}件 / ${fmt(b.totalAmount)}円</div>
+          <div class="batch-card-date">${new Date(b.createdAt).toLocaleString('ja-JP')}</div>
+        </a>`).join('')}
+    </div>
+  </div>`;
+}
+
+/**
+ * バッチ詳細ページ。確定済み仕訳の編集・削除・freee再送・CSV再ダウンロードができる。
+ */
+export function renderBatchDetailHTML(opts: {
+  batch: { id: string; label: string; entryCount: number; totalAmount: number; createdAt: string; freeeSentAt: string | null };
+  entries: Array<{ id: string; entryDate: string; debitAccount: string; creditAccount: string; amount: number; taxRate: number; taxAmount: number; description: string; partnerName: string; receiptType: string | null }>;
+  fiscalMonth?: number | null;
+}): string {
+  const { batch, entries } = opts;
+  const fmt = (n: number) => new Intl.NumberFormat('ja-JP').format(n);
+
+  const bodyHTML = `
+<style>${PAGE_CSS}</style>
+
+<div class="batch-detail-header">
+  <div>
+    <a href="/agent/accounting" class="batch-back-link">← 会計AIに戻る</a>
+    <h2 style="font-size:20px;font-weight:700;margin-top:6px">${esc(batch.label)}</h2>
+    <div style="font-size:13px;color:var(--text2);margin-top:4px">
+      ${batch.entryCount}件 / 合計 ${fmt(batch.totalAmount)}円 / 確定日時: ${new Date(batch.createdAt).toLocaleString('ja-JP')}
+      ${batch.freeeSentAt ? ` / <span style="color:#1b7f8e;font-weight:600">freee送信済み (${new Date(batch.freeeSentAt).toLocaleString('ja-JP')})</span>` : ''}
+    </div>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <button type="button" class="btn-primary" onclick="saveBatchEdits()">変更を保存</button>
+    <form action="/agent/accounting/batch/${esc(batch.id)}/delete" method="post" style="margin:0" onsubmit="return confirm('このバッチを削除しますか？元に戻せません。')">
+      ${csrfInput()}
+      <button type="submit" class="btn-secondary" style="color:#ef4444;border-color:#ef4444">バッチを削除</button>
+    </form>
+  </div>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <div class="card-body">
+    <div class="table-wrap">
+      <table class="journal-table">
+        <thead>
+          <tr><th>日付</th><th>借方</th><th>貸方</th><th>金額</th><th>税率</th><th>消費税</th><th>摘要</th><th>取引先</th></tr>
+        </thead>
+        <tbody>
+          ${entries.map((e, i) => `
+          <tr data-idx="${i}" data-id="${esc(e.id)}">
+            <td><input type="date" class="edit-input edit-date" value="${esc(e.entryDate)}"/></td>
+            <td><select class="edit-select edit-debit">${accountSelectOptions(e.debitAccount)}</select></td>
+            <td><select class="edit-select edit-credit">${accountSelectOptions(e.creditAccount)}</select></td>
+            <td class="num"><input type="number" class="edit-input edit-amount num-input" value="${e.amount}" step="1"/></td>
+            <td class="num"><select class="edit-select edit-taxrate"><option value="10" ${e.taxRate===10?'selected':''}>10%</option><option value="8" ${e.taxRate===8?'selected':''}>8%</option><option value="0" ${e.taxRate===0?'selected':''}>0%</option></select></td>
+            <td class="num"><input type="number" class="edit-input edit-tax num-input" value="${e.taxAmount}" step="1"/></td>
+            <td><input type="text" class="edit-input edit-desc" value="${esc(e.description)}" placeholder="摘要"/></td>
+            <td><input type="text" class="edit-input edit-partner" value="${esc(e.partnerName)}" placeholder="取引先"/></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+function collectEntries(){
+  var rows = document.querySelectorAll('tr[data-idx]');
+  var arr = [];
+  rows.forEach(function(tr){
+    arr.push({
+      date: tr.querySelector('.edit-date').value,
+      debitAccount: tr.querySelector('.edit-debit').value,
+      creditAccount: tr.querySelector('.edit-credit').value,
+      amount: Number(tr.querySelector('.edit-amount').value) || 0,
+      taxRate: Number(tr.querySelector('.edit-taxrate').value),
+      taxAmount: Number(tr.querySelector('.edit-tax').value) || 0,
+      description: tr.querySelector('.edit-desc').value,
+      partnerName: tr.querySelector('.edit-partner').value,
+    });
+  });
+  return arr;
+}
+function saveBatchEdits(){
+  var entries = collectEntries();
+  fetch('/agent/accounting/batch/${esc(batch.id)}/update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entries: entries }),
+  }).then(function(r){return r.json();}).then(function(data){
+    if(data.success){
+      window.__toast && window.__toast('保存しました', 'success');
+    } else {
+      window.__toast && window.__toast(data.error || '保存に失敗しました', 'error');
+    }
+  }).catch(function(){
+    window.__toast && window.__toast('通信エラー', 'error');
+  });
+}
+</script>`;
+
+  return agentPageShell({
+    active: 'accounting',
+    title: batch.label,
+    bodyHTML,
+  });
 }
 
 const PAGE_CSS = `
@@ -634,9 +794,24 @@ const PAGE_CSS = `
 .freee-modal-actions{padding:16px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;background:var(--bg)}
 .freee-modal-actions .btn-primary,.freee-modal-actions .btn-secondary{padding:10px 24px;font-size:14px}
 
+.batch-history{margin-top:32px;padding-top:24px;border-top:2px solid var(--border)}
+.batch-history-header{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.batch-history-header strong{font-size:15px}
+.batch-history-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+.batch-card{display:flex;flex-direction:column;padding:14px 16px;background:var(--card);border:1px solid var(--border);border-radius:10px;text-decoration:none;color:var(--text);transition:all .15s}
+.batch-card:hover{border-color:var(--primary);box-shadow:0 4px 12px rgba(34,152,174,0.1);transform:translateY(-1px)}
+.batch-card-label{font-size:13px;font-weight:700;color:var(--text);margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.batch-card-meta{font-size:12px;color:var(--primary);font-weight:600;margin-bottom:2px}
+.batch-card-date{font-size:11px;color:var(--text2)}
+
+.batch-detail-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.batch-back-link{font-size:12px;color:var(--text2);text-decoration:none}
+.batch-back-link:hover{color:var(--primary)}
+
 @media(max-width:768px){
   .acc-grid{grid-template-columns:1fr}
   .flow-steps{flex-direction:column}
   .flow-arrow{transform:rotate(90deg)}
+  .batch-history-list{grid-template-columns:1fr}
 }
 `;

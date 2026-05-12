@@ -1733,12 +1733,128 @@ async function fetchFiscalMonth(req: express.Request): Promise<number | null> {
   }
 }
 
+/** テナントの確定済みバッチ最近分を取得（Supabase未接続なら空配列） */
+async function fetchRecentBatches(req: express.Request): Promise<repo.JournalBatchRow[]> {
+  const tid = getActiveTenantId(req);
+  if (!tid || !isSupabaseAvailable()) return [];
+  try { return await repo.listJournalBatches(tid, 30); } catch { return []; }
+}
+
 // 会計AIエージェント
 app.get('/agent/accounting', async (req, res) => {
   res.send(renderAccountingPageHTML({
     aiAvailable: receiptService.isAvailable() || isDemoMode(),
     fiscalMonth: await fetchFiscalMonth(req),
+    recentBatches: await fetchRecentBatches(req),
   }));
+});
+
+// 仕訳バッチを確定保存
+app.post('/agent/accounting/confirm', express.json({ limit: '5mb' }), async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.status(403).json({ error: 'テナントが選択されていません' }); return; }
+    const { entries, label, source } = req.body as {
+      entries?: any[]; label?: string; source?: string;
+    };
+    if (!entries || !Array.isArray(entries) || entries.length === 0) {
+      res.status(400).json({ error: '仕訳データがありません' });
+      return;
+    }
+    const dateLabel = new Date().toISOString().slice(0, 10);
+    const batchId = await repo.createJournalBatch(tid, {
+      label: label || `仕訳データ ${dateLabel}`,
+      source: source || undefined,
+      createdBy: req.session.user?.id,
+      entries: entries.map(e => ({
+        date: e.date,
+        debitAccount: e.debitAccount,
+        creditAccount: e.creditAccount,
+        amount: Number(e.amount) || 0,
+        taxRate: Number(e.taxRate) || 10,
+        taxAmount: Number(e.taxAmount) || 0,
+        description: e.description || '',
+        partnerName: e.partnerName || '',
+        receiptType: e.receiptType,
+      })),
+    });
+    res.json({ success: true, batchId });
+  } catch (e: any) {
+    logger.error('仕訳確定エラー', e);
+    res.status(500).json({ error: e?.message || '保存に失敗しました' });
+  }
+});
+
+// 確定済みバッチ一覧（JSON）
+app.get('/api/accounting/batches', async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.json({ batches: [] }); return; }
+    const batches = await repo.listJournalBatches(tid, 100);
+    res.json({ batches });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message });
+  }
+});
+
+// バッチ詳細ページ
+app.get('/agent/accounting/batch/:id', async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.redirect('/agent/accounting'); return; }
+    const batch = await repo.getJournalBatch(tid, req.params.id);
+    if (!batch) { res.status(404).send(renderErrorHTML(404, 'バッチが見つかりません')); return; }
+    const entries = await repo.getJournalEntries(tid, req.params.id);
+    const fiscalMonth = await fetchFiscalMonth(req);
+    const { renderBatchDetailHTML } = await import('./accounting-page.js');
+    res.send(renderBatchDetailHTML({ batch, entries, fiscalMonth }));
+  } catch (e: any) {
+    logger.error('バッチ詳細表示エラー', e);
+    res.status(500).send(renderErrorHTML(500, 'バッチ表示に失敗しました'));
+  }
+});
+
+// バッチ内の仕訳を一括更新
+app.post('/agent/accounting/batch/:id/update', express.json({ limit: '5mb' }), async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.status(403).json({ error: 'テナント未選択' }); return; }
+    const batch = await repo.getJournalBatch(tid, req.params.id);
+    if (!batch) { res.status(404).json({ error: 'バッチが見つかりません' }); return; }
+    const { entries } = req.body as { entries?: any[] };
+    if (!entries || !Array.isArray(entries)) {
+      res.status(400).json({ error: '仕訳データが不正です' });
+      return;
+    }
+    await repo.replaceJournalEntries(tid, req.params.id, entries.map(e => ({
+      date: e.date,
+      debitAccount: e.debitAccount,
+      creditAccount: e.creditAccount,
+      amount: Number(e.amount) || 0,
+      taxRate: Number(e.taxRate) || 10,
+      taxAmount: Number(e.taxAmount) || 0,
+      description: e.description || '',
+      partnerName: e.partnerName || '',
+      receiptType: e.receiptType,
+    })));
+    res.json({ success: true });
+  } catch (e: any) {
+    logger.error('バッチ更新エラー', e);
+    res.status(500).json({ error: e?.message || '更新に失敗しました' });
+  }
+});
+
+// バッチごと削除
+app.post('/agent/accounting/batch/:id/delete', express.urlencoded({ extended: true }), async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.redirect('/agent/accounting'); return; }
+    await repo.deleteJournalBatch(tid, req.params.id);
+    res.redirect('/agent/accounting');
+  } catch (e: any) {
+    logger.error('バッチ削除エラー', e);
+    res.redirect('/agent/accounting');
+  }
 });
 
 // 決算月を保存
