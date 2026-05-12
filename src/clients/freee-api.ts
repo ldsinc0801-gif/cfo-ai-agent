@@ -132,8 +132,8 @@ export class FreeeApiClient {
 
   /**
    * 税区分名（例: "課対仕入10%"）から freee の tax_code を引き当てる。
-   * freee 側のマスター名は事業所・freeeバージョンによって微妙に違うので
-   * 「売上 / 仕入」「税率」「軽減フラグ」をキーワード分解して柔軟に検索する。
+   * freee API の taxes.name は英語スネークケース（例: "purchase_with_tax_10"）で
+   * 返ってくるため、CFO 側の日本語表記から英語キーに変換して検索する。
    */
   async findTaxCodeByName(
     companyId: number,
@@ -141,17 +141,43 @@ export class FreeeApiClient {
     fallbackDealType: 'income' | 'expense' = 'expense',
     fallbackRate: number = 10,
   ): Promise<number> {
+    // CFO の税区分名 → freee 内部 name の対応表
+    const FREEE_NAME_MAP: Record<string, string> = {
+      '課税売上10%':     'sales_with_tax_10',
+      '課税売上8%(軽)':  'sales_with_tax_reduced_8',
+      '課税売上8%':      'sales_with_tax_8',
+      '課税売上':        'sales_with_tax',
+      '課対仕入10%':     'purchase_with_tax_10',
+      '課対仕入8%(軽)':  'purchase_with_tax_reduced_8',
+      '課対仕入8%':      'purchase_with_tax_8',
+      '課対仕入':        'purchase_with_tax',
+      '対象外':          'uncategorized',
+      '不課税':          'tax_exempt',
+      '非課売上':        'sales_with_no_tax',
+      '非課仕入':        'purchase_with_no_tax',
+    };
+
     try {
       const taxes = await this.getTaxCodes(companyId);
 
-      // 1. 完全一致
+      // 1. 日本語名 → freee英語キー の対応表でダイレクト検索
+      const freeeKey = FREEE_NAME_MAP[taxCategoryName];
+      if (freeeKey) {
+        const target = taxes.find(t => t.name === freeeKey);
+        if (target) {
+          logger.info(`税区分マッチ(map): ${taxCategoryName} → ${target.name} (code=${target.code})`);
+          return target.code;
+        }
+      }
+
+      // 2. 完全一致（万一マスターが日本語化されている事業所への対応）
       let target = taxes.find(t => t.name === taxCategoryName);
       if (target) {
         logger.info(`税区分マッチ(exact): ${taxCategoryName} → ${target.name} (code=${target.code})`);
         return target.code;
       }
 
-      // 2. キーワード分解で特徴抽出
+      // 3. キーワード分解（英語/日本語両対応）
       const isIncome   = taxCategoryName.includes('売上');
       const isPurchase = taxCategoryName.includes('仕入');
       const isLight    = taxCategoryName.includes('軽');
@@ -160,41 +186,42 @@ export class FreeeApiClient {
       const rateMatch  = taxCategoryName.match(/(\d+)%/);
       const rate       = rateMatch ? Number(rateMatch[1]) : null;
 
-      // 対象外・不課税
       if (isExempt) {
-        target = taxes.find(t => /対象外|不課税/.test(t.name));
+        target = taxes.find(t => /uncategorized|tax_exempt|対象外|不課税/.test(t.name));
         if (target) {
           logger.info(`税区分マッチ(exempt): ${taxCategoryName} → ${target.name} (code=${target.code})`);
           return target.code;
         }
       }
 
-      // 非課税
       if (isNonTax) {
-        const sideKw = isIncome ? '売上' : '仕入';
-        target = taxes.find(t => t.name.includes('非課') && t.name.includes(sideKw));
+        const sideKw = isIncome ? /(sales_with_no_tax|非課.*売上)/ : /(purchase_with_no_tax|非課.*仕入)/;
+        target = taxes.find(t => sideKw.test(t.name));
         if (target) {
           logger.info(`税区分マッチ(非課): ${taxCategoryName} → ${target.name} (code=${target.code})`);
           return target.code;
         }
       }
 
-      // 売上/仕入系 (課対/課税/対象 のバリエーションを許容)
       if (isPurchase || isIncome) {
+        // 英語キーと日本語の両方を許容
         const sideRegex = isPurchase
-          ? /(課対仕入|課税仕入|課対対象仕入|仕入課税|仕入対象|対象仕入)/
-          : /(課対売上|課税売上|課対対象売上|売上課税|売上対象|対象売上)/;
-        const candidates = taxes.filter(t => sideRegex.test(t.name));
+          ? /(purchase_with_tax|課対仕入|課税仕入|課対対象仕入|仕入課税|仕入対象|対象仕入)/
+          : /(sales_with_tax|課対売上|課税売上|課対対象売上|売上課税|売上対象|対象売上)/;
+        const exemptRegex = /(exempt|軽|軽減|reduced)/;
+
+        // 「軽」と紛らわしいので reduced/軽を含むかで分岐
+        const candidates = taxes.filter(t => sideRegex.test(t.name) && !/exempt_/.test(t.name));
 
         if (rate === 10) {
-          target = candidates.find(t => t.name.includes('10') && !t.name.includes('軽'));
+          target = candidates.find(t => /(_10$|10%)/.test(t.name) && !exemptRegex.test(t.name));
         } else if (rate === 8 && isLight) {
-          target = candidates.find(t => t.name.includes('8') && /軽|軽減/.test(t.name));
+          target = candidates.find(t => /(_8$|8%)/.test(t.name) && /(reduced|軽)/.test(t.name));
         } else if (rate === 8) {
-          target = candidates.find(t => t.name.includes('8') && !t.name.includes('軽'));
+          target = candidates.find(t => /(_8$|8%)/.test(t.name) && !/(reduced|軽)/.test(t.name));
         } else if (rate === null) {
-          // 税率指定なし（"課税売上"・"課対仕入"単体）→ 10% 標準で代用
-          target = candidates.find(t => t.name.includes('10') && !t.name.includes('軽')) || candidates[0];
+          // 税率指定なし → 標準10%相当
+          target = candidates.find(t => /(_10$|10%)/.test(t.name)) || candidates.find(t => t.name === (isPurchase ? 'purchase_with_tax' : 'sales_with_tax'));
         }
 
         if (target) {
@@ -203,7 +230,7 @@ export class FreeeApiClient {
         }
       }
 
-      // 3. ここまで失敗 → デバッグ用に freee 側のマスター名を全部出してフォールバック
+      // 4. ここまで失敗 → デバッグ用に freee 側のマスター名を全部出してフォールバック
       logger.warn(`税区分マッチ失敗: ${taxCategoryName} / freee側マスター: [${taxes.map(t => `${t.code}:${t.name}`).join(', ')}]`);
       return await this.findTaxCode(companyId, fallbackDealType, fallbackRate);
     } catch (e) {
@@ -221,16 +248,17 @@ export class FreeeApiClient {
     try {
       const taxes = await this.getTaxCodes(companyId);
       const sideRegex = dealType === 'income'
-        ? /(課対売上|課税売上|課対対象売上|売上課税|売上対象|対象売上)/
-        : /(課対仕入|課税仕入|課対対象仕入|仕入課税|仕入対象|対象仕入)/;
-      const matches = taxes.filter(t => sideRegex.test(t.name));
+        ? /(sales_with_tax|課対売上|課税売上|課対対象売上|売上課税|売上対象|対象売上)/
+        : /(purchase_with_tax|課対仕入|課税仕入|課対対象仕入|仕入課税|仕入対象|対象仕入)/;
+      const matches = taxes.filter(t => sideRegex.test(t.name) && !/exempt_/.test(t.name));
       let target: { code: number; name: string } | undefined;
       if (rate === 8) {
-        target = matches.find(t => t.name.includes('8') && /軽|軽減/.test(t.name));
+        target = matches.find(t => /(_8$|8%)/.test(t.name) && /(reduced|軽)/.test(t.name))
+              || matches.find(t => /(_8$|8%)/.test(t.name) && !/(reduced|軽)/.test(t.name));
       } else if (rate === 10) {
-        target = matches.find(t => t.name.includes('10') && !t.name.includes('軽'));
+        target = matches.find(t => /(_10$|10%)/.test(t.name) && !/(reduced|軽)/.test(t.name));
       } else if (rate === 0) {
-        target = taxes.find(t => /対象外|不課税/.test(t.name));
+        target = taxes.find(t => /uncategorized|tax_exempt|対象外|不課税/.test(t.name));
       }
       if (!target) target = matches.find(t => t.name.includes(`${rate}`));
       if (target) {
