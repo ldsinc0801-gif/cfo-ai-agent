@@ -273,6 +273,80 @@ export async function deleteJournalBatch(tenantId: TenantId, batchId: string): P
   logger.info(`仕訳バッチ削除: ${batchId}`);
 }
 
+// ========== テナント会社情報 ==========
+
+export interface TenantProfile {
+  companyName: string | null;
+  postalCode: string | null;
+  address: string | null;
+  phone: string | null;
+  representative: string | null;
+  establishedDate: string | null; // YYYY-MM-DD
+  corporateNumber: string | null;
+  invoiceRegistered: boolean;
+  invoiceNumber: string | null;
+  industry: string | null;
+  employeeCount: string | null;
+  notes: string | null;
+}
+
+const EMPTY_PROFILE: TenantProfile = {
+  companyName: null, postalCode: null, address: null, phone: null,
+  representative: null, establishedDate: null, corporateNumber: null,
+  invoiceRegistered: false, invoiceNumber: null, industry: null,
+  employeeCount: null, notes: null,
+};
+
+/** テナントの会社情報を取得（未登録なら全項目 null のオブジェクト） */
+export async function getTenantProfile(tenantId: TenantId): Promise<TenantProfile> {
+  const { data, error } = await getSupabase()
+    .from('tenant_profile')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .single();
+  if (error) {
+    if (error.code === 'PGRST116') return { ...EMPTY_PROFILE };
+    throw new Error(`会社情報の取得に失敗: ${error.message}`);
+  }
+  return {
+    companyName: data.company_name,
+    postalCode: data.postal_code,
+    address: data.address,
+    phone: data.phone,
+    representative: data.representative,
+    establishedDate: data.established_date,
+    corporateNumber: data.corporate_number,
+    invoiceRegistered: !!data.invoice_registered,
+    invoiceNumber: data.invoice_number,
+    industry: data.industry,
+    employeeCount: data.employee_count,
+    notes: data.notes,
+  };
+}
+
+export async function upsertTenantProfile(tenantId: TenantId, p: TenantProfile): Promise<void> {
+  const { error } = await getSupabase()
+    .from('tenant_profile')
+    .upsert({
+      tenant_id: tenantId,
+      company_name: p.companyName,
+      postal_code: p.postalCode,
+      address: p.address,
+      phone: p.phone,
+      representative: p.representative,
+      established_date: p.establishedDate,
+      corporate_number: p.corporateNumber,
+      invoice_registered: p.invoiceRegistered,
+      invoice_number: p.invoiceNumber,
+      industry: p.industry,
+      employee_count: p.employeeCount,
+      notes: p.notes,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'tenant_id' });
+  if (error) throw new Error(`会社情報の保存に失敗: ${error.message}`);
+  logger.info(`会社情報を更新: ${tenantId}`);
+}
+
 // ========== テナント設定 ==========
 
 /** テナントの決算月（1-12）を取得。未設定なら null。 */

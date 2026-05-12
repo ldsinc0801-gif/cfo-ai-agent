@@ -66,9 +66,38 @@ export function csrfMiddleware(req: Request, res: Response, next: NextFunction):
   const expected = req.session.csrfToken;
   if (!submitted || !expected || submitted.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(submitted), Buffer.from(expected))) {
     if (req.path.startsWith('/api/')) {
-      res.status(403).json({ error: 'CSRFトークンが無効です。ページを再読み込みしてください' });
+      res.status(403).json({ error: 'セッションが切れました。ページを再読み込みしてください' });
     } else {
-      res.status(403).send('<h1>403 Forbidden</h1><p>CSRFトークンが無効です。ページを再読み込みしてください。</p>');
+      // Referer か Origin から元のページを推定して自動リダイレクト
+      const referer = req.get('Referer') || '';
+      let backUrl = '/';
+      try {
+        if (referer) {
+          const refUrl = new URL(referer);
+          if (refUrl.host === req.get('Host')) backUrl = refUrl.pathname + refUrl.search;
+        }
+      } catch { /* ignore */ }
+      const backUrlSafe = backUrl.replace(/[<>"]/g, '');
+      res.status(403).send(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>セッション切れ | AI CFO</title>
+<style>
+body{font-family:-apple-system,sans-serif;background:#f4f5f7;color:#1f2937;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px}
+.card{background:#fff;border-radius:14px;padding:32px 40px;max-width:480px;text-align:center;box-shadow:0 8px 24px rgba(0,0,0,0.06)}
+h2{font-size:20px;font-weight:700;margin:0 0 8px}
+.muted{color:#6b7280;font-size:14px;line-height:1.7;margin:12px 0}
+.spin{width:24px;height:24px;border:3px solid #e5e7eb;border-top-color:#2298ae;border-radius:50%;animation:spin 0.6s linear infinite;margin:14px auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+a{color:#2298ae;text-decoration:none;font-weight:600}
+a:hover{text-decoration:underline}
+</style></head>
+<body>
+<div class="card">
+  <h2>セッションが切れました</h2>
+  <div class="spin"></div>
+  <p class="muted">セキュリティのため自動的にページを再読み込みします…</p>
+  <p class="muted" style="font-size:12px">画面が変わらない場合は <a href="${backUrlSafe}">こちら</a> をクリック</p>
+</div>
+<script>setTimeout(function(){ window.location.href = ${JSON.stringify(backUrl)}; }, 1200);</script>
+</body></html>`);
     }
     return;
   }

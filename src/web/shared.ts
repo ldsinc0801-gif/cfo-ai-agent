@@ -74,6 +74,7 @@ export function renderSidebar(active: string, companyName?: string, user?: Sideb
   ];
 
   const settings: Array<{ id: string; href: string; icon: string; label: string }> = [
+    { id: 'company-info', href: '/settings/company-info', icon: ICONS.building, label: '会社情報' },
     { id: 'freee-company', href: '/settings/company', icon: ICONS.building, label: 'freee事業所設定' },
     { id: 'freee', href: '/auth/freee', icon: ICONS.settings, label: 'freee連携設定' },
     { id: 'google', href: '/settings/google', icon: ICONS.link, label: 'Google連携' },

@@ -39,6 +39,7 @@ import { learningService } from '../services/learning-service.js';
 // demo-data.ts は削除済み（デモデータの自動シードを廃止）
 import { renderLoginHTML, renderChangePasswordHTML } from './login-page.js';
 import { renderUsersHTML } from './users-page.js';
+import { renderCompanyInfoHTML } from './company-info-page.js';
 import { setCurrentUser, renderSidebar, SHARED_CSS, agentPageShell } from './shared.js';
 
 import { authService } from '../services/auth-service.js';
@@ -56,6 +57,8 @@ declare module 'express-session' {
     user?: SessionUser;
     activeTenantId?: string;
     activeTenantRole?: string;
+    /** 会計AIで選択中の対象会計年度（決算月期末年） */
+    activeFiscalYear?: number;
   }
 }
 
@@ -1733,6 +1736,11 @@ async function fetchFiscalMonth(req: express.Request): Promise<number | null> {
   }
 }
 
+/** セッションから選択中の会計年度（決算月期末年）を取得 */
+function fetchFiscalYear(req: express.Request): number | null {
+  return req.session.activeFiscalYear ?? null;
+}
+
 /** テナントの確定済みバッチ最近分を取得（Supabase未接続なら空配列） */
 async function fetchRecentBatches(req: express.Request): Promise<repo.JournalBatchRow[]> {
   const tid = getActiveTenantId(req);
@@ -1745,6 +1753,7 @@ app.get('/agent/accounting', async (req, res) => {
   res.send(renderAccountingPageHTML({
     aiAvailable: receiptService.isAvailable() || isDemoMode(),
     fiscalMonth: await fetchFiscalMonth(req),
+    fiscalYear: req.session.activeFiscalYear ?? null,
     recentBatches: await fetchRecentBatches(req),
   }));
 });
@@ -1806,6 +1815,7 @@ app.get('/agent/accounting/batch/:id', async (req, res) => {
     if (!batch) { res.status(404).send(renderErrorHTML(404, 'バッチが見つかりません')); return; }
     const entries = await repo.getJournalEntries(tid, req.params.id);
     const fiscalMonth = await fetchFiscalMonth(req);
+    const fiscalYear = fetchFiscalYear(req);
     const { renderBatchDetailHTML } = await import('./accounting-page.js');
     res.send(renderBatchDetailHTML({ batch, entries, fiscalMonth }));
   } catch (e: any) {
@@ -1857,6 +1867,68 @@ app.post('/agent/accounting/batch/:id/delete', express.urlencoded({ extended: tr
   }
 });
 
+// 会社情報ページ
+app.get('/settings/company-info', async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.redirect('/'); return; }
+    const profile = await repo.getTenantProfile(tid);
+    const fiscalMonth = await fetchFiscalMonth(req);
+    const fiscalYear = fetchFiscalYear(req);
+    res.send(renderCompanyInfoHTML({
+      profile, fiscalMonth,
+      success: req.query.saved === '1' ? '保存しました' : undefined,
+    }));
+  } catch (e: any) {
+    logger.error('会社情報表示エラー', e);
+    res.status(500).send(renderErrorHTML(500, '会社情報の表示に失敗しました'));
+  }
+});
+
+// 会社情報を保存
+app.post('/settings/company-info', express.urlencoded({ extended: true }), async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.redirect('/settings/company-info'); return; }
+    const b = req.body;
+    const fmRaw = b.fiscalMonth as string | undefined;
+    const fiscalMonth = fmRaw && fmRaw !== '' ? parseInt(fmRaw, 10) : null;
+    if (fiscalMonth !== null && (isNaN(fiscalMonth) || fiscalMonth < 1 || fiscalMonth > 12)) {
+      res.redirect('/settings/company-info'); return;
+    }
+    await repo.upsertTenantProfile(tid, {
+      companyName: (b.companyName || '').trim() || null,
+      postalCode: (b.postalCode || '').trim() || null,
+      address: (b.address || '').trim() || null,
+      phone: (b.phone || '').trim() || null,
+      representative: (b.representative || '').trim() || null,
+      establishedDate: (b.establishedDate || '').trim() || null,
+      corporateNumber: (b.corporateNumber || '').trim() || null,
+      invoiceRegistered: b.invoiceRegistered === '1',
+      invoiceNumber: (b.invoiceNumber || '').trim() || null,
+      industry: (b.industry || '').trim() || null,
+      employeeCount: (b.employeeCount || '').trim() || null,
+      notes: (b.notes || '').trim() || null,
+    });
+    // 決算月は tenants テーブル側にも同期
+    await repo.setTenantFiscalMonth(tid, fiscalMonth);
+    res.redirect('/settings/company-info?saved=1');
+  } catch (e: any) {
+    logger.error('会社情報保存エラー', e);
+    res.status(500).send(renderErrorHTML(500, e?.message || '会社情報の保存に失敗しました'));
+  }
+});
+
+// 仕訳生成対象の会計年度を切り替え（セッション保持）
+app.post('/agent/accounting/fiscal-year', express.urlencoded({ extended: true }), async (req, res) => {
+  const raw = req.body.fiscalYear as string | undefined;
+  const year = raw && raw !== '' ? parseInt(raw, 10) : NaN;
+  if (!isNaN(year) && year >= 1900 && year <= 3000) {
+    req.session.activeFiscalYear = year;
+  }
+  req.session.save(() => res.redirect('/agent/accounting'));
+});
+
 // 決算月を保存
 app.post('/agent/accounting/fiscal-month', express.urlencoded({ extended: true }), async (req, res) => {
   try {
@@ -1897,6 +1969,7 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
     const memory = await chatService.getMemory(getActiveTenantId(req) || undefined);
     const industry = memory.industry || undefined;
     const fiscalMonth = await fetchFiscalMonth(req);
+    const fiscalYear = fetchFiscalYear(req);
 
     if (files.length === 1) {
       // 1ファイルの場合：従来通り個別解析
@@ -1908,12 +1981,12 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
       let analysis;
       if (ext === '.csv') {
         const csvText = fs.readFileSync(file.path, 'utf-8');
-        analysis = await receiptService.analyzeCSV(csvText, file.originalname, industry, fiscalMonth);
+        analysis = await receiptService.analyzeCSV(csvText, file.originalname, industry, fiscalMonth, fiscalYear);
       } else if (ext === '.pdf') {
-        analysis = await receiptService.analyzeReceiptPDF(buffer, file.originalname, industry, fiscalMonth);
+        analysis = await receiptService.analyzeReceiptPDF(buffer, file.originalname, industry, fiscalMonth, fiscalYear);
       } else {
         const mimeType = mimeMap[ext] || 'image/jpeg';
-        analysis = await receiptService.analyzeReceiptImage(buffer, mimeType, file.originalname, industry, fiscalMonth);
+        analysis = await receiptService.analyzeReceiptImage(buffer, mimeType, file.originalname, industry, fiscalMonth, fiscalYear);
       }
       // レシートファイル情報を仕訳データに付与（freee添付用）
       for (const entry of analysis.entries) {
@@ -1941,7 +2014,7 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
           const mimeMap: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
           return { buffer: fs.readFileSync(f.path), mimeType: mimeMap[ext] || 'image/jpeg' };
         });
-        const imgAnalysis = await receiptService.analyzeVideoFrames(frames, industry, fiscalMonth);
+        const imgAnalysis = await receiptService.analyzeVideoFrames(frames, industry, fiscalMonth, fiscalYear);
         allEntries.push(...imgAnalysis.entries);
         allNotes.push(...imgAnalysis.notes);
       }
@@ -1949,7 +2022,7 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
       // PDFは1件ずつ解析して結果をマージ
       for (const pdfFile of pdfFiles) {
         const pdfAnalysis = await receiptService.analyzeReceiptPDF(
-          fs.readFileSync(pdfFile.path), pdfFile.originalname, industry, fiscalMonth,
+          fs.readFileSync(pdfFile.path), pdfFile.originalname, industry, fiscalMonth, fiscalYear,
         );
         allEntries.push(...pdfAnalysis.entries);
         allNotes.push(...pdfAnalysis.notes);
@@ -1958,7 +2031,7 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
       // CSVは1件ずつ解析して結果をマージ
       for (const csvFile of csvFiles) {
         const csvText = fs.readFileSync(csvFile.path, 'utf-8');
-        const csvAnalysis = await receiptService.analyzeCSV(csvText, csvFile.originalname, industry, fiscalMonth);
+        const csvAnalysis = await receiptService.analyzeCSV(csvText, csvFile.originalname, industry, fiscalMonth, fiscalYear);
         allEntries.push(...csvAnalysis.entries);
         allNotes.push(...csvAnalysis.notes);
       }
@@ -2004,9 +2077,10 @@ app.post('/agent/accounting/analyze-video', upload.single('video'), async (req, 
     const memory = await chatService.getMemory(getActiveTenantId(req) || undefined);
     const industry = memory.industry || undefined;
     const fiscalMonth = await fetchFiscalMonth(req);
+    const fiscalYear = fetchFiscalYear(req);
 
     // Geminiで動画を直接解析
-    const analysis = await receiptService.analyzeVideo(buffer, mimeType, req.file.originalname, industry, fiscalMonth);
+    const analysis = await receiptService.analyzeVideo(buffer, mimeType, req.file.originalname, industry, fiscalMonth, fiscalYear);
 
     res.send(renderAccountingPageHTML({
       aiAvailable: true,
@@ -2051,7 +2125,8 @@ app.post('/agent/accounting/chat-correct', express.json({ limit: '5mb' }), async
 
     // Geminiで修正内容を解釈（日付正規化用に決算月コンテキストを渡す）
     const fiscalMonth = await fetchFiscalMonth(req);
-    const result = await receiptService.interpretCorrection(entries, message, fiscalMonth);
+    const fiscalYear = fetchFiscalYear(req);
+    const result = await receiptService.interpretCorrection(entries, message, fiscalMonth, fiscalYear);
 
     // 修正があれば学習データとして記録（勘定科目の修正のみ学習対象）
     const accountCorrections = result.corrections.filter(c =>

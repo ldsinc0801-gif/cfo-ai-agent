@@ -54,13 +54,13 @@ export class ReceiptService {
   /**
    * 画像（領収書・レシート）から仕訳データを生成
    */
-  async analyzeReceiptImage(imageBuffer: Buffer, mimeType: string, fileName: string, industry?: string, fiscalMonth?: number | null): Promise<ReceiptAnalysis> {
+  async analyzeReceiptImage(imageBuffer: Buffer, mimeType: string, fileName: string, industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null): Promise<ReceiptAnalysis> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`領収書画像を解析中（Gemini）: ${fileName}`);
 
     const base64 = imageBuffer.toString('base64');
-    const prompt = await this.buildPrompt(industry, fiscalMonth);
+    const prompt = await this.buildPrompt(industry, fiscalMonth, fiscalYear);
 
     const response = await this.ai!.models.generateContent({
       model: config.ai.geminiModel,
@@ -74,19 +74,19 @@ export class ReceiptService {
 
     const text = response.text || '';
     this.recordUsage(response, '領収書解析(Gemini)');
-    return this.parseResponse(text, fiscalMonth);
+    return this.parseResponse(text, fiscalMonth, fiscalYear);
   }
 
   /**
    * PDFの領収書・請求書から仕訳データを生成
    */
-  async analyzeReceiptPDF(pdfBuffer: Buffer, fileName: string, industry?: string, fiscalMonth?: number | null): Promise<ReceiptAnalysis> {
+  async analyzeReceiptPDF(pdfBuffer: Buffer, fileName: string, industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null): Promise<ReceiptAnalysis> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`領収書PDFを解析中（Gemini）: ${fileName}`);
 
     const base64 = pdfBuffer.toString('base64');
-    const prompt = await this.buildPrompt(industry, fiscalMonth);
+    const prompt = await this.buildPrompt(industry, fiscalMonth, fiscalYear);
 
     const response = await this.ai!.models.generateContent({
       model: config.ai.geminiModel,
@@ -98,7 +98,7 @@ export class ReceiptService {
 
     const text = response.text || '';
     this.recordUsage(response, '領収書PDF解析(Gemini)');
-    return this.parseResponse(text, fiscalMonth);
+    return this.parseResponse(text, fiscalMonth, fiscalYear);
   }
 
   /**
@@ -107,13 +107,13 @@ export class ReceiptService {
    * Geminiは動画を直接入力できるため、フレーム抽出不要。
    * 動画内の領収書・レシートを自動認識して仕訳データを生成する。
    */
-  async analyzeVideo(videoBuffer: Buffer, mimeType: string, fileName: string, industry?: string, fiscalMonth?: number | null): Promise<ReceiptAnalysis> {
+  async analyzeVideo(videoBuffer: Buffer, mimeType: string, fileName: string, industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null): Promise<ReceiptAnalysis> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`動画を解析中（Gemini）: ${fileName}`);
 
     const base64 = videoBuffer.toString('base64');
-    const prompt = await this.buildPrompt(industry, fiscalMonth);
+    const prompt = await this.buildPrompt(industry, fiscalMonth, fiscalYear);
 
     const response = await this.ai!.models.generateContent({
       model: config.ai.geminiModel,
@@ -128,18 +128,18 @@ ${prompt}` },
 
     const text = response.text || '';
     this.recordUsage(response, '動画解析(Gemini)');
-    return this.parseResponse(text, fiscalMonth);
+    return this.parseResponse(text, fiscalMonth, fiscalYear);
   }
 
   /**
    * 複数画像を一括解析（動画フレーム互換）
    */
-  async analyzeVideoFrames(frames: { buffer: Buffer; mimeType: string }[], industry?: string, fiscalMonth?: number | null): Promise<ReceiptAnalysis> {
+  async analyzeVideoFrames(frames: { buffer: Buffer; mimeType: string }[], industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null): Promise<ReceiptAnalysis> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`画像${frames.length}枚を一括解析中（Gemini）...`);
 
-    const prompt = await this.buildPrompt(industry, fiscalMonth);
+    const prompt = await this.buildPrompt(industry, fiscalMonth, fiscalYear);
 
     const parts = [
       ...frames.map(f => ({
@@ -158,18 +158,18 @@ ${prompt}` },
     });
     const text = response.text || '';
     this.recordUsage(response, '複数画像解析(Gemini)');
-    return this.parseResponse(text, fiscalMonth);
+    return this.parseResponse(text, fiscalMonth, fiscalYear);
   }
 
   /**
    * CSV（カード明細・銀行取引明細）から仕訳データを生成
    */
-  async analyzeCSV(csvText: string, fileName: string, industry?: string, fiscalMonth?: number | null): Promise<ReceiptAnalysis> {
+  async analyzeCSV(csvText: string, fileName: string, industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null): Promise<ReceiptAnalysis> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`CSV明細を解析中（Gemini）: ${fileName}`);
 
-    const basePrompt = await this.buildPrompt(industry, fiscalMonth);
+    const basePrompt = await this.buildPrompt(industry, fiscalMonth, fiscalYear);
 
     const response = await this.ai!.models.generateContent({
       model: config.ai.geminiModel,
@@ -188,7 +188,7 @@ ${basePrompt}`,
 
     const text = response.text || '';
     this.recordUsage(response, 'CSV明細解析(Gemini)');
-    return this.parseResponse(text, fiscalMonth);
+    return this.parseResponse(text, fiscalMonth, fiscalYear);
   }
 
   /** 仕訳データをCSV文字列に変換 */
@@ -262,8 +262,8 @@ ${basePrompt}`,
   /**
    * 業種に応じた学習済みルールを含むプロンプトを生成
    */
-  private async buildPrompt(industry?: string, fiscalMonth?: number | null): Promise<string> {
-    const basePrompt = getReceiptPrompt(fiscalMonth);
+  private async buildPrompt(industry?: string, fiscalMonth?: number | null, fiscalYear?: number | null): Promise<string> {
+    const basePrompt = getReceiptPrompt(fiscalMonth, fiscalYear);
     if (!industry) return basePrompt;
 
     const learnedRules = await journalLearningService.getLearnedRulesForPrompt(industry);
@@ -293,6 +293,7 @@ ${basePrompt}`,
     entries: JournalEntry[],
     userMessage: string,
     fiscalMonth?: number | null,
+    fiscalYear?: number | null,
   ): Promise<{ corrections: Array<{ index: number; field: string; newValue: any }>; aiMessage: string }> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
@@ -366,7 +367,7 @@ ${userMessage}
         .map(c => {
           let value: any = c.newValue;
           if (c.field === 'date') {
-            value = normalizeDate(value, fiscalMonth);
+            value = normalizeDate(value, fiscalMonth, fiscalYear);
           } else if (c.field === 'amount' || c.field === 'taxAmount') {
             value = Math.max(0, Math.round(Number(value) || 0));
           } else if (c.field === 'taxRate') {
@@ -408,7 +409,7 @@ ${userMessage}
     } catch { /* ignore */ }
   }
 
-  private parseResponse(text: string, fiscalMonth?: number | null): ReceiptAnalysis {
+  private parseResponse(text: string, fiscalMonth?: number | null, fiscalYear?: number | null): ReceiptAnalysis {
     try {
       // ```json ... ``` ブロックまたは生JSONを抽出
       const jsonBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -418,7 +419,7 @@ ${userMessage}
       const parsed = JSON.parse(jsonMatch[0]);
       return {
         entries: (parsed.entries || []).map((e: any) => ({
-          date: normalizeDate(e.date, fiscalMonth),
+          date: normalizeDate(e.date, fiscalMonth, fiscalYear),
           debitAccount: e.debitAccount || '未分類',
           creditAccount: e.creditAccount || '現金',
           amount: Number(e.amount) || 0,
@@ -439,35 +440,35 @@ ${userMessage}
 }
 
 /**
- * 決算月（M月期決算）から現在の事業年度のレンジを返す。
- * 例: fiscalMonth=5, 今日=2026/05/12 → start=2025/6, end=2026/5
- *      fiscalMonth=5, 今日=2026/06/01 → start=2026/6, end=2027/5
- *      fiscalMonth=12, 今日=2026/05/12 → start=2026/1, end=2026/12
+ * 決算月（M月期決算）と、任意の期末年（fiscalYear）から、事業年度のレンジを返す。
+ * fiscalYear が指定されていなければ「今日」基準で現在進行中の年度を返す。
+ * 例: fiscalMonth=5, today=2026/05/12 → start=2025/6, end=2026/5
+ *      fiscalMonth=5, fiscalYear=2025 → start=2024/6, end=2025/5
+ *      fiscalMonth=12, today=2026/05/12 → start=2026/1, end=2026/12
  */
-function getCurrentFiscalYear(fiscalMonth: number, today: Date): { start: { y: number; m: number }; end: { y: number; m: number } } {
-  const tY = today.getFullYear();
-  const tM = today.getMonth() + 1;
+function getCurrentFiscalYear(fiscalMonth: number, today: Date, fiscalYear?: number | null): { start: { y: number; m: number }; end: { y: number; m: number } } {
   let endY: number;
-  if (fiscalMonth === 12) endY = tY;
-  else endY = tM <= fiscalMonth ? tY : tY + 1;
+  if (fiscalYear) {
+    endY = fiscalYear;
+  } else {
+    const tY = today.getFullYear();
+    const tM = today.getMonth() + 1;
+    if (fiscalMonth === 12) endY = tY;
+    else endY = tM <= fiscalMonth ? tY : tY + 1;
+  }
   const startM = fiscalMonth === 12 ? 1 : fiscalMonth + 1;
   const startY = fiscalMonth === 12 ? endY : endY - 1;
   return { start: { y: startY, m: startM }, end: { y: endY, m: fiscalMonth } };
 }
 
 /**
- * 月日から、現在の事業年度の対応する年を推定する。
+ * 月日から、対象事業年度の中で該当する年を推定する。
  * 例: fiscalMonth=5 (5月期決算), 月=6 → 事業年度の前半 (前年6月)
  *      fiscalMonth=5, 月=3 → 事業年度の後半 (当年3月)
  */
-function inferYearFromFiscalContext(month: number, fiscalMonth: number, today: Date): number {
-  const fy = getCurrentFiscalYear(fiscalMonth, today);
-  // 開始月 <= 月 <= 12 なら start.y、1 <= 月 <= 終了月 なら end.y
-  if (fy.start.m <= fy.end.m) {
-    // 同年内（12月期決算 = 1月〜12月）
-    return fy.start.y;
-  }
-  // またぎ年（例: 6月〜翌5月）
+function inferYearFromFiscalContext(month: number, fiscalMonth: number, today: Date, fiscalYear?: number | null): number {
+  const fy = getCurrentFiscalYear(fiscalMonth, today, fiscalYear);
+  if (fy.start.m <= fy.end.m) return fy.start.y; // 12月期など同年内
   if (month >= fy.start.m) return fy.start.y;
   return fy.end.y;
 }
@@ -477,7 +478,7 @@ function inferYearFromFiscalContext(month: number, fiscalMonth: number, today: D
  * Gemini が稀に「25-10-12」「0025-10-12」「令和7年10月12日」のような形で返してくる場合のガード。
  * fiscalMonth が指定されていれば、AIが今日の年で fallback している疑いがある場合に決算期から推定する。
  */
-function normalizeDate(raw: unknown, fiscalMonth?: number | null): string {
+function normalizeDate(raw: unknown, fiscalMonth?: number | null, fiscalYear?: number | null): string {
   const today = new Date();
   const todayStr = today.toISOString().slice(0, 10);
   if (typeof raw !== 'string' || !raw.trim()) return todayStr;
@@ -505,7 +506,7 @@ function normalizeDate(raw: unknown, fiscalMonth?: number | null): string {
     if (y < 100) y = 2000 + y;
     // 1900以下や3000以上は不正値、決算月コンテキストがあればそれで推定、無ければ今年
     if (y < 1900 || y > 3000) {
-      y = fiscalMonth ? inferYearFromFiscalContext(m, fiscalMonth, today) : today.getFullYear();
+      y = fiscalMonth ? inferYearFromFiscalContext(m, fiscalMonth, today, fiscalYear) : today.getFullYear();
     }
     return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
   }
@@ -520,7 +521,7 @@ function normalizeDate(raw: unknown, fiscalMonth?: number | null): string {
   return todayStr;
 }
 
-function getReceiptPrompt(fiscalMonth?: number | null): string {
+function getReceiptPrompt(fiscalMonth?: number | null, fiscalYear?: number | null): string {
   const rules = accountRulesToPrompt();
   const today = new Date();
   const currentYear = today.getFullYear();
@@ -529,7 +530,7 @@ function getReceiptPrompt(fiscalMonth?: number | null): string {
   let fiscalContext = '';
   let yearMissingDefault = `${currentYear}`;
   if (fiscalMonth) {
-    const fy = getCurrentFiscalYear(fiscalMonth, today);
+    const fy = getCurrentFiscalYear(fiscalMonth, today, fiscalYear);
     fiscalContext = `
 
 【決算期コンテキスト（年補完の指針）】

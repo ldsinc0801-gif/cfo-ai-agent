@@ -15,6 +15,8 @@ export interface AccountingPageOptions {
   success?: string;
   /** 設定済みの決算月（1-12）。未設定なら null */
   fiscalMonth?: number | null;
+  /** 仕訳生成対象の会計年度（決算月期末年）。未指定なら現在進行中の事業年度 */
+  fiscalYear?: number | null;
   /** 確定済みバッチ（最近順） */
   recentBatches?: Array<{ id: string; label: string; entryCount: number; totalAmount: number; createdAt: string }>;
 }
@@ -34,25 +36,7 @@ export function renderAccountingPageHTML(options: AccountingPageOptions = { aiAv
   </div>
 </div>
 
-<!-- 決算月設定（年補完に使用） -->
-<div class="card" style="margin-bottom:20px">
-  <div class="card-body" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-    <div style="flex:1;min-width:240px">
-      <strong style="font-size:14px">決算月の設定</strong>
-      <p style="font-size:12px;color:var(--text2);margin-top:4px;line-height:1.5">
-        年が記載されていないレシートでも、決算月に基づいて自動で適切な年を推定します（例: 5月期決算 + 6月のレシート → 前事業年度の6月と判定）。
-      </p>
-    </div>
-    <form action="/agent/accounting/fiscal-month" method="post" style="display:flex;gap:8px;align-items:center">
-      ${csrfInput()}
-      <select name="fiscalMonth" class="edit-select" style="min-width:140px;padding:8px 10px;font-weight:500">
-        <option value="">未設定</option>
-        ${[1,2,3,4,5,6,7,8,9,10,11,12].map(m => `<option value="${m}" ${options.fiscalMonth === m ? 'selected' : ''}>${m}月期決算</option>`).join('')}
-      </select>
-      <button type="submit" class="btn-secondary btn-sm">保存</button>
-    </form>
-  </div>
-</div>
+${renderFiscalYearSelector(options.fiscalMonth, options.fiscalYear)}
 
 ${options.error ? `<div class="acc-error">${esc(options.error)}</div>` : ''}
 ${options.success ? `<div class="acc-success">${esc(options.success)}</div>` : ''}
@@ -581,6 +565,56 @@ ${entries.map((e, i) => `
     </script>
   </div>
 </div>`;
+}
+
+/**
+ * 仕訳生成対象の会計年度を選ぶUI。
+ * - 決算月が会社情報で未設定: 「会社情報で決算月を登録してください」リンクを表示
+ * - 決算月が設定済み: 月固定で年セレクト（過去2年 〜 翌年）
+ */
+function renderFiscalYearSelector(fiscalMonth: number | null | undefined, fiscalYear: number | null | undefined): string {
+  if (!fiscalMonth) {
+    return `<div class="card" style="margin-bottom:20px">
+      <div class="card-body" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+        <div style="flex:1;min-width:240px">
+          <strong style="font-size:14px">対象会計年度</strong>
+          <p style="font-size:12px;color:var(--text2);margin-top:4px;line-height:1.5">
+            決算月が未設定です。<a href="/settings/company-info" style="color:var(--primary);font-weight:600">会社情報</a>から決算月を登録すると、ここで会計年度を選択できるようになります。
+          </p>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // 現在進行中の事業年度を算出
+  const today = new Date();
+  const tY = today.getFullYear();
+  const tM = today.getMonth() + 1;
+  let currentEndY: number;
+  if (fiscalMonth === 12) currentEndY = tY;
+  else currentEndY = tM <= fiscalMonth ? tY : tY + 1;
+
+  // 過去2年〜来年 の範囲で選択肢
+  const years = [currentEndY - 2, currentEndY - 1, currentEndY, currentEndY + 1];
+  const selectedYear = fiscalYear || currentEndY;
+
+  return `<div class="card" style="margin-bottom:20px">
+    <div class="card-body" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <div style="flex:1;min-width:240px">
+        <strong style="font-size:14px">対象会計年度</strong>
+        <p style="font-size:12px;color:var(--text2);margin-top:4px;line-height:1.5">
+          アップロードする仕訳がどの会計年度のものか選択してください。年が未記載のレシートはこの年度に基づいて自動で年が補完されます。
+        </p>
+      </div>
+      <form action="/agent/accounting/fiscal-year" method="post" style="display:flex;gap:8px;align-items:center">
+        ${csrfInput()}
+        <select name="fiscalYear" class="edit-select" style="min-width:160px;padding:8px 10px;font-weight:500" onchange="this.form.submit()">
+          ${years.map(y => `<option value="${y}" ${y === selectedYear ? 'selected' : ''}>${y}年${fiscalMonth}月期</option>`).join('')}
+        </select>
+        <noscript><button type="submit" class="btn-secondary btn-sm">適用</button></noscript>
+      </form>
+    </div>
+  </div>`;
 }
 
 /** 過去の確定済みバッチを一覧表示するフッター */
