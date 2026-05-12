@@ -292,13 +292,14 @@ ${basePrompt}`,
   async interpretCorrection(
     entries: JournalEntry[],
     userMessage: string,
-  ): Promise<{ corrections: Array<{ index: number; field: 'debitAccount' | 'creditAccount'; newValue: string }>; aiMessage: string }> {
+    fiscalMonth?: number | null,
+  ): Promise<{ corrections: Array<{ index: number; field: string; newValue: any }>; aiMessage: string }> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     const accountNames = getAllAccountNames();
 
     const entrySummary = entries.map((e, i) =>
-      `${i + 1}件目: 日付=${e.date}, 借方=${e.debitAccount}, 貸方=${e.creditAccount}, 金額=${e.amount}円, 摘要=${e.description}, 取引先=${e.partnerName}`
+      `${i + 1}件目: 日付=${e.date}, 借方=${e.debitAccount}, 貸方=${e.creditAccount}, 金額=${e.amount}円, 税率=${e.taxRate}%, 消費税=${e.taxAmount}円, 摘要=${e.description}, 取引先=${e.partnerName}`
     ).join('\n');
 
     const prompt = `以下の仕訳データに対してユーザーが修正を依頼しています。
@@ -312,19 +313,32 @@ ${accountNames.join('、')}
 【ユーザーの修正依頼】
 ${userMessage}
 
+【修正可能なフィールド】
+- date: 日付（必ず YYYY-MM-DD 形式の文字列。例 "2025-05-01"）
+- debitAccount: 借方勘定科目（上記有効な勘定科目一覧から）
+- creditAccount: 貸方勘定科目（上記有効な勘定科目一覧から）
+- amount: 金額（円、整数）
+- taxRate: 税率（10 / 8 / 0 のいずれか整数）
+- taxAmount: 消費税額（円、整数）
+- description: 摘要（文字列）
+- partnerName: 取引先（文字列）
+
 以下のJSON形式のみで回答してください:
 {
   "corrections": [
-    { "index": 0, "field": "debitAccount", "newValue": "勘定科目名" }
+    { "index": 0, "field": "date", "newValue": "2025-05-01" },
+    { "index": 1, "field": "amount", "newValue": 1500 }
   ],
   "message": "修正内容の説明（日本語で簡潔に）"
 }
 
 ルール:
 - indexは0始まり（1件目=0, 2件目=1, 3件目=2）
-- fieldは "debitAccount"（借方）または "creditAccount"（貸方）のみ
-- newValueは有効な勘定科目一覧に含まれるもののみ使用すること
-- 取引先名で指定された場合は該当する全ての仕訳を修正対象にする
+- 「全部○○にして」「すべての日付を△」のような全件適用依頼は、全件分の corrections を配列で返す（例: 3件あれば3要素）
+- 「2件目」「最後の」「最初の3件」など範囲指定は適切に解釈
+- 取引先名で指定された場合は該当する全ての仕訳を対象にする
+- newValue の型はフィールドに応じて変える（amount/taxRate/taxAmount は数値、それ以外は文字列）
+- 勘定科目を変える場合は有効な勘定科目一覧に含まれるもののみ
 - 修正がない場合や理解できない場合は corrections を空配列にして message で理由を説明
 - JSONのみ返すこと`;
 
@@ -335,26 +349,48 @@ ${userMessage}
     const text = response.text || '';
     this.recordUsage(response, '仕訳修正解釈(Gemini)');
 
+    const VALID_FIELDS = new Set(['date', 'debitAccount', 'creditAccount', 'amount', 'taxRate', 'taxAmount', 'description', 'partnerName']);
+
     try {
       const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, text];
       const jsonStr = (jsonMatch[1] || text).match(/\{[\s\S]*\}/);
       if (!jsonStr) throw new Error('JSON not found');
       const parsed = JSON.parse(jsonStr[0]);
 
-      // 有効な勘定科目のみ通す
-      const validCorrections = (parsed.corrections || []).filter((c: any) =>
-        typeof c.index === 'number' &&
-        c.index >= 0 && c.index < entries.length &&
-        (c.field === 'debitAccount' || c.field === 'creditAccount') &&
-        accountNames.includes(c.newValue)
-      );
+      const validCorrections = ((parsed.corrections || []) as any[])
+        .filter(c =>
+          typeof c.index === 'number' &&
+          c.index >= 0 && c.index < entries.length &&
+          VALID_FIELDS.has(c.field)
+        )
+        .map(c => {
+          let value: any = c.newValue;
+          if (c.field === 'date') {
+            value = normalizeDate(value, fiscalMonth);
+          } else if (c.field === 'amount' || c.field === 'taxAmount') {
+            value = Math.max(0, Math.round(Number(value) || 0));
+          } else if (c.field === 'taxRate') {
+            const r = Number(value);
+            value = [0, 8, 10].includes(r) ? r : 10;
+          } else if (c.field === 'debitAccount' || c.field === 'creditAccount') {
+            // 無効な勘定科目はスキップ
+            if (!accountNames.includes(value)) return null;
+          } else {
+            value = String(value ?? '');
+          }
+          return { index: c.index, field: c.field, newValue: value };
+        })
+        .filter((c): c is { index: number; field: string; newValue: any } => c !== null);
 
       return {
         corrections: validCorrections,
         aiMessage: parsed.message || '修正を処理しました。',
       };
     } catch {
-      return { corrections: [], aiMessage: 'メッセージを理解できませんでした。例:「2件目の借方を旅費交通費にして」' };
+      return {
+        corrections: [],
+        aiMessage: 'メッセージを理解できませんでした。例:「2件目の借方を旅費交通費にして」「全部5月1日にして」「1件目の金額を10000円に」',
+      };
     }
   }
 

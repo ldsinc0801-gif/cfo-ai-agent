@@ -1933,15 +1933,19 @@ app.post('/agent/accounting/chat-correct', express.json({ limit: '5mb' }), async
       return;
     }
 
-    // Geminiで修正内容を解釈
-    const result = await receiptService.interpretCorrection(entries, message);
+    // Geminiで修正内容を解釈（日付正規化用に決算月コンテキストを渡す）
+    const fiscalMonth = await fetchFiscalMonth(req);
+    const result = await receiptService.interpretCorrection(entries, message, fiscalMonth);
 
-    // 修正があれば学習データとして記録
-    if (result.corrections.length > 0) {
+    // 修正があれば学習データとして記録（勘定科目の修正のみ学習対象）
+    const accountCorrections = result.corrections.filter(c =>
+      c.field === 'debitAccount' || c.field === 'creditAccount'
+    );
+    if (accountCorrections.length > 0) {
       const memory = await chatService.getMemory(getActiveTenantId(req) || undefined);
       const industry = memory.industry || '未設定';
 
-      for (const correction of result.corrections) {
+      for (const correction of accountCorrections) {
         const original = entries[correction.index];
         const corrected = { ...original, [correction.field]: correction.newValue };
         await receiptService.recordJournalCorrection(original, corrected, industry, message);

@@ -466,7 +466,7 @@ ${entries.map((e, i) => `
       </div>
       <div class="chat-messages" id="chatMessages"></div>
       <div class="chat-input-row">
-        <input type="text" id="chatInput" class="chat-input" placeholder="例: 2件目の借方を旅費交通費にして" onkeydown="if(event.key==='Enter')sendChatCorrection()"/>
+        <input type="text" id="chatInput" class="chat-input" placeholder="例: 全部5月1日の日付にして / 2件目の借方を旅費交通費に / 1件目の金額を10000円に" onkeydown="if(event.key==='Enter')sendChatCorrection()"/>
         <button class="btn-primary btn-sm" onclick="sendChatCorrection()">送信</button>
       </div>
     </div>
@@ -606,7 +606,7 @@ const PAGE_CSS = `
 .chat-correct-area{margin-top:20px;border:1px solid var(--border);border-radius:12px;overflow:hidden}
 .chat-correct-header{padding:12px 16px;background:var(--bg);font-size:13px;font-weight:600;color:var(--text2);display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border)}
 .chat-messages{max-height:240px;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:8px}
-.chat-messages:empty::before{content:'勘定科目の修正をチャットで指示できます';color:var(--text2);font-size:12px;text-align:center;padding:20px 0}
+.chat-messages:empty::before{content:'勘定科目・日付・金額・取引先などをまとめて修正できます（全件一括もOK）';color:var(--text2);font-size:12px;text-align:center;padding:20px 0}
 .chat-input-row{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--border);background:var(--bg)}
 .chat-input{flex:1;border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:13px;outline:none;transition:border-color .2s}
 .chat-input:focus{border-color:var(--primary)}
