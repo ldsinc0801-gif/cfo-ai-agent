@@ -428,8 +428,10 @@ function plRows(pl: FullReport['monthlyPL'], comparison: FullReport['comparison'
 // Helpers
 // ---------------------------------------------------------------------------
 
-function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function esc(s: unknown): string {
+  if (s === null || s === undefined) return '';
+  const str = typeof s === 'string' ? s : String(s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 function levelJP(l: string): string {
   return ({ excellent: '優良', good: '良好', fair: '普通', warning: '注意', critical: '危険' })[l] ?? l;

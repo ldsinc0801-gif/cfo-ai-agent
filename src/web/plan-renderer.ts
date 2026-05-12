@@ -1530,8 +1530,10 @@ function renderGapItem(
     </div>`;
 }
 
-function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function esc(s: unknown): string {
+  if (s === null || s === undefined) return '';
+  const str = typeof s === 'string' ? s : String(s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function fmtNum(n: number): string {
