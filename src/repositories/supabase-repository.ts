@@ -85,6 +85,35 @@ function mapSnapshot(r: any): MonthlySnapshot {
   };
 }
 
+// ========== テナント設定 ==========
+
+/** テナントの決算月（1-12）を取得。未設定なら null。 */
+export async function getTenantFiscalMonth(tenantId: TenantId): Promise<number | null> {
+  const { data, error } = await getSupabase()
+    .from('tenants')
+    .select('fiscal_year_end_month')
+    .eq('id', tenantId)
+    .single();
+  if (error) {
+    if (error.code === 'PGRST116') return null;
+    throw new Error(`決算月の取得に失敗: ${error.message}`);
+  }
+  return data?.fiscal_year_end_month ?? null;
+}
+
+/** テナントの決算月（1-12）を設定。null で解除。 */
+export async function setTenantFiscalMonth(tenantId: TenantId, month: number | null): Promise<void> {
+  if (month !== null && (month < 1 || month > 12)) {
+    throw new Error('決算月は1-12で指定してください');
+  }
+  const { error } = await getSupabase()
+    .from('tenants')
+    .update({ fiscal_year_end_month: month, updated_at: new Date().toISOString() })
+    .eq('id', tenantId);
+  if (error) throw new Error(`決算月の保存に失敗: ${error.message}`);
+  logger.info(`決算月を設定: ${tenantId} → ${month ?? '解除'}`);
+}
+
 // ========== 月次計画 ==========
 
 export async function upsertMonthlyTarget(tenantId: TenantId, target: MonthlyTarget): Promise<void> {

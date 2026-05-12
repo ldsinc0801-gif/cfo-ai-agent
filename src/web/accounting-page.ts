@@ -13,6 +13,8 @@ export interface AccountingPageOptions {
   csvDownloadId?: string;
   error?: string;
   success?: string;
+  /** 設定済みの決算月（1-12）。未設定なら null */
+  fiscalMonth?: number | null;
 }
 
 export function renderAccountingPageHTML(options: AccountingPageOptions = { aiAvailable: false }): string {
@@ -27,6 +29,26 @@ export function renderAccountingPageHTML(options: AccountingPageOptions = { aiAv
   <div>
     <h2>会計AIエージェント</h2>
     <p>領収書・レシートをアップロードするとAIが読み取り、自動で仕訳データを生成します。freee APIへの送信やCSVエクスポートが可能です。</p>
+  </div>
+</div>
+
+<!-- 決算月設定（年補完に使用） -->
+<div class="card" style="margin-bottom:20px">
+  <div class="card-body" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <div style="flex:1;min-width:240px">
+      <strong style="font-size:14px">決算月の設定</strong>
+      <p style="font-size:12px;color:var(--text2);margin-top:4px;line-height:1.5">
+        年が記載されていないレシートでも、決算月に基づいて自動で適切な年を推定します（例: 5月期決算 + 6月のレシート → 前事業年度の6月と判定）。
+      </p>
+    </div>
+    <form action="/agent/accounting/fiscal-month" method="post" style="display:flex;gap:8px;align-items:center">
+      ${csrfInput()}
+      <select name="fiscalMonth" class="edit-select" style="min-width:140px;padding:8px 10px;font-weight:500">
+        <option value="">未設定</option>
+        ${[1,2,3,4,5,6,7,8,9,10,11,12].map(m => `<option value="${m}" ${options.fiscalMonth === m ? 'selected' : ''}>${m}月期決算</option>`).join('')}
+      </select>
+      <button type="submit" class="btn-secondary btn-sm">保存</button>
+    </form>
   </div>
 </div>
 

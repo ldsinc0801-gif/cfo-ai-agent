@@ -54,13 +54,13 @@ export class ReceiptService {
   /**
    * 画像（領収書・レシート）から仕訳データを生成
    */
-  async analyzeReceiptImage(imageBuffer: Buffer, mimeType: string, fileName: string, industry?: string): Promise<ReceiptAnalysis> {
+  async analyzeReceiptImage(imageBuffer: Buffer, mimeType: string, fileName: string, industry?: string, fiscalMonth?: number | null): Promise<ReceiptAnalysis> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`領収書画像を解析中（Gemini）: ${fileName}`);
 
     const base64 = imageBuffer.toString('base64');
-    const prompt = await this.buildPrompt(industry);
+    const prompt = await this.buildPrompt(industry, fiscalMonth);
 
     const response = await this.ai!.models.generateContent({
       model: config.ai.geminiModel,
@@ -74,19 +74,19 @@ export class ReceiptService {
 
     const text = response.text || '';
     this.recordUsage(response, '領収書解析(Gemini)');
-    return this.parseResponse(text);
+    return this.parseResponse(text, fiscalMonth);
   }
 
   /**
    * PDFの領収書・請求書から仕訳データを生成
    */
-  async analyzeReceiptPDF(pdfBuffer: Buffer, fileName: string, industry?: string): Promise<ReceiptAnalysis> {
+  async analyzeReceiptPDF(pdfBuffer: Buffer, fileName: string, industry?: string, fiscalMonth?: number | null): Promise<ReceiptAnalysis> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`領収書PDFを解析中（Gemini）: ${fileName}`);
 
     const base64 = pdfBuffer.toString('base64');
-    const prompt = await this.buildPrompt(industry);
+    const prompt = await this.buildPrompt(industry, fiscalMonth);
 
     const response = await this.ai!.models.generateContent({
       model: config.ai.geminiModel,
@@ -98,7 +98,7 @@ export class ReceiptService {
 
     const text = response.text || '';
     this.recordUsage(response, '領収書PDF解析(Gemini)');
-    return this.parseResponse(text);
+    return this.parseResponse(text, fiscalMonth);
   }
 
   /**
@@ -107,13 +107,13 @@ export class ReceiptService {
    * Geminiは動画を直接入力できるため、フレーム抽出不要。
    * 動画内の領収書・レシートを自動認識して仕訳データを生成する。
    */
-  async analyzeVideo(videoBuffer: Buffer, mimeType: string, fileName: string, industry?: string): Promise<ReceiptAnalysis> {
+  async analyzeVideo(videoBuffer: Buffer, mimeType: string, fileName: string, industry?: string, fiscalMonth?: number | null): Promise<ReceiptAnalysis> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`動画を解析中（Gemini）: ${fileName}`);
 
     const base64 = videoBuffer.toString('base64');
-    const prompt = await this.buildPrompt(industry);
+    const prompt = await this.buildPrompt(industry, fiscalMonth);
 
     const response = await this.ai!.models.generateContent({
       model: config.ai.geminiModel,
@@ -128,18 +128,18 @@ ${prompt}` },
 
     const text = response.text || '';
     this.recordUsage(response, '動画解析(Gemini)');
-    return this.parseResponse(text);
+    return this.parseResponse(text, fiscalMonth);
   }
 
   /**
    * 複数画像を一括解析（動画フレーム互換）
    */
-  async analyzeVideoFrames(frames: { buffer: Buffer; mimeType: string }[], industry?: string): Promise<ReceiptAnalysis> {
+  async analyzeVideoFrames(frames: { buffer: Buffer; mimeType: string }[], industry?: string, fiscalMonth?: number | null): Promise<ReceiptAnalysis> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`画像${frames.length}枚を一括解析中（Gemini）...`);
 
-    const prompt = await this.buildPrompt(industry);
+    const prompt = await this.buildPrompt(industry, fiscalMonth);
 
     const parts = [
       ...frames.map(f => ({
@@ -158,18 +158,18 @@ ${prompt}` },
     });
     const text = response.text || '';
     this.recordUsage(response, '複数画像解析(Gemini)');
-    return this.parseResponse(text);
+    return this.parseResponse(text, fiscalMonth);
   }
 
   /**
    * CSV（カード明細・銀行取引明細）から仕訳データを生成
    */
-  async analyzeCSV(csvText: string, fileName: string, industry?: string): Promise<ReceiptAnalysis> {
+  async analyzeCSV(csvText: string, fileName: string, industry?: string, fiscalMonth?: number | null): Promise<ReceiptAnalysis> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     logger.info(`CSV明細を解析中（Gemini）: ${fileName}`);
 
-    const basePrompt = await this.buildPrompt(industry);
+    const basePrompt = await this.buildPrompt(industry, fiscalMonth);
 
     const response = await this.ai!.models.generateContent({
       model: config.ai.geminiModel,
@@ -188,7 +188,7 @@ ${basePrompt}`,
 
     const text = response.text || '';
     this.recordUsage(response, 'CSV明細解析(Gemini)');
-    return this.parseResponse(text);
+    return this.parseResponse(text, fiscalMonth);
   }
 
   /** 仕訳データをCSV文字列に変換 */
@@ -262,8 +262,8 @@ ${basePrompt}`,
   /**
    * 業種に応じた学習済みルールを含むプロンプトを生成
    */
-  private async buildPrompt(industry?: string): Promise<string> {
-    const basePrompt = getReceiptPrompt();
+  private async buildPrompt(industry?: string, fiscalMonth?: number | null): Promise<string> {
+    const basePrompt = getReceiptPrompt(fiscalMonth);
     if (!industry) return basePrompt;
 
     const learnedRules = await journalLearningService.getLearnedRulesForPrompt(industry);
@@ -372,7 +372,7 @@ ${userMessage}
     } catch { /* ignore */ }
   }
 
-  private parseResponse(text: string): ReceiptAnalysis {
+  private parseResponse(text: string, fiscalMonth?: number | null): ReceiptAnalysis {
     try {
       // ```json ... ``` ブロックまたは生JSONを抽出
       const jsonBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -382,7 +382,7 @@ ${userMessage}
       const parsed = JSON.parse(jsonMatch[0]);
       return {
         entries: (parsed.entries || []).map((e: any) => ({
-          date: normalizeDate(e.date),
+          date: normalizeDate(e.date, fiscalMonth),
           debitAccount: e.debitAccount || '未分類',
           creditAccount: e.creditAccount || '現金',
           amount: Number(e.amount) || 0,
@@ -403,12 +403,48 @@ ${userMessage}
 }
 
 /**
+ * 決算月（M月期決算）から現在の事業年度のレンジを返す。
+ * 例: fiscalMonth=5, 今日=2026/05/12 → start=2025/6, end=2026/5
+ *      fiscalMonth=5, 今日=2026/06/01 → start=2026/6, end=2027/5
+ *      fiscalMonth=12, 今日=2026/05/12 → start=2026/1, end=2026/12
+ */
+function getCurrentFiscalYear(fiscalMonth: number, today: Date): { start: { y: number; m: number }; end: { y: number; m: number } } {
+  const tY = today.getFullYear();
+  const tM = today.getMonth() + 1;
+  let endY: number;
+  if (fiscalMonth === 12) endY = tY;
+  else endY = tM <= fiscalMonth ? tY : tY + 1;
+  const startM = fiscalMonth === 12 ? 1 : fiscalMonth + 1;
+  const startY = fiscalMonth === 12 ? endY : endY - 1;
+  return { start: { y: startY, m: startM }, end: { y: endY, m: fiscalMonth } };
+}
+
+/**
+ * 月日から、現在の事業年度の対応する年を推定する。
+ * 例: fiscalMonth=5 (5月期決算), 月=6 → 事業年度の前半 (前年6月)
+ *      fiscalMonth=5, 月=3 → 事業年度の後半 (当年3月)
+ */
+function inferYearFromFiscalContext(month: number, fiscalMonth: number, today: Date): number {
+  const fy = getCurrentFiscalYear(fiscalMonth, today);
+  // 開始月 <= 月 <= 12 なら start.y、1 <= 月 <= 終了月 なら end.y
+  if (fy.start.m <= fy.end.m) {
+    // 同年内（12月期決算 = 1月〜12月）
+    return fy.start.y;
+  }
+  // またぎ年（例: 6月〜翌5月）
+  if (month >= fy.start.m) return fy.start.y;
+  return fy.end.y;
+}
+
+/**
  * AI から返ってきた日付文字列を YYYY-MM-DD に正規化する。
  * Gemini が稀に「25-10-12」「0025-10-12」「令和7年10月12日」のような形で返してくる場合のガード。
+ * fiscalMonth が指定されていれば、AIが今日の年で fallback している疑いがある場合に決算期から推定する。
  */
-function normalizeDate(raw: unknown): string {
-  const today = new Date().toISOString().slice(0, 10);
-  if (typeof raw !== 'string' || !raw.trim()) return today;
+function normalizeDate(raw: unknown, fiscalMonth?: number | null): string {
+  const today = new Date();
+  const todayStr = today.toISOString().slice(0, 10);
+  if (typeof raw !== 'string' || !raw.trim()) return todayStr;
   let s = raw.trim();
 
   // 令和N年M月D日 / R7.10.12 / 令和7/10/12
@@ -428,21 +464,48 @@ function normalizeDate(raw: unknown): string {
   const parts = s.replace(/[年月日]/g, '-').replace(/[./]/g, '-').split('-').filter(Boolean);
   if (parts.length === 3) {
     let [y, m, d] = parts.map(p => parseInt(p, 10));
-    if (isNaN(y) || isNaN(m) || isNaN(d)) return today;
+    if (isNaN(y) || isNaN(m) || isNaN(d)) return todayStr;
     // 2桁年（00〜99）は西暦下2桁とみなす
     if (y < 100) y = 2000 + y;
-    // 1900以下や3000以上は不正値、今年扱い
-    if (y < 1900 || y > 3000) y = new Date().getFullYear();
+    // 1900以下や3000以上は不正値、決算月コンテキストがあればそれで推定、無ければ今年
+    if (y < 1900 || y > 3000) {
+      y = fiscalMonth ? inferYearFromFiscalContext(m, fiscalMonth, today) : today.getFullYear();
+    }
     return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
   }
-  // パースできなければ今日
-  return today;
+  // 月日のみの形式（"6/3" "10月12日" など）→ 決算月から年を推定
+  if (parts.length === 2) {
+    const [m, d] = parts.map(p => parseInt(p, 10));
+    if (!isNaN(m) && !isNaN(d) && m >= 1 && m <= 12) {
+      const y = fiscalMonth ? inferYearFromFiscalContext(m, fiscalMonth, today) : today.getFullYear();
+      return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+  return todayStr;
 }
 
-function getReceiptPrompt(): string {
+function getReceiptPrompt(fiscalMonth?: number | null): string {
   const rules = accountRulesToPrompt();
   const today = new Date();
   const currentYear = today.getFullYear();
+
+  // 決算月コンテキスト（年補完に使用）
+  let fiscalContext = '';
+  let yearMissingDefault = `${currentYear}`;
+  if (fiscalMonth) {
+    const fy = getCurrentFiscalYear(fiscalMonth, today);
+    fiscalContext = `
+
+【決算期コンテキスト（年補完の指針）】
+- 当社の決算月: ${fiscalMonth}月（${fy.end.y}年${fiscalMonth}月期）
+- 現在の事業年度: ${fy.start.y}年${fy.start.m}月 〜 ${fy.end.y}年${fy.end.m}月
+- レシート上に年表記が無い場合は、上記事業年度の中で該当する月の年を採用すること
+  例（${fiscalMonth}月期決算の場合）:
+    - レシートが「${fy.start.m}月X日」 → ${fy.start.y}年${fy.start.m}月X日
+    - レシートが「${fy.end.m}月X日」 → ${fy.end.y}年${fy.end.m}月X日`;
+    yearMissingDefault = `事業年度コンテキスト（${fy.start.y}/${fy.start.m}〜${fy.end.y}/${fy.end.m}）に基づいて推定`;
+  }
+
   return `この領収書・レシートの内容を読み取り、以下のJSON形式で仕訳データを生成してください。
 
 【日付の解釈ルール（最重要）】
@@ -451,8 +514,8 @@ function getReceiptPrompt(): string {
 - 「令和7年」→ 2025年、「令和元年」→ 2019年（令和N年 = 2018+N）
 - 「平成31年」→ 2019年（平成N年 = 1988+N、平成は2019/4/30まで）
 - 「R7.10.12」「R7-10-12」「令和7.10.12」のような和暦略記も同様に変換
-- 年の記載が一切無いレシートは ${currentYear} 年と推定し、notesに「年表記がないため${currentYear}年と推定」と記載
-- 月日のみ「10/12」のような表記も同様に ${currentYear} 年と推定
+- 年の記載が一切無いレシートは ${yearMissingDefault} 年として扱い、notesにその旨を記載
+- 月日のみ「10/12」のような表記も同様に扱う${fiscalContext}
 
 【基本ルール】
 - 借方（debitAccount）は以下の勘定科目ルールに従って選択すること

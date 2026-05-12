@@ -1721,9 +1721,43 @@ app.get('/agent/finance/history/:id/json', async (req, res) => {
   res.json(analysis);
 });
 
+/** テナントの決算月を取得（Supabase 未接続や未設定なら null） */
+async function fetchFiscalMonth(req: express.Request): Promise<number | null> {
+  const tid = getActiveTenantId(req);
+  if (!tid || !isSupabaseAvailable()) return null;
+  try {
+    return await repo.getTenantFiscalMonth(tid);
+  } catch (e) {
+    logger.warn('決算月取得失敗', e);
+    return null;
+  }
+}
+
 // 会計AIエージェント
-app.get('/agent/accounting', (_req, res) => {
-  res.send(renderAccountingPageHTML({ aiAvailable: receiptService.isAvailable() || isDemoMode() }));
+app.get('/agent/accounting', async (req, res) => {
+  res.send(renderAccountingPageHTML({
+    aiAvailable: receiptService.isAvailable() || isDemoMode(),
+    fiscalMonth: await fetchFiscalMonth(req),
+  }));
+});
+
+// 決算月を保存
+app.post('/agent/accounting/fiscal-month', express.urlencoded({ extended: true }), async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.redirect('/agent/accounting'); return; }
+    const raw = req.body.fiscalMonth as string | undefined;
+    const month = raw && raw !== '' ? parseInt(raw, 10) : null;
+    if (month !== null && (isNaN(month) || month < 1 || month > 12)) {
+      res.redirect('/agent/accounting');
+      return;
+    }
+    await repo.setTenantFiscalMonth(tid, month);
+    res.redirect('/agent/accounting');
+  } catch (e: any) {
+    logger.error('決算月保存エラー', e);
+    res.redirect('/agent/accounting');
+  }
 });
 
 // 会計AI：領収書・PDFの解析（複数ファイル対応）
@@ -1746,6 +1780,7 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
     // チャットメモリから業種を取得（学習ルール適用のため）
     const memory = await chatService.getMemory(getActiveTenantId(req) || undefined);
     const industry = memory.industry || undefined;
+    const fiscalMonth = await fetchFiscalMonth(req);
 
     if (files.length === 1) {
       // 1ファイルの場合：従来通り個別解析
@@ -1757,12 +1792,12 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
       let analysis;
       if (ext === '.csv') {
         const csvText = fs.readFileSync(file.path, 'utf-8');
-        analysis = await receiptService.analyzeCSV(csvText, file.originalname, industry);
+        analysis = await receiptService.analyzeCSV(csvText, file.originalname, industry, fiscalMonth);
       } else if (ext === '.pdf') {
-        analysis = await receiptService.analyzeReceiptPDF(buffer, file.originalname, industry);
+        analysis = await receiptService.analyzeReceiptPDF(buffer, file.originalname, industry, fiscalMonth);
       } else {
         const mimeType = mimeMap[ext] || 'image/jpeg';
-        analysis = await receiptService.analyzeReceiptImage(buffer, mimeType, file.originalname, industry);
+        analysis = await receiptService.analyzeReceiptImage(buffer, mimeType, file.originalname, industry, fiscalMonth);
       }
       // レシートファイル情報を仕訳データに付与（freee添付用）
       for (const entry of analysis.entries) {
@@ -1770,7 +1805,7 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
         entry.receiptFileName = file.originalname;
         entry.receiptMimeType = mimeMap[ext] || 'application/octet-stream';
       }
-      res.send(renderAccountingPageHTML({ aiAvailable: true, analysis }));
+      res.send(renderAccountingPageHTML({ aiAvailable: true, analysis, fiscalMonth }));
     } else {
       // 複数ファイルの場合
       const imageFiles = files.filter(f => {
@@ -1790,7 +1825,7 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
           const mimeMap: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
           return { buffer: fs.readFileSync(f.path), mimeType: mimeMap[ext] || 'image/jpeg' };
         });
-        const imgAnalysis = await receiptService.analyzeVideoFrames(frames, industry);
+        const imgAnalysis = await receiptService.analyzeVideoFrames(frames, industry, fiscalMonth);
         allEntries.push(...imgAnalysis.entries);
         allNotes.push(...imgAnalysis.notes);
       }
@@ -1798,7 +1833,7 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
       // PDFは1件ずつ解析して結果をマージ
       for (const pdfFile of pdfFiles) {
         const pdfAnalysis = await receiptService.analyzeReceiptPDF(
-          fs.readFileSync(pdfFile.path), pdfFile.originalname, industry,
+          fs.readFileSync(pdfFile.path), pdfFile.originalname, industry, fiscalMonth,
         );
         allEntries.push(...pdfAnalysis.entries);
         allNotes.push(...pdfAnalysis.notes);
@@ -1807,7 +1842,7 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
       // CSVは1件ずつ解析して結果をマージ
       for (const csvFile of csvFiles) {
         const csvText = fs.readFileSync(csvFile.path, 'utf-8');
-        const csvAnalysis = await receiptService.analyzeCSV(csvText, csvFile.originalname, industry);
+        const csvAnalysis = await receiptService.analyzeCSV(csvText, csvFile.originalname, industry, fiscalMonth);
         allEntries.push(...csvAnalysis.entries);
         allNotes.push(...csvAnalysis.notes);
       }
@@ -1818,13 +1853,14 @@ app.post('/agent/accounting/analyze', upload.array('file', 20), async (req, res)
         confidence: allEntries.length > 0 ? 'high' : 'low',
         notes: allNotes,
       };
-      res.send(renderAccountingPageHTML({ aiAvailable: true, analysis }));
+      res.send(renderAccountingPageHTML({ aiAvailable: true, analysis, fiscalMonth }));
     }
   } catch (error) {
     logger.error('領収書解析エラー', error);
     res.send(renderAccountingPageHTML({
       aiAvailable: true,
       error: `解析に失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`,
+      fiscalMonth: await fetchFiscalMonth(req),
     }));
   }
 });
@@ -1851,19 +1887,22 @@ app.post('/agent/accounting/analyze-video', upload.single('video'), async (req, 
     // チャットメモリから業種を取得
     const memory = await chatService.getMemory(getActiveTenantId(req) || undefined);
     const industry = memory.industry || undefined;
+    const fiscalMonth = await fetchFiscalMonth(req);
 
     // Geminiで動画を直接解析
-    const analysis = await receiptService.analyzeVideo(buffer, mimeType, req.file.originalname, industry);
+    const analysis = await receiptService.analyzeVideo(buffer, mimeType, req.file.originalname, industry, fiscalMonth);
 
     res.send(renderAccountingPageHTML({
       aiAvailable: true,
       analysis,
+      fiscalMonth,
     }));
   } catch (error) {
     logger.error('動画解析エラー', error);
     res.send(renderAccountingPageHTML({
       aiAvailable: true,
       error: `解析に失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`,
+      fiscalMonth: await fetchFiscalMonth(req),
     }));
   }
 });
