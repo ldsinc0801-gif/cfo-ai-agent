@@ -382,7 +382,7 @@ ${userMessage}
       const parsed = JSON.parse(jsonMatch[0]);
       return {
         entries: (parsed.entries || []).map((e: any) => ({
-          date: e.date || new Date().toISOString().slice(0, 10),
+          date: normalizeDate(e.date),
           debitAccount: e.debitAccount || '未分類',
           creditAccount: e.creditAccount || '現金',
           amount: Number(e.amount) || 0,
@@ -402,12 +402,59 @@ ${userMessage}
   }
 }
 
+/**
+ * AI から返ってきた日付文字列を YYYY-MM-DD に正規化する。
+ * Gemini が稀に「25-10-12」「0025-10-12」「令和7年10月12日」のような形で返してくる場合のガード。
+ */
+function normalizeDate(raw: unknown): string {
+  const today = new Date().toISOString().slice(0, 10);
+  if (typeof raw !== 'string' || !raw.trim()) return today;
+  let s = raw.trim();
+
+  // 令和N年M月D日 / R7.10.12 / 令和7/10/12
+  const reiwa = s.match(/(?:令和|R)\s*(\d{1,2})[.\-/年]\s*(\d{1,2})[.\-/月]\s*(\d{1,2})/);
+  if (reiwa) {
+    const y = 2018 + Number(reiwa[1]);
+    return `${y}-${String(reiwa[2]).padStart(2, '0')}-${String(reiwa[3]).padStart(2, '0')}`;
+  }
+  // 平成N年M月D日
+  const heisei = s.match(/(?:平成|H)\s*(\d{1,2})[.\-/年]\s*(\d{1,2})[.\-/月]\s*(\d{1,2})/);
+  if (heisei) {
+    const y = 1988 + Number(heisei[1]);
+    return `${y}-${String(heisei[2]).padStart(2, '0')}-${String(heisei[3]).padStart(2, '0')}`;
+  }
+
+  // 一般的な区切り（- / . 年月日）でパース
+  const parts = s.replace(/[年月日]/g, '-').replace(/[./]/g, '-').split('-').filter(Boolean);
+  if (parts.length === 3) {
+    let [y, m, d] = parts.map(p => parseInt(p, 10));
+    if (isNaN(y) || isNaN(m) || isNaN(d)) return today;
+    // 2桁年（00〜99）は西暦下2桁とみなす
+    if (y < 100) y = 2000 + y;
+    // 1900以下や3000以上は不正値、今年扱い
+    if (y < 1900 || y > 3000) y = new Date().getFullYear();
+    return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  }
+  // パースできなければ今日
+  return today;
+}
+
 function getReceiptPrompt(): string {
   const rules = accountRulesToPrompt();
+  const today = new Date();
+  const currentYear = today.getFullYear();
   return `この領収書・レシートの内容を読み取り、以下のJSON形式で仕訳データを生成してください。
 
+【日付の解釈ルール（最重要）】
+- 必ず 4桁西暦の YYYY-MM-DD 形式で返すこと（例: 2025-10-12）
+- レシート上の「25年10月12日」「25/10/12」「'25/10/12」のような **2桁年は西暦下2桁** と解釈し、必ず 2000+ に補正する（25→2025、24→2024、23→2023）。0025年や 25年などの誤った西暦は禁止
+- 「令和7年」→ 2025年、「令和元年」→ 2019年（令和N年 = 2018+N）
+- 「平成31年」→ 2019年（平成N年 = 1988+N、平成は2019/4/30まで）
+- 「R7.10.12」「R7-10-12」「令和7.10.12」のような和暦略記も同様に変換
+- 年の記載が一切無いレシートは ${currentYear} 年と推定し、notesに「年表記がないため${currentYear}年と推定」と記載
+- 月日のみ「10/12」のような表記も同様に ${currentYear} 年と推定
+
 【基本ルール】
-- 日付はYYYY-MM-DD形式
 - 借方（debitAccount）は以下の勘定科目ルールに従って選択すること
 - 貸方（creditAccount）は支払方法（現金/普通預金/クレジットカード等）。レシートから判別できない場合は「現金」
 - 消費税は内税前提で計算。税込金額から逆算すること
