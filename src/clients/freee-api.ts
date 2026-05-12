@@ -131,8 +131,9 @@ export class FreeeApiClient {
   }
 
   /**
-   * 税区分名（例: "課対仕入10%"）からそのまま freee の tax_code を引き当てる。
-   * 名前マッチで見つからなければ部分一致も試し、最終的に findTaxCode にフォールバック。
+   * 税区分名（例: "課対仕入10%"）から freee の tax_code を引き当てる。
+   * freee 側のマスター名は事業所・freeeバージョンによって微妙に違うので
+   * 「売上 / 仕入」「税率」「軽減フラグ」をキーワード分解して柔軟に検索する。
    */
   async findTaxCodeByName(
     companyId: number,
@@ -142,15 +143,68 @@ export class FreeeApiClient {
   ): Promise<number> {
     try {
       const taxes = await this.getTaxCodes(companyId);
-      // 完全一致
+
+      // 1. 完全一致
       let target = taxes.find(t => t.name === taxCategoryName);
-      // 部分一致（"課対仕入10%" を含む等）
-      if (!target) target = taxes.find(t => t.name.includes(taxCategoryName) || taxCategoryName.includes(t.name));
       if (target) {
-        logger.info(`税区分マッチ(name): ${taxCategoryName} → ${target.name} (code=${target.code})`);
+        logger.info(`税区分マッチ(exact): ${taxCategoryName} → ${target.name} (code=${target.code})`);
         return target.code;
       }
-      logger.warn(`税区分名で見つからず: ${taxCategoryName}、フォールバック検索`);
+
+      // 2. キーワード分解で特徴抽出
+      const isIncome   = taxCategoryName.includes('売上');
+      const isPurchase = taxCategoryName.includes('仕入');
+      const isLight    = taxCategoryName.includes('軽');
+      const isNonTax   = taxCategoryName.includes('非課');
+      const isExempt   = taxCategoryName === '対象外' || taxCategoryName === '不課税';
+      const rateMatch  = taxCategoryName.match(/(\d+)%/);
+      const rate       = rateMatch ? Number(rateMatch[1]) : null;
+
+      // 対象外・不課税
+      if (isExempt) {
+        target = taxes.find(t => /対象外|不課税/.test(t.name));
+        if (target) {
+          logger.info(`税区分マッチ(exempt): ${taxCategoryName} → ${target.name} (code=${target.code})`);
+          return target.code;
+        }
+      }
+
+      // 非課税
+      if (isNonTax) {
+        const sideKw = isIncome ? '売上' : '仕入';
+        target = taxes.find(t => t.name.includes('非課') && t.name.includes(sideKw));
+        if (target) {
+          logger.info(`税区分マッチ(非課): ${taxCategoryName} → ${target.name} (code=${target.code})`);
+          return target.code;
+        }
+      }
+
+      // 売上/仕入系 (課対/課税/対象 のバリエーションを許容)
+      if (isPurchase || isIncome) {
+        const sideRegex = isPurchase
+          ? /(課対仕入|課税仕入|課対対象仕入|仕入課税|仕入対象|対象仕入)/
+          : /(課対売上|課税売上|課対対象売上|売上課税|売上対象|対象売上)/;
+        const candidates = taxes.filter(t => sideRegex.test(t.name));
+
+        if (rate === 10) {
+          target = candidates.find(t => t.name.includes('10') && !t.name.includes('軽'));
+        } else if (rate === 8 && isLight) {
+          target = candidates.find(t => t.name.includes('8') && /軽|軽減/.test(t.name));
+        } else if (rate === 8) {
+          target = candidates.find(t => t.name.includes('8') && !t.name.includes('軽'));
+        } else if (rate === null) {
+          // 税率指定なし（"課税売上"・"課対仕入"単体）→ 10% 標準で代用
+          target = candidates.find(t => t.name.includes('10') && !t.name.includes('軽')) || candidates[0];
+        }
+
+        if (target) {
+          logger.info(`税区分マッチ(decompose): ${taxCategoryName} → ${target.name} (code=${target.code})`);
+          return target.code;
+        }
+      }
+
+      // 3. ここまで失敗 → デバッグ用に freee 側のマスター名を全部出してフォールバック
+      logger.warn(`税区分マッチ失敗: ${taxCategoryName} / freee側マスター: [${taxes.map(t => `${t.code}:${t.name}`).join(', ')}]`);
       return await this.findTaxCode(companyId, fallbackDealType, fallbackRate);
     } catch (e) {
       logger.warn('税区分名検索に失敗、フォールバック', e);
@@ -166,23 +220,24 @@ export class FreeeApiClient {
   async findTaxCode(companyId: number, dealType: 'income' | 'expense', rate: number): Promise<number> {
     try {
       const taxes = await this.getTaxCodes(companyId);
-      const side = dealType === 'income' ? ['課税売上', '課対売上'] : ['課税仕入', '課対仕入'];
-      const matches = taxes.filter(t => side.some(k => t.name.includes(k)));
-      // 軽減税率「軽」付き、対象外、を除外しつつ、率（%）を含むものを優先
+      const sideRegex = dealType === 'income'
+        ? /(課対売上|課税売上|課対対象売上|売上課税|売上対象|対象売上)/
+        : /(課対仕入|課税仕入|課対対象仕入|仕入課税|仕入対象|対象仕入)/;
+      const matches = taxes.filter(t => sideRegex.test(t.name));
       let target: { code: number; name: string } | undefined;
       if (rate === 8) {
-        target = matches.find(t => t.name.includes('8%') && (t.name.includes('軽') || t.name.includes('軽減')));
+        target = matches.find(t => t.name.includes('8') && /軽|軽減/.test(t.name));
       } else if (rate === 10) {
-        target = matches.find(t => t.name.includes('10%') && !t.name.includes('軽'));
+        target = matches.find(t => t.name.includes('10') && !t.name.includes('軽'));
       } else if (rate === 0) {
-        target = taxes.find(t => t.name === '対象外' || t.name.includes('不課税'));
+        target = taxes.find(t => /対象外|不課税/.test(t.name));
       }
-      if (!target) target = matches.find(t => t.name.includes(`${rate}%`));
+      if (!target) target = matches.find(t => t.name.includes(`${rate}`));
       if (target) {
         logger.info(`税区分マッチ: ${dealType} ${rate}% → ${target.name} (code=${target.code})`);
         return target.code;
       }
-      logger.warn(`税区分が見つかりません: ${dealType} ${rate}%、対象外(0)で送信`);
+      logger.warn(`税区分が見つかりません: ${dealType} ${rate}% / freee側マスター: [${taxes.map(t => `${t.code}:${t.name}`).join(', ')}]`);
       return 0;
     } catch (e) {
       logger.warn('税区分取得に失敗、フォールバック値を使用', e);
