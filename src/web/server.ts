@@ -1812,7 +1812,7 @@ app.get('/agent/accounting/batch/:id', async (req, res) => {
     const tid = getActiveTenantId(req);
     if (!tid) { res.redirect('/agent/accounting'); return; }
     const batch = await repo.getJournalBatch(tid, req.params.id);
-    if (!batch) { res.status(404).send(renderErrorHTML(404, 'バッチが見つかりません')); return; }
+    if (!batch) { res.status(404).send(renderErrorHTML(404, '仕訳データが見つかりません')); return; }
     const entries = await repo.getJournalEntries(tid, req.params.id);
     const fiscalMonth = await fetchFiscalMonth(req);
 
@@ -1831,7 +1831,7 @@ app.get('/agent/accounting/batch/:id', async (req, res) => {
     res.send(renderBatchDetailHTML({ batch, entries, fiscalMonth, freeeStatus, freeeStatusMessage: summary }));
   } catch (e: any) {
     logger.error('バッチ詳細表示エラー', e);
-    res.status(500).send(renderErrorHTML(500, 'バッチ表示に失敗しました'));
+    res.status(500).send(renderErrorHTML(500, '仕訳データの表示に失敗しました'));
   }
 });
 
@@ -1841,7 +1841,7 @@ app.post('/agent/accounting/batch/:id/update', express.json({ limit: '5mb' }), a
     const tid = getActiveTenantId(req);
     if (!tid) { res.status(403).json({ error: 'テナント未選択' }); return; }
     const batch = await repo.getJournalBatch(tid, req.params.id);
-    if (!batch) { res.status(404).json({ error: 'バッチが見つかりません' }); return; }
+    if (!batch) { res.status(404).json({ error: '仕訳データが見つかりません' }); return; }
     const { entries } = req.body as { entries?: any[] };
     if (!entries || !Array.isArray(entries)) {
       res.status(400).json({ error: '仕訳データが不正です' });
@@ -2379,7 +2379,8 @@ app.post('/agent/accounting/batch/:id/send-freee', express.urlencoded({ extended
     if (!tid) { res.redirect('/agent/accounting'); return; }
     const batch = await repo.getJournalBatch(tid, req.params.id);
     if (!batch) { res.status(404).send(renderErrorHTML(404, 'バッチが見つかりません')); return; }
-    if (batch.freeeSentAt) {
+    // freee送信済みでも allow_duplicate=1 が来ていれば再送信を許可（モーダルで承諾済み）
+    if (batch.freeeSentAt && req.body.allow_duplicate !== '1') {
       res.redirect(`/agent/accounting/batch/${req.params.id}?freee=already`);
       return;
     }

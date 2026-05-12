@@ -697,7 +697,7 @@ export function renderBatchDetailHTML(opts: {
     </div>`;
   } else if (opts.freeeStatus === 'already') {
     statusBanner = `<div style="background:#fef3c7;border:1px solid #fde68a;color:#92400e;border-radius:10px;padding:14px 18px;margin-bottom:16px;font-size:14px">
-      このバッチは既に freee に送信済みです。重複送信を避けるため再送できません。
+      この仕訳は既に freee に送信済みです。再送する場合は「freeeに再登録」ボタンから明示的に承諾の上、実行してください。
     </div>`;
   } else if (opts.freeeStatus === 'noauth') {
     statusBanner = `<div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:10px;padding:14px 18px;margin-bottom:16px;font-size:14px">
@@ -717,11 +717,12 @@ export function renderBatchDetailHTML(opts: {
     </div>`;
   }
 
-  // freee送信ボタン（未送信時のみ）
-  const freeeButton = batch.freeeSentAt ? '' : `
-    <button type="button" class="btn-primary" onclick="openFreeeConfirm()" title="このバッチをfreee APIに送信します">
+  // freee送信ボタン（未送信なら通常表示、送信済みなら「再登録」表示）
+  const alreadySent = !!batch.freeeSentAt;
+  const freeeButton = `
+    <button type="button" class="${alreadySent ? 'btn-secondary' : 'btn-primary'}" onclick="openFreeeConfirm()" title="${alreadySent ? '既にfreeeへ登録済みです。再度押すと重複登録になります。' : 'この仕訳をfreee APIに登録します'}">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
-      freeeに登録
+      ${alreadySent ? 'freeeに再登録' : 'freeeに登録'}
     </button>`;
 
   const bodyHTML = `
@@ -741,9 +742,9 @@ ${statusBanner}
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
     ${freeeButton}
     <button type="button" class="btn-primary" onclick="saveBatchEdits()">変更を保存</button>
-    <form action="/agent/accounting/batch/${esc(batch.id)}/delete" method="post" style="margin:0" onsubmit="return confirm('このバッチを削除しますか？元に戻せません。')">
+    <form action="/agent/accounting/batch/${esc(batch.id)}/delete" method="post" style="margin:0" onsubmit="return confirm('この仕訳データを削除しますか？元に戻せません。')">
       ${csrfInput()}
-      <button type="submit" class="btn-secondary" style="color:#ef4444;border-color:#ef4444">バッチを削除</button>
+      <button type="submit" class="btn-secondary" style="color:#ef4444;border-color:#ef4444">この仕訳データを削除</button>
     </form>
   </div>
 </div>
@@ -773,18 +774,20 @@ ${statusBanner}
   </div>
 </div>
 
-${batch.freeeSentAt ? '' : `
-<!-- freee送信確認モーダル -->
+<!-- freee送信確認モーダル（未送信・送信済み両方で使う） -->
 <div class="freee-modal-overlay" id="freeeConfirmModal" style="display:none">
   <div class="freee-modal">
     <div class="freee-modal-header">
-      <h3>freee に送信する前に確認してください</h3>
+      <h3>${alreadySent ? 'freee に再登録します' : 'freee に送信する前に確認してください'}</h3>
     </div>
     <div class="freee-modal-body">
-      <p class="freee-modal-warn">
+      ${alreadySent ? `<p class="freee-modal-warn" style="background:#fef2f2;border-color:#fecaca;color:#991b1b">
+        <strong>⚠️ この仕訳は既に ${new Date(batch.freeeSentAt!).toLocaleString('ja-JP')} に freee へ登録済みです。</strong><br>
+        このまま送信すると freee 側に <strong>重複登録</strong>されます。先に freee 側で前回の取引を削除してから実行してください。
+      </p>` : `<p class="freee-modal-warn">
         <strong>※AI生成の仕訳です。</strong>送信後は freee 側で取消・修正が必要になります。<br>
         内容に問題がないか必ずご確認のうえ、送信してください。
-      </p>
+      </p>`}
       <div class="freee-modal-summary">
         <div class="freee-summary-row"><span>送信件数</span><strong>${entries.length} 件</strong></div>
         <div class="freee-summary-row"><span>合計金額</span><strong>${fmt(total)} 円</strong></div>
@@ -805,12 +808,12 @@ ${batch.freeeSentAt ? '' : `
       <form action="/agent/accounting/batch/${esc(batch.id)}/send-freee" method="post" style="display:inline">
         ${csrfInput()}
         <input type="hidden" name="confirmed" value="1"/>
-        <button type="submit" class="btn-primary" id="freeeSubmitBtn">freee に送信する</button>
+        ${alreadySent ? '<input type="hidden" name="allow_duplicate" value="1"/>' : ''}
+        <button type="submit" class="${alreadySent ? 'btn-secondary' : 'btn-primary'}" id="freeeSubmitBtn">${alreadySent ? '承知の上で再登録する' : 'freee に送信する'}</button>
       </form>
     </div>
   </div>
 </div>
-`}
 
 <script>
 function openFreeeConfirm(){
