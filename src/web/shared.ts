@@ -143,12 +143,33 @@ function navItem(item: { id: string; href: string; icon: string; label: string; 
 
 const TENANT_SWITCHER_SCRIPT = `
 <div class="toast-container" id="toastContainer"></div>
+<!-- 共通ローディングオーバーレイ -->
+<div class="loading-overlay" id="__loadingOverlay" style="display:none">
+  <div class="loading-card">
+    <div class="loading-spinner"></div>
+    <h3 class="loading-title" id="__loadingTitle">処理中...</h3>
+    <p class="loading-sub" id="__loadingSub">しばらくお待ちください</p>
+    <p class="loading-hint">※途中でページを閉じたり戻ったりしないでください</p>
+  </div>
+</div>
 <script>
 window.__toast=function(msg,type){
   var c=document.getElementById('toastContainer');if(!c)return;
   var t=document.createElement('div');t.className='toast toast-'+(type||'info');t.textContent=msg;
   c.appendChild(t);setTimeout(function(){t.style.opacity='0';t.style.transition='opacity .3s';setTimeout(function(){t.remove()},300)},4000);
 };
+window.__showLoading=function(title,sub){
+  var ov=document.getElementById('__loadingOverlay');if(!ov)return;
+  document.getElementById('__loadingTitle').textContent=title||'処理中...';
+  document.getElementById('__loadingSub').textContent=sub||'しばらくお待ちください';
+  ov.style.display='flex';
+};
+window.__hideLoading=function(){
+  var ov=document.getElementById('__loadingOverlay');
+  if(ov) ov.style.display='none';
+};
+// ブラウザの戻る/進むで戻ってきた時はオーバーレイを必ず消す（bfcache 対策）
+window.addEventListener('pageshow',function(e){if(e.persisted){window.__hideLoading();}});
 (function(){
   var tenants=[], activeTenantId=null;
   function load(){
@@ -381,6 +402,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","H
 .tenant-item:hover{background:rgba(255,255,255,0.06);color:#fff}
 .tenant-item.active{background:rgba(56,189,248,0.1);color:#38bdf8}
 .tenant-role{font-size:10px;color:#64748b;margin-left:8px}
+
+.loading-overlay{position:fixed;inset:0;background:rgba(15,23,42,0.65);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;z-index:99999;padding:16px;animation:fadeIn .2s ease}
+.loading-overlay[style*="flex"]{display:flex !important}
+.loading-card{background:#fff;border-radius:16px;padding:36px 44px;text-align:center;box-shadow:0 24px 64px rgba(0,0,0,0.3);max-width:420px;width:100%}
+.loading-spinner{width:56px;height:56px;border:5px solid #e5e7eb;border-top-color:#2298ae;border-radius:50%;margin:0 auto 18px;animation:loadspin .8s linear infinite}
+@keyframes loadspin{to{transform:rotate(360deg)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.loading-title{font-size:17px;font-weight:700;margin-bottom:8px;color:#1f2937}
+.loading-sub{font-size:13px;color:#6b7280;line-height:1.7;margin-bottom:14px}
+.loading-hint{font-size:11px;color:#9ca3af;padding-top:10px;border-top:1px solid #f3f4f6}
 
 .toast-container{position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
 .toast{pointer-events:auto;padding:12px 20px;border-radius:10px;font-size:13px;font-weight:500;color:#fff;box-shadow:0 4px 16px rgba(0,0,0,0.15);animation:toastIn .3s ease;max-width:400px}

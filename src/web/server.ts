@@ -3519,6 +3519,7 @@ function resetUploadChoice(){
 function onUploadSubmit(form){
   var btn=form.querySelector('button[type=submit]');
   btn.disabled=true;btn.textContent='解析中...（数十秒かかります）';
+  if(window.__showLoading) window.__showLoading('AIが資料を解析しています', 'PDFの読取〜PL/BS抽出に30秒〜1分程度かかります');
   return true;
 }
 </script>
@@ -3626,13 +3627,13 @@ ${renderSidebar('dashboard')}
     <div style="padding:24px;overflow-y:auto;flex:1">
       <p style="font-size:13px;color:var(--text2);margin-bottom:16px">追加する資料の種類を選んでください。</p>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <form method="POST" action="/agent/finance/upload-trend?_csrf=${encodeURIComponent(csrf)}" enctype="multipart/form-data" style="padding:16px;border:2px solid var(--border);border-radius:10px" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='解析中...'">
+        <form method="POST" action="/agent/finance/upload-trend?_csrf=${encodeURIComponent(csrf)}" enctype="multipart/form-data" style="padding:16px;border:2px solid var(--border);border-radius:10px" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='解析中...';window.__showLoading&&window.__showLoading('AIが資料を解析しています','30秒〜1分程度かかります')">
           <h4 style="font-size:14px;font-weight:700;margin-bottom:8px">📊 月次推移試算表</h4>
           <p style="font-size:12px;color:var(--text2);margin-bottom:10px">複数月分。詳細表示。</p>
           <input type="file" name="file" accept=".pdf,.csv,.txt" required style="width:100%;font-size:12px;margin-bottom:8px">
           <button type="submit" class="btn-primary btn-sm" style="width:100%;border:none;font-family:inherit;cursor:pointer">アップロード</button>
         </form>
-        <form method="POST" action="/agent/finance/upload-snapshot?_csrf=${encodeURIComponent(csrf)}" enctype="multipart/form-data" style="padding:16px;border:2px solid var(--border);border-radius:10px" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='解析中...'">
+        <form method="POST" action="/agent/finance/upload-snapshot?_csrf=${encodeURIComponent(csrf)}" enctype="multipart/form-data" style="padding:16px;border:2px solid var(--border);border-radius:10px" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='解析中...';window.__showLoading&&window.__showLoading('AIが資料を解析しています','30秒〜1分程度かかります')">
           <h4 style="font-size:14px;font-weight:700;margin-bottom:8px">📄 単月試算表/決算書</h4>
           <p style="font-size:12px;color:var(--text2);margin-bottom:10px">1時点。簡易表示。</p>
           <input type="file" name="file" accept=".pdf,.csv,.txt" required style="width:100%;font-size:12px;margin-bottom:8px">

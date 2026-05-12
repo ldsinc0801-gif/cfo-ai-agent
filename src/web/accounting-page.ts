@@ -62,7 +62,7 @@ ${options.success ? `<div class="acc-success">${esc(options.success)}</div>` : '
       <span class="card-sub">画像 / PDF</span>
     </div>
     <div class="card-body">
-      <form action="/agent/accounting/analyze?_csrf=${encodeURIComponent(getCurrentCsrfToken() || '')}" method="post" enctype="multipart/form-data" id="receiptForm">
+      <form action="/agent/accounting/analyze?_csrf=${encodeURIComponent(getCurrentCsrfToken() || '')}" method="post" enctype="multipart/form-data" id="receiptForm" onsubmit="window.__showLoading && window.__showLoading('AIが領収書を解析しています', '画像・PDFの枚数によって10秒〜1分程度かかります')">
         <input type="hidden" name="type" value="file"/>
         <div class="acc-dropzone" id="receiptDrop">
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="1.5">
@@ -96,7 +96,7 @@ ${options.success ? `<div class="acc-success">${esc(options.success)}</div>` : '
       <span class="card-sub">現金の領収書をまとめて処理</span>
     </div>
     <div class="card-body">
-      <form action="/agent/accounting/analyze-video?_csrf=${encodeURIComponent(getCurrentCsrfToken() || '')}" method="post" enctype="multipart/form-data" id="videoForm">
+      <form action="/agent/accounting/analyze-video?_csrf=${encodeURIComponent(getCurrentCsrfToken() || '')}" method="post" enctype="multipart/form-data" id="videoForm" onsubmit="window.__showLoading && window.__showLoading('AIが動画から仕訳を生成しています', '動画の長さによって30秒〜2分程度かかります')">
         <div class="acc-dropzone" id="videoDrop">
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="1.5">
             <polygon points="23 7 16 12 23 17 23 7"/>
@@ -554,6 +554,7 @@ ${entries.map((e, i) => `
         window.__toast && window.__toast('仕訳がありません', 'error');
         return;
       }
+      if(window.__showLoading) window.__showLoading('仕訳データを保存しています', 'まもなく完了します');
       fetch('/agent/accounting/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -562,10 +563,12 @@ ${entries.map((e, i) => `
         if(data.success && data.batchId){
           window.location.href = '/agent/accounting/batch/' + data.batchId;
         } else {
+          if(window.__hideLoading) window.__hideLoading();
           btn.disabled = false; btn.textContent = '確定して保存';
           window.__toast && window.__toast(data.error || '保存に失敗しました', 'error');
         }
       }).catch(function(){
+        if(window.__hideLoading) window.__hideLoading();
         btn.disabled = false; btn.textContent = '確定して保存';
         window.__toast && window.__toast('通信エラー', 'error');
       });
@@ -579,6 +582,7 @@ ${entries.map((e, i) => `
     function submitFreeeForm(){
       var btn=document.getElementById('freeeSubmitBtn');
       btn.disabled=true;btn.textContent='送信中...';
+      if(window.__showLoading) window.__showLoading('freee に送信しています', '仕訳件数によって10秒〜1分程度かかります');
       document.getElementById('freeeForm').submit();
     }
     </script>
@@ -805,7 +809,7 @@ ${statusBanner}
     </div>
     <div class="freee-modal-actions">
       <button type="button" class="btn-secondary" onclick="closeFreeeConfirm()">キャンセル</button>
-      <form action="/agent/accounting/batch/${esc(batch.id)}/send-freee" method="post" style="display:inline">
+      <form action="/agent/accounting/batch/${esc(batch.id)}/send-freee" method="post" style="display:inline" onsubmit="window.__showLoading && window.__showLoading('freee に送信しています', '仕訳件数によって10秒〜1分程度かかります')">
         ${csrfInput()}
         <input type="hidden" name="confirmed" value="1"/>
         ${alreadySent ? '<input type="hidden" name="allow_duplicate" value="1"/>' : ''}
@@ -846,17 +850,20 @@ function collectEntries(){
 }
 function saveBatchEdits(){
   var entries = collectEntries();
+  if(window.__showLoading) window.__showLoading('変更内容を保存しています', 'まもなく完了します');
   fetch('/agent/accounting/batch/${esc(batch.id)}/update', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ entries: entries }),
   }).then(function(r){return r.json();}).then(function(data){
+    if(window.__hideLoading) window.__hideLoading();
     if(data.success){
       window.__toast && window.__toast('保存しました', 'success');
     } else {
       window.__toast && window.__toast(data.error || '保存に失敗しました', 'error');
     }
   }).catch(function(){
+    if(window.__hideLoading) window.__hideLoading();
     window.__toast && window.__toast('通信エラー', 'error');
   });
 }
