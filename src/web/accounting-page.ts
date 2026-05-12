@@ -201,21 +201,76 @@ function updateYayoiLink(){
   btn.setAttribute('href', href.replace(/counter=[01]/, 'counter=' + (checked ? '1' : '0')));
 }
 
-// 仕訳修正の検出と学習
-document.querySelectorAll('.edit-select').forEach(function(sel){
-  sel.addEventListener('change',function(){
-    var tr = sel.closest('tr');
-    var original = JSON.parse(tr.dataset.original);
-    var debit = tr.querySelector('.edit-debit').value;
-    var credit = tr.querySelector('.edit-credit').value;
-    var btn = tr.querySelector('.btn-correct');
-    if(debit !== original.debitAccount || credit !== original.creditAccount){
-      btn.style.display='inline-block';
-    } else {
-      btn.style.display='none';
-    }
+// 全フィールドの編集状態を集約して返す
+function getCurrentEntries(){
+  var rows = document.querySelectorAll('tr[data-original]');
+  var entries = [];
+  rows.forEach(function(tr){
+    var orig = JSON.parse(tr.dataset.original);
+    entries.push(Object.assign({}, orig, {
+      date: tr.querySelector('.edit-date').value,
+      debitAccount: tr.querySelector('.edit-debit').value,
+      creditAccount: tr.querySelector('.edit-credit').value,
+      amount: Number(tr.querySelector('.edit-amount').value) || 0,
+      taxRate: Number(tr.querySelector('.edit-taxrate').value),
+      taxAmount: Number(tr.querySelector('.edit-tax').value) || 0,
+      description: tr.querySelector('.edit-desc').value,
+      partnerName: tr.querySelector('.edit-partner').value,
+    }));
   });
-});
+  return entries;
+}
+
+// 編集に応じて学習ボタンの表示制御 + freee/CSVのエクスポート対象を最新化
+function onCellChange(el){
+  var tr = el.closest('tr');
+  var orig = JSON.parse(tr.dataset.original);
+  var changed = (
+    tr.querySelector('.edit-date').value !== orig.date ||
+    tr.querySelector('.edit-debit').value !== orig.debitAccount ||
+    tr.querySelector('.edit-credit').value !== orig.creditAccount ||
+    Number(tr.querySelector('.edit-amount').value) !== orig.amount ||
+    Number(tr.querySelector('.edit-taxrate').value) !== orig.taxRate ||
+    Number(tr.querySelector('.edit-tax').value) !== orig.taxAmount ||
+    tr.querySelector('.edit-desc').value !== orig.description ||
+    tr.querySelector('.edit-partner').value !== orig.partnerName
+  );
+  var btn = tr.querySelector('.btn-correct');
+  if(btn) btn.style.display = changed ? 'inline-block' : 'none';
+  syncExportTargets();
+}
+
+// 金額または税率変更時、内税前提で消費税額を自動再計算
+function onAmountOrTaxChange(el){
+  var tr = el.closest('tr');
+  var amount = Number(tr.querySelector('.edit-amount').value) || 0;
+  var rate = Number(tr.querySelector('.edit-taxrate').value);
+  if(amount && rate){
+    // 内税: 税抜 = 税込 / (1+r/100), 税額 = 税込 - 税抜
+    var net = Math.round(amount / (1 + rate/100));
+    tr.querySelector('.edit-tax').value = amount - net;
+  } else {
+    tr.querySelector('.edit-tax').value = 0;
+  }
+  onCellChange(el);
+}
+
+// freeeのhidden inputと弥生/汎用CSVのhrefを編集状態に同期
+function syncExportTargets(){
+  var entries = getCurrentEntries();
+  var json = JSON.stringify(entries);
+  var freeeInput = document.querySelector('#freeeForm input[name=entries]');
+  if(freeeInput) freeeInput.value = json;
+  var enc = encodeURIComponent(json);
+  var csvLink = document.querySelector('a[href*="/agent/accounting/csv?entries="]');
+  if(csvLink) csvLink.setAttribute('href', '/agent/accounting/csv?entries=' + enc);
+  var yayoiLink = document.getElementById('yayoiBtn');
+  if(yayoiLink){
+    var counter = document.getElementById('yayoiCounter');
+    var counterVal = counter && counter.checked ? '1' : '0';
+    yayoiLink.setAttribute('href', '/agent/accounting/yayoi-csv?entries=' + enc + '&counter=' + counterVal);
+  }
+}
 
 function sendChatCorrection(){
   var input = document.getElementById('chatInput');
@@ -228,15 +283,8 @@ function sendChatCorrection(){
   chatArea.innerHTML += '<div class="chat-loading" id="chatLoading">AIが解析中...</div>';
   chatArea.scrollTop = chatArea.scrollHeight;
 
-  // 現在の仕訳データを収集
-  var rows = document.querySelectorAll('tr[data-original]');
-  var entries = [];
-  rows.forEach(function(tr){
-    var entry = JSON.parse(tr.dataset.original);
-    entry.debitAccount = tr.querySelector('.edit-debit').value;
-    entry.creditAccount = tr.querySelector('.edit-credit').value;
-    entries.push(entry);
-  });
+  // 編集後の最新状態をAIに渡す
+  var entries = getCurrentEntries();
 
   fetch('/agent/accounting/chat-correct', {
     method:'POST',
@@ -247,21 +295,25 @@ function sendChatCorrection(){
     if(loading) loading.remove();
 
     if(data.success && data.corrections && data.corrections.length > 0){
-      // 修正を適用
+      var FIELD_MAP = {
+        debitAccount: '.edit-debit', creditAccount: '.edit-credit',
+        date: '.edit-date', amount: '.edit-amount', taxRate: '.edit-taxrate',
+        taxAmount: '.edit-tax', description: '.edit-desc', partnerName: '.edit-partner',
+      };
       data.corrections.forEach(function(c){
         var tr = document.querySelector('tr[data-idx="'+c.index+'"]');
         if(!tr) return;
-        var sel = tr.querySelector(c.field === 'debitAccount' ? '.edit-debit' : '.edit-credit');
+        var sel = FIELD_MAP[c.field] ? tr.querySelector(FIELD_MAP[c.field]) : null;
         if(sel){
           sel.value = c.newValue;
           sel.style.background = '#d5eef3';
           setTimeout(function(){ sel.style.background = ''; }, 2000);
         }
-        // data-originalを更新
         var orig = JSON.parse(tr.dataset.original);
         orig[c.field] = c.newValue;
         tr.dataset.original = JSON.stringify(orig);
       });
+      syncExportTargets();
       chatArea.innerHTML += '<div class="chat-msg chat-msg-ai">'+data.aiMessage+'</div>';
     } else if(data.success){
       chatArea.innerHTML += '<div class="chat-msg chat-msg-ai">'+(data.aiMessage || '修正対象が見つかりませんでした')+'</div>';
@@ -281,8 +333,14 @@ function saveCorrection(idx){
   var tr = document.querySelector('tr[data-idx="'+idx+'"]');
   var original = JSON.parse(tr.dataset.original);
   var corrected = Object.assign({}, original, {
+    date: tr.querySelector('.edit-date').value,
     debitAccount: tr.querySelector('.edit-debit').value,
     creditAccount: tr.querySelector('.edit-credit').value,
+    amount: Number(tr.querySelector('.edit-amount').value) || 0,
+    taxRate: Number(tr.querySelector('.edit-taxrate').value),
+    taxAmount: Number(tr.querySelector('.edit-tax').value) || 0,
+    description: tr.querySelector('.edit-desc').value,
+    partnerName: tr.querySelector('.edit-partner').value,
   });
   var reason = prompt('修正理由（任意）:','') || '';
 
@@ -363,14 +421,14 @@ ${analysis.notes.length > 0 ? `
         <tbody>
 ${entries.map((e, i) => `
           <tr data-idx="${i}" data-original='${esc(JSON.stringify(e))}'>
-            <td>${esc(e.date)}</td>
-            <td><select class="edit-select edit-debit">${accountSelectOptions(e.debitAccount)}</select></td>
-            <td><select class="edit-select edit-credit">${accountSelectOptions(e.creditAccount)}</select></td>
-            <td class="num">${fmt(e.amount)}円</td>
-            <td class="num">${e.taxRate}%</td>
-            <td class="num">${fmt(e.taxAmount)}円</td>
-            <td>${esc(e.description)}</td>
-            <td>${esc(e.partnerName)}</td>
+            <td><input type="date" class="edit-input edit-date" value="${esc(e.date)}" onchange="onCellChange(this)"/></td>
+            <td><select class="edit-select edit-debit" onchange="onCellChange(this)">${accountSelectOptions(e.debitAccount)}</select></td>
+            <td><select class="edit-select edit-credit" onchange="onCellChange(this)">${accountSelectOptions(e.creditAccount)}</select></td>
+            <td class="num"><input type="number" class="edit-input edit-amount num-input" value="${e.amount}" step="1" onchange="onAmountOrTaxChange(this)"/></td>
+            <td class="num"><select class="edit-select edit-taxrate" onchange="onAmountOrTaxChange(this)"><option value="10" ${e.taxRate===10?'selected':''}>10%</option><option value="8" ${e.taxRate===8?'selected':''}>8%</option><option value="0" ${e.taxRate===0?'selected':''}>0%</option></select></td>
+            <td class="num"><input type="number" class="edit-input edit-tax num-input" value="${e.taxAmount}" step="1" onchange="onCellChange(this)"/></td>
+            <td><input type="text" class="edit-input edit-desc" value="${esc(e.description)}" onchange="onCellChange(this)" placeholder="摘要"/></td>
+            <td><input type="text" class="edit-input edit-partner" value="${esc(e.partnerName)}" onchange="onCellChange(this)" placeholder="取引先"/></td>
             <td><button class="btn-correct btn-sm" onclick="saveCorrection(${i})" style="display:none">学習</button></td>
           </tr>`).join('')}
         </tbody>
@@ -412,7 +470,7 @@ ${entries.map((e, i) => `
           弥生CSV
         </a>
         <label class="yayoi-option">
-          <input type="checkbox" id="yayoiCounter" checked onchange="updateYayoiLink()"/> 相手勘定科目を含む
+          <input type="checkbox" id="yayoiCounter" checked onchange="syncExportTargets()"/> 相手勘定科目を含む
         </label>
       </div>
       <a href="/agent/accounting" class="btn-secondary">次の領収書を処理</a>
@@ -453,7 +511,11 @@ ${entries.map((e, i) => `
       </div>
     </div>
     <script>
-    function openFreeeConfirm(){document.getElementById('freeeConfirmModal').style.display='flex';}
+    function openFreeeConfirm(){
+      // 編集後の最新値をhidden inputに反映してから確認モーダルを開く
+      if(typeof syncExportTargets==='function') syncExportTargets();
+      document.getElementById('freeeConfirmModal').style.display='flex';
+    }
     function closeFreeeConfirm(){document.getElementById('freeeConfirmModal').style.display='none';}
     function submitFreeeForm(){
       var btn=document.getElementById('freeeSubmitBtn');
@@ -506,6 +568,13 @@ const PAGE_CSS = `
 .edit-select{border:1px solid var(--border);background:#fff;padding:4px 6px;border-radius:6px;font-size:12px;font-weight:600;min-width:100px;cursor:pointer;transition:all .2s;appearance:auto}
 .edit-select:focus{border-color:var(--primary);outline:none;box-shadow:0 0 0 2px rgba(79,70,229,0.15)}
 .edit-debit{color:#1b7f8e}.edit-credit{color:#156d7a}
+.edit-input{border:1px solid var(--border);background:#fff;padding:4px 6px;border-radius:6px;font-size:12px;font-family:inherit;width:100%;min-width:0;transition:all .2s}
+.edit-input:focus{border-color:var(--primary);outline:none;box-shadow:0 0 0 2px rgba(34,152,174,0.15)}
+.edit-date{min-width:130px}
+.edit-amount,.edit-tax{text-align:right;font-variant-numeric:tabular-nums}
+.edit-taxrate{min-width:64px}
+.edit-desc,.edit-partner{min-width:120px}
+.num-input{max-width:110px}
 .btn-correct{padding:3px 10px;border:1px solid #5ab4c4;background:#ecf6f8;color:#1b7f8e;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
 .btn-correct:hover{background:#a8d8e0}
 .correction-msg{padding:10px 16px;border-radius:8px;font-size:13px;margin-top:12px;transition:opacity .3s}
