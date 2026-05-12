@@ -64,7 +64,7 @@ function findTotalByCategory(balances: FreeeBSBalance[], categoryName: string): 
  * 現金預金の残高を取得
  *
  * freeeでは account_category_name が「現金・預金」で、
- * account_item_name は銀行名（例：「PayPay銀行 005 普通 ***5482」）
+ * account_item_name は銀行口座ごとに個別（例：「○○銀行 普通預金」「△△信金 当座預金」）
  * のためカテゴリ名でもマッチさせる
  */
 function findCashAndDeposits(balances: FreeeBSBalance[]): number {
