@@ -4,6 +4,7 @@ dotenv.config();
 import axios from 'axios';
 import express from 'express';
 import session from 'express-session';
+import helmet from 'helmet';
 import crypto from 'crypto';
 import multer from 'multer';
 import path from 'path';
@@ -46,6 +47,8 @@ import type { SessionUser } from '../types/auth.js';
 import { asTenantId } from '../types/auth.js';
 import type { TenantId } from '../types/auth.js';
 import { requireSuperAdmin, requireRole, requireTenant, getActiveTenantId } from './auth-middleware.js';
+import { csrfMiddleware, ensureCsrfToken, setCurrentCsrfToken } from './security.js';
+import { createSessionStore } from './session-store.js';
 
 // セッションにユーザー情報を保持するための型拡張
 declare module 'express-session' {
@@ -101,18 +104,39 @@ if (!process.env.SESSION_SECRET) {
 app.use((_req, res, next) => {
   const origin = IS_PRODUCTION ? (process.env.ALLOWED_ORIGIN || '') : '*';
   if (origin) res.header('Access-Control-Allow-Origin', origin);
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Token');
   next();
 });
 
 // Expressのtrust proxy（Railway等のリバースプロキシ背後で動作する場合に必要）
 if (IS_PRODUCTION) app.set('trust proxy', 1);
 
-// セッション管理
+// セキュリティヘッダ（helmet）
+// SSR でインラインスクリプトを多用しているため CSP は無効化（将来 nonce 化で再有効化推奨）
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+  hsts: IS_PRODUCTION ? undefined : false,
+}));
+
+// セッション管理: DATABASE_URL があれば Postgres 永続化、無ければ MemoryStore
+// 本番でも MemoryStore で動作可能（デプロイ毎に全員ログアウトする副作用は許容）。
+// ユーザー数が増えてきたら DATABASE_URL を環境変数に追加するだけで自動で永続化に切替わる。
+const sessionStore = createSessionStore();
+if (!sessionStore) {
+  logger.warn(
+    IS_PRODUCTION
+      ? '[本番] DATABASE_URL 未設定: セッションは MemoryStore で動作します（再起動・スケールアウトで全員ログアウト）。永続化したい場合は Supabase の Direct Connection URL を DATABASE_URL に設定してください'
+      : 'セッションストアが未設定のため MemoryStore を使用します'
+  );
+}
+
 app.use(session({
+  store: sessionStore,
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
+  rolling: true,
   cookie: {
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7日間
     httpOnly: true,
@@ -126,12 +150,54 @@ app.use(session({
 // Body parser（extended: trueでcfg_name[]等の配列記法をサポート）
 app.use(express.urlencoded({ extended: true }));
 
+// CSRF: 全リクエストでトークンを発行、mutating メソッドは検証
+app.use(csrfMiddleware);
+
 // ログインページ
 app.get('/login', (req, res) => {
   if (req.session.user) { res.redirect('/'); return; }
   const error = req.query.error as string | undefined;
-  res.send(renderLoginHTML(error));
+  const token = ensureCsrfToken(req);
+  res.send(renderLoginHTML(error, token));
 });
+
+/**
+ * ログイン成功時にセッションを再生成して固定化攻撃を防ぐ。
+ * regenerate 後の新セッションに user/tenant をセットしてから redirect。
+ */
+function loginAndRedirect(req: express.Request, res: express.Response, user: any, mustChangePassword: boolean): void {
+  req.session.regenerate(async (err) => {
+    if (err) {
+      logger.error('セッション再生成エラー', err);
+      res.redirect('/login?error=' + encodeURIComponent('ログイン処理中にエラーが発生しました'));
+      return;
+    }
+    req.session.user = {
+      id: user.id,
+      email: user.email,
+      name: user.name || user.email,
+      isSuperAdmin: user.isSuperAdmin,
+    };
+
+    if (mustChangePassword) {
+      req.session.save(() => res.redirect('/auth/change-password'));
+      return;
+    }
+
+    if (!user.isSuperAdmin) {
+      try {
+        const tenants = await authService.getUserTenants(user.id);
+        if (tenants.length > 0) {
+          req.session.activeTenantId = tenants[0].tenantId;
+          req.session.activeTenantRole = tenants[0].role;
+        }
+      } catch (e) {
+        logger.error('テナント自動選択エラー', e);
+      }
+    }
+    req.session.save(() => res.redirect('/'));
+  });
+}
 
 // メール+パスワード ログイン処理
 app.post('/auth/login', async (req, res) => {
@@ -148,30 +214,7 @@ app.post('/auth/login', async (req, res) => {
       return;
     }
 
-    const user = result.user;
-    req.session.user = {
-      id: user.id,
-      email: user.email,
-      name: user.name || user.email,
-      isSuperAdmin: user.isSuperAdmin,
-    };
-
-    // 初回パスワード変更が必要な場合
-    if (user.mustChangePassword) {
-      res.redirect('/auth/change-password');
-      return;
-    }
-
-    // テナントを自動選択（超管理者以外）
-    if (!user.isSuperAdmin) {
-      const tenants = await authService.getUserTenants(user.id);
-      if (tenants.length > 0) {
-        req.session.activeTenantId = tenants[0].tenantId;
-        req.session.activeTenantRole = tenants[0].role;
-      }
-    }
-
-    res.redirect('/');
+    loginAndRedirect(req, res, result.user, result.user.mustChangePassword);
   } catch (error: any) {
     logger.error('ログインエラー', error);
     res.redirect('/login?error=' + encodeURIComponent('ログイン処理中にエラーが発生しました'));
@@ -183,7 +226,8 @@ app.get('/auth/change-password', (req, res) => {
   if (!req.session.user) { res.redirect('/login'); return; }
   const error = req.query.error as string | undefined;
   const success = req.query.success as string | undefined;
-  res.send(renderChangePasswordHTML(error, success));
+  const token = ensureCsrfToken(req);
+  res.send(renderChangePasswordHTML(error, success, token));
 });
 
 // パスワード変更処理
@@ -203,44 +247,59 @@ app.post('/auth/change-password', async (req, res) => {
       return;
     }
 
-    await authService.changePassword(req.session.user.id, newPassword);
+    const userId = req.session.user.id;
+    await authService.changePassword(userId, newPassword);
 
-    // テナントを自動選択
-    if (!req.session.user.isSuperAdmin) {
-      const tenants = await authService.getUserTenants(req.session.user.id);
-      if (tenants.length > 0) {
-        req.session.activeTenantId = tenants[0].tenantId;
-        req.session.activeTenantRole = tenants[0].role;
+    // パスワード変更後もセッションを再生成
+    const userSnapshot = req.session.user;
+    req.session.regenerate(async (err) => {
+      if (err) {
+        logger.error('セッション再生成エラー', err);
+        res.redirect('/login');
+        return;
       }
-    }
-
-    res.redirect('/');
+      req.session.user = userSnapshot;
+      if (!userSnapshot.isSuperAdmin) {
+        try {
+          const tenants = await authService.getUserTenants(userId);
+          if (tenants.length > 0) {
+            req.session.activeTenantId = tenants[0].tenantId;
+            req.session.activeTenantRole = tenants[0].role;
+          }
+        } catch (e) { logger.error('テナント自動選択エラー', e); }
+      }
+      req.session.save(() => res.redirect('/'));
+    });
   } catch (error: any) {
     logger.error('パスワード変更エラー', error);
     res.redirect('/auth/change-password?error=' + encodeURIComponent('パスワード変更に失敗しました'));
   }
 });
 
-// デモモードログイン（認証不要）
-app.get('/auth/demo', async (req, res) => {
-  req.session.user = {
-    id: 'demo-user',
-    email: 'demo@ai-cfo.example.com',
-    name: 'デモユーザー',
-    isSuperAdmin: false,
-  };
-  req.session.activeTenantId = 'demo-tenant';
-  req.session.activeTenantRole = 'financial_admin'; // デモではフル権限
-  // デモモードを有効化（IT業プロファイル）
+// デモモードログイン（認証不要）。POST + CSRF 必須。
+app.post('/auth/demo', async (req, res) => {
   const { enableDemoMode: enableDemo } = await import('../services/demo-mode.js');
   enableDemo('consulting');
-  logger.info('デモモードでログイン');
-  res.redirect('/');
+  req.session.regenerate((err) => {
+    if (err) { logger.error('セッション再生成エラー', err); res.redirect('/login'); return; }
+    req.session.user = {
+      id: 'demo-user',
+      email: 'demo@ai-cfo.example.com',
+      name: 'デモユーザー',
+      isSuperAdmin: false,
+    };
+    req.session.activeTenantId = 'demo-tenant';
+    req.session.activeTenantRole = 'financial_admin';
+    logger.info('デモモードでログイン');
+    req.session.save(() => res.redirect('/'));
+  });
 });
 
 // ログアウト
 app.post('/logout', (req, res) => {
-  req.session.destroy(() => {
+  req.session.destroy((err) => {
+    if (err) logger.error('セッション破棄エラー', err);
+    res.clearCookie('connect.sid');
     res.redirect('/login');
   });
 });
@@ -1810,6 +1869,14 @@ app.get('/agent/accounting/yayoi-csv', (req, res) => {
 // 会計AI：freee APIに仕訳送信
 app.post('/agent/accounting/send-freee', express.urlencoded({ extended: true }), async (req, res) => {
   try {
+    // 確認ダイアログを経由しない自動送信を拒否（AI生成仕訳の誤送信防止）
+    if (req.body.confirmed !== '1') {
+      res.status(400).send(renderAccountingPageHTML({
+        aiAvailable: true,
+        error: '送信前の確認が必要です。「freeeに送信」ボタンから確認ダイアログを経由して送信してください。',
+      }));
+      return;
+    }
     // デモモード: freee送信成功画面を返す
     if (isDemoMode()) {
       const entries: JournalEntry[] = JSON.parse(req.body.entries || '[]');
@@ -2391,6 +2458,7 @@ app.get('/settings/company', async (req, res) => {
     const demoActive = isDemoMode();
     const demoProfile = getDemoProfile();
     const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const csrfHidden = `<input type="hidden" name="_csrf" value="${req.session.csrfToken || ''}">`;
 
     // デモプロファイル選択カード
     const demoCards = DEMO_PROFILES.map(p => {
@@ -2404,6 +2472,7 @@ app.get('/settings/company', async (req, res) => {
             <div style="font-size:11px;color:#9ca3af;margin-top:1px">${escHtml(p.description)}</div>
           </div>
           <form method="POST" action="/settings/demo" style="margin:0">
+            ${csrfHidden}
             <input type="hidden" name="profileId" value="${p.id}">
             <button type="submit" style="padding:8px 20px;border-radius:8px;border:none;background:${isSelected ? '#f59e0b' : '#f59e0b'};color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;opacity:${isSelected ? '0.6' : '1'}">${isSelected ? 'デモ中' : 'デモ開始'}</button>
           </form>
@@ -2417,7 +2486,7 @@ app.get('/settings/company', async (req, res) => {
             <h2 style="font-size:18px;font-weight:700;margin-bottom:4px">デモモード</h2>
             <p style="font-size:13px;color:#6b7280">営業先でfreee連携なしでデモ実演できます（AI APIも不要）</p>
           </div>
-          ${demoActive ? '<form method="POST" action="/settings/demo" style="margin:0"><input type="hidden" name="profileId" value="off"><button type="submit" style="padding:8px 16px;border-radius:8px;border:1px solid #ef4444;background:transparent;color:#ef4444;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">デモ解除</button></form>' : ''}
+          ${demoActive ? `<form method="POST" action="/settings/demo" style="margin:0">${csrfHidden}<input type="hidden" name="profileId" value="off"><button type="submit" style="padding:8px 16px;border-radius:8px;border:1px solid #ef4444;background:transparent;color:#ef4444;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">デモ解除</button></form>` : ''}
         </div>
         ${demoActive ? '<div style="background:#fffbeb;border:1px solid #f59e0b;border-radius:8px;padding:12px 16px;margin-bottom:12px;font-size:13px;color:#92400e;font-weight:600">デモモード実行中: ' + escHtml(demoProfile?.companyName || '') + '</div>' : ''}
         ${demoCards}
@@ -2448,6 +2517,7 @@ app.get('/settings/company', async (req, res) => {
           <div style="display:flex;align-items:center;gap:8px">
             ${isSelected ? '<span style="font-size:12px;font-weight:600;color:#2298ae;background:rgba(99,102,241,0.1);padding:4px 12px;border-radius:6px">選択中</span>' : ''}
             <form method="POST" action="/settings/company" style="margin:0">
+              ${csrfHidden}
               <input type="hidden" name="companyId" value="${c.id}">
               <input type="hidden" name="companyName" value="${escHtml(c.display_name)}">
               <button type="submit" style="padding:8px 20px;border-radius:8px;border:none;background:${isSelected ? '#e5e7eb' : '#2298ae'};color:${isSelected ? '#6b7280' : '#fff'};font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:opacity .15s">${isSelected ? '選択済み' : '選択する'}</button>

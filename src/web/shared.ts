@@ -3,6 +3,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { csrfBootstrapScript, getCurrentCsrfToken } from './security.js';
 
 // リクエストごとのユーザー情報（ミドルウェアでセット）
 let _currentUser: SidebarUser | undefined;
@@ -109,6 +110,7 @@ ${agents.map(i => navItem(i, active)).join('\n')}
     <div class="nav-section">設定</div>
 ${settings.map(i => navItem(i, active)).join('\n')}
   </nav>
+  ${csrfBootstrapScript(getCurrentCsrfToken() || '')}
   <div class="sidebar-footer">
     ${sidebarUser ? `
     <div class="sidebar-user">
@@ -118,6 +120,7 @@ ${settings.map(i => navItem(i, active)).join('\n')}
         <div class="sidebar-user-email">${esc(sidebarUser.email)}</div>
       </div>
       <form method="POST" action="/logout" style="margin:0">
+        <input type="hidden" name="_csrf" value="${getCurrentCsrfToken() || ''}">
         <button type="submit" class="sidebar-logout-btn" title="ログアウト">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         </button>

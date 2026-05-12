@@ -41,11 +41,10 @@ export class AuthService {
       const newCount = user.failedLoginCount + 1;
       if (newCount >= MAX_FAILED_ATTEMPTS) {
         await this.lockAccount(user.id, newCount);
-        return { error: `パスワードが${MAX_FAILED_ATTEMPTS}回連続で間違えられたため、アカウントを${LOCK_DURATION_MINUTES}分間ロックしました` };
+        return { error: `アカウントを一定時間ロックしました。${LOCK_DURATION_MINUTES}分後に再試行してください` };
       }
       await this.incrementFailedAttempts(user.id, newCount);
-      const remaining = MAX_FAILED_ATTEMPTS - newCount;
-      return { error: `メールアドレスまたはパスワードが正しくありません（残り${remaining}回でロック）` };
+      return { error: 'メールアドレスまたはパスワードが正しくありません' };
     }
 
     // ログイン成功 → 失敗回数リセット、最終ログイン更新

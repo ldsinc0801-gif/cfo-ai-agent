@@ -4,6 +4,7 @@
  */
 import { agentPageShell, esc } from './shared.js';
 import type { SidebarUser } from './shared.js';
+import { csrfFormHidden, getCurrentCsrfToken } from './security.js';
 
 export function renderGoogleSettingsHTML(opts: {
   user?: SidebarUser;
@@ -55,7 +56,7 @@ export function renderGoogleSettingsHTML(opts: {
           ${!isConfigured
             ? ''
             : isAuthenticated
-              ? '<form method="POST" action="/settings/google/disconnect" style="margin:0"><button type="submit" class="btn-secondary btn-sm" style="color:#ef4444;border-color:#ef4444">連携解除</button></form>'
+              ? `<form method="POST" action="/settings/google/disconnect" style="margin:0">${csrfFormHidden(getCurrentCsrfToken() || '')}<button type="submit" class="btn-secondary btn-sm" style="color:#ef4444;border-color:#ef4444">連携解除</button></form>`
               : '<a href="/settings/google/auth" class="btn-primary btn-sm">Googleアカウントを連携</a>'
           }
         </div>

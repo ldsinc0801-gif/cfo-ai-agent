@@ -1,6 +1,11 @@
 import { agentPageShell, esc } from './shared.js';
 import type { DocumentTemplate, GeneratedDocument, DocumentType, CompanySettings } from '../services/secretary-service.js';
 import type { CustomerBilling } from '../services/secretary-auto.js';
+import { csrfFormHidden, getCurrentCsrfToken } from './security.js';
+
+function csrfInput(): string {
+  return csrfFormHidden(getCurrentCsrfToken() || '');
+}
 
 const TYPE_LABELS: Record<DocumentType, string> = {
   invoice: '請求書', estimate: '見積書', contract: '契約書', application: '申込書',
@@ -41,6 +46,7 @@ ${opts.success ? `<div class="sec-success">${esc(opts.success)}</div>` : ''}
   </div>
   <div class="card-body">
     <form action="/agent/secretary/company-settings" method="post">
+      ${csrfInput()}
       <div class="company-settings-grid">
         <div class="settings-section">
           <h4>会社情報</h4>
@@ -102,6 +108,7 @@ ${detected.length > 0 ? `
           <div class="quick-name">${esc(t.name)}</div>
         </a>
         <form action="/agent/secretary/template/${t.id}/delete" method="post" class="quick-delete-form" onsubmit="return confirm('「${esc(t.name)}」を削除しますか？')">
+          ${csrfInput()}
           <button type="submit" class="btn-quick-delete" title="テンプレートを削除">×</button>
         </form>
       </div>`).join('')}
@@ -118,6 +125,7 @@ ${detected.length > 0 ? `
   <div class="card-header"><h3>顧客別 締め日・請求日設定</h3></div>
   <div class="card-body">
     <form action="/agent/secretary/billing-config" method="post">
+      ${csrfInput()}
       <table class="config-table" id="configTable">
         <thead><tr>
           <th>顧客名</th><th>締め日</th><th>請求日</th><th>支払期限</th><th></th>
@@ -164,6 +172,7 @@ ${opts.documents.length > 0 ? `
   <div class="card-header">
     <h3>作成済み書類（${opts.documents.length}件）</h3>
     <form action="/agent/secretary/documents/delete-all" method="post" style="margin:0" onsubmit="return confirm('全ての作成済み書類を削除しますか？')">
+      ${csrfInput()}
       <button type="submit" class="btn-secondary btn-sm" style="color:var(--red);border-color:var(--red);cursor:pointer">全件削除</button>
     </form>
   </div>
@@ -181,6 +190,7 @@ ${opts.documents.length > 0 ? `
             <a href="/agent/secretary/download/${d.id}" class="btn-secondary btn-sm">PDF</a>
             <a href="/agent/secretary/gmail/${d.id}" class="btn-secondary btn-sm">Gmail</a>
             <form action="/agent/secretary/document/${d.id}/delete" method="post" style="display:inline;margin:0" onsubmit="return confirm('この書類を削除しますか？')">
+              ${csrfInput()}
               <button type="submit" class="btn-secondary btn-sm" style="color:var(--red);border-color:var(--red);cursor:pointer">削除</button>
             </form>
           </td>
@@ -212,7 +222,7 @@ export function renderTemplateSetupHTML(error?: string): string {
 <style>${PAGE_CSS}</style>
 <div class="sec-banner"><h2>テンプレート登録</h2><p>会社のフォーマット（Excel/Word/PDF/画像）をアップロード</p></div>
 ${error ? `<div class="sec-error">${esc(error)}</div>` : ''}
-<form action="/agent/secretary/template/upload" method="post" enctype="multipart/form-data" class="card">
+<form action="/agent/secretary/template/upload?_csrf=${encodeURIComponent(getCurrentCsrfToken() || '')}" method="post" enctype="multipart/form-data" class="card">
   <div class="card-header"><h3>テンプレートファイル</h3></div>
   <div class="card-body">
     <div class="form-grid">
@@ -269,6 +279,7 @@ export function renderSecretaryFormHTML(opts: {
 ${error ? `<div class="sec-error">${esc(error)}</div>` : ''}
 
 <form action="/agent/secretary/generate" method="post" class="card">
+  ${csrfInput()}
   <input type="hidden" name="templateId" value="${template.id}"/>
   <div class="card-header"><h3>請求情報</h3></div>
   <div class="card-body">
@@ -381,6 +392,7 @@ export function renderGmailDraftHTML(doc: GeneratedDocument, error?: string, suc
 ${error ? `<div class="sec-error">${esc(error)}</div>` : ''}
 ${success ? `<div class="sec-success">${esc(success)}</div>` : ''}
 <form action="/agent/secretary/gmail-draft" method="post" class="card">
+  ${csrfInput()}
   <input type="hidden" name="docId" value="${doc.id}"/>
   <div class="card-header"><h3>メール内容</h3></div>
   <div class="card-body">

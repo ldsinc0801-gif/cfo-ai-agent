@@ -1,6 +1,11 @@
 import type { JournalEntry, ReceiptAnalysis } from '../services/receipt-service.js';
 import { agentPageShell, esc } from './shared.js';
 import { accountSelectOptions } from '../config/freee-accounts.js';
+import { csrfFormHidden, getCurrentCsrfToken } from './security.js';
+
+function csrfInput(): string {
+  return csrfFormHidden(getCurrentCsrfToken() || '');
+}
 
 export interface AccountingPageOptions {
   aiAvailable: boolean;
@@ -37,7 +42,7 @@ ${options.success ? `<div class="acc-success">${esc(options.success)}</div>` : '
       <span class="card-sub">画像 / PDF</span>
     </div>
     <div class="card-body">
-      <form action="/agent/accounting/analyze" method="post" enctype="multipart/form-data" id="receiptForm">
+      <form action="/agent/accounting/analyze?_csrf=${encodeURIComponent(getCurrentCsrfToken() || '')}" method="post" enctype="multipart/form-data" id="receiptForm">
         <input type="hidden" name="type" value="file"/>
         <div class="acc-dropzone" id="receiptDrop">
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="1.5">
@@ -71,7 +76,7 @@ ${options.success ? `<div class="acc-success">${esc(options.success)}</div>` : '
       <span class="card-sub">現金の領収書をまとめて処理</span>
     </div>
     <div class="card-body">
-      <form action="/agent/accounting/analyze-video" method="post" enctype="multipart/form-data" id="videoForm">
+      <form action="/agent/accounting/analyze-video?_csrf=${encodeURIComponent(getCurrentCsrfToken() || '')}" method="post" enctype="multipart/form-data" id="videoForm">
         <div class="acc-dropzone" id="videoDrop">
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="1.5">
             <polygon points="23 7 16 12 23 17 23 7"/>
@@ -388,9 +393,11 @@ ${entries.map((e, i) => `
 
     <!-- Actions -->
     <div class="result-actions">
-      <form action="/agent/accounting/send-freee" method="post" style="display:inline">
+      <form action="/agent/accounting/send-freee" method="post" style="display:inline" id="freeeForm">
+        ${csrfInput()}
         <input type="hidden" name="entries" value='${esc(JSON.stringify(entries))}'/>
-        <button type="submit" class="btn-primary" title="freee APIに仕訳を送信">
+        <input type="hidden" name="confirmed" value="1"/>
+        <button type="button" class="btn-primary" title="freee APIに仕訳を送信" onclick="openFreeeConfirm()">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
           freeeに送信
         </button>
@@ -410,6 +417,50 @@ ${entries.map((e, i) => `
       </div>
       <a href="/agent/accounting" class="btn-secondary">次の領収書を処理</a>
     </div>
+
+    <!-- freee送信確認モーダル -->
+    <div class="freee-modal-overlay" id="freeeConfirmModal" style="display:none">
+      <div class="freee-modal">
+        <div class="freee-modal-header">
+          <h3>freee に送信する前に確認してください</h3>
+        </div>
+        <div class="freee-modal-body">
+          <p class="freee-modal-warn">
+            <strong>※AI生成の仕訳です。</strong>送信後は freee 側で取消・修正が必要になります。<br>
+            内容に問題がないか必ずご確認のうえ、送信してください。
+          </p>
+          <div class="freee-modal-summary">
+            <div class="freee-summary-row"><span>送信件数</span><strong>${entries.length} 件</strong></div>
+            <div class="freee-summary-row"><span>合計金額</span><strong>${fmt(total)} 円</strong></div>
+            <div class="freee-summary-row"><span>対象期間</span><strong>${entries.length > 0 ? `${esc(entries[0].date)} 〜 ${esc(entries[entries.length - 1].date)}` : '-'}</strong></div>
+          </div>
+          <div class="freee-modal-detail">
+            <table class="freee-detail-table">
+              <thead><tr><th>日付</th><th>借方</th><th>金額</th><th>摘要</th></tr></thead>
+              <tbody>
+                ${entries.slice(0, 20).map(e => `<tr><td>${esc(e.date)}</td><td>${esc(e.debitAccount)}</td><td class="num">${fmt(e.amount)}円</td><td>${esc(e.description).slice(0, 24)}</td></tr>`).join('')}
+                ${entries.length > 20 ? `<tr><td colspan="4" style="text-align:center;color:#6b7280">…他 ${entries.length - 20} 件</td></tr>` : ''}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="freee-modal-actions">
+          <button type="button" class="btn-secondary" onclick="closeFreeeConfirm()">キャンセル</button>
+          <button type="button" class="btn-primary" id="freeeSubmitBtn" onclick="submitFreeeForm()">
+            freee に送信する
+          </button>
+        </div>
+      </div>
+    </div>
+    <script>
+    function openFreeeConfirm(){document.getElementById('freeeConfirmModal').style.display='flex';}
+    function closeFreeeConfirm(){document.getElementById('freeeConfirmModal').style.display='none';}
+    function submitFreeeForm(){
+      var btn=document.getElementById('freeeSubmitBtn');
+      btn.disabled=true;btn.textContent='送信中...';
+      document.getElementById('freeeForm').submit();
+    }
+    </script>
   </div>
 </div>`;
 }
@@ -473,6 +524,24 @@ const PAGE_CSS = `
 .chat-msg-ai{background:#ecf6f8;color:#1b7f8e;align-self:flex-start;border-bottom-left-radius:4px}
 .chat-msg-ai.error{background:#fef2f2;color:#991b1b}
 .chat-loading{align-self:flex-start;color:var(--text2);font-size:12px;padding:8px 0}
+
+.freee-modal-overlay{position:fixed;inset:0;background:rgba(15,23,42,0.5);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px}
+.freee-modal{background:#fff;border-radius:14px;max-width:640px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,0.2);overflow:hidden}
+.freee-modal-header{padding:20px 24px;border-bottom:1px solid var(--border);background:#fef3c7}
+.freee-modal-header h3{font-size:16px;font-weight:700;color:#92400e}
+.freee-modal-body{padding:20px 24px;overflow-y:auto;flex:1}
+.freee-modal-warn{font-size:13px;color:#7c2d12;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;margin-bottom:16px;line-height:1.7}
+.freee-modal-summary{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px 18px;margin-bottom:14px}
+.freee-summary-row{display:flex;justify-content:space-between;padding:4px 0;font-size:13px}
+.freee-summary-row span{color:var(--text2)}
+.freee-summary-row strong{font-weight:700;font-size:14px}
+.freee-modal-detail{max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:8px}
+.freee-detail-table{width:100%;border-collapse:collapse;font-size:12px}
+.freee-detail-table th{background:var(--bg);font-weight:600;color:var(--text2);padding:8px 10px;text-align:left;position:sticky;top:0;border-bottom:1px solid var(--border)}
+.freee-detail-table td{padding:6px 10px;border-bottom:1px solid #f3f4f6}
+.freee-detail-table td.num{text-align:right;font-variant-numeric:tabular-nums}
+.freee-modal-actions{padding:16px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;background:var(--bg)}
+.freee-modal-actions .btn-primary,.freee-modal-actions .btn-secondary{padding:10px 24px;font-size:14px}
 
 @media(max-width:768px){
   .acc-grid{grid-template-columns:1fr}

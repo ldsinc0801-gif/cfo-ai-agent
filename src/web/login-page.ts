@@ -3,7 +3,7 @@
  * パスワード変更ページ
  */
 
-export function renderLoginHTML(error?: string): string {
+export function renderLoginHTML(error?: string, csrfToken: string = ''): string {
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -116,6 +116,7 @@ export function renderLoginHTML(error?: string): string {
       <h2>ログイン</h2>
       ${error ? `<div class="error-msg">${escHtml(error)}</div>` : ''}
       <form method="POST" action="/auth/login" id="loginForm" onsubmit="return onSubmit()">
+        <input type="hidden" name="_csrf" value="${escHtml(csrfToken)}">
         <div class="fg">
           <label for="email">メールアドレス</label>
           <div class="input-wrap">
@@ -137,10 +138,13 @@ export function renderLoginHTML(error?: string): string {
 
     <div class="demo-section">
       <div class="demo-divider"><span>または</span></div>
-      <a href="/auth/demo" class="demo-btn">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-        デモ版を試す（ログイン不要）
-      </a>
+      <form method="POST" action="/auth/demo" style="margin:0">
+        <input type="hidden" name="_csrf" value="${escHtml(csrfToken)}">
+        <button type="submit" class="demo-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          デモ版を試す（ログイン不要）
+        </button>
+      </form>
       <p class="demo-note">サンプルデータで全機能をお試しいただけます</p>
     </div>
 
@@ -166,7 +170,7 @@ function onSubmit(){
 </html>`;
 }
 
-export function renderChangePasswordHTML(error?: string, success?: string): string {
+export function renderChangePasswordHTML(error?: string, success?: string, csrfToken: string = ''): string {
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -239,6 +243,7 @@ export function renderChangePasswordHTML(error?: string, success?: string): stri
       ${error ? `<div class="error-msg">${escHtml(error)}</div>` : ''}
       ${success ? `<div style="background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.3);color:#86efac;padding:12px 16px;border-radius:8px;font-size:13px;margin-bottom:20px">${escHtml(success)}</div>` : ''}
       <form method="POST" action="/auth/change-password" id="cpForm" onsubmit="return onCpSubmit()">
+        <input type="hidden" name="_csrf" value="${escHtml(csrfToken)}">
         <div class="fg">
           <label for="newPassword">新しいパスワード</label>
           <div class="input-wrap">
