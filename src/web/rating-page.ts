@@ -468,9 +468,9 @@ export function renderRatingHTML(
     </svg>
     <label class="btn-upload" style="margin-bottom:8px">
       決算書をアップロードして分析
-      <input type="file" name="file" accept=".pdf,.csv,.xlsx" hidden id="financeFileInput"/>
+      <input type="file" name="files" accept=".pdf,.csv,.xlsx" hidden id="financeFileInput" multiple/>
     </label>
-    <p>PDF・CSV・Excelの決算書を財務分析AIエージェントが読み取り、自動で銀行格付を算出します</p>
+    <p>PDF・CSV・Excelの決算書を財務分析AIエージェントが読み取り、自動で銀行格付を算出します（<strong>BS・PLが別ファイルでも複数選択可</strong>）</p>
     ${!options.aiAvailable ? '<p style="color:var(--red);font-size:12px;margin-top:4px">Vertex AI の認証が未設定のため、AI分析は利用できません</p>' : ''}
   </div>
 
@@ -551,19 +551,23 @@ export function renderRatingHTML(
   });
   dz.addEventListener('drop', function(e){
     var files = e.dataTransfer.files;
-    if(files.length > 0){ fileInput.files = files; showConfirm(files[0]); }
+    if(files.length > 0){ fileInput.files = files; showConfirm(fileInput.files); }
   });
 
   fileInput.addEventListener('change', function(){
-    if(fileInput.files.length > 0) showConfirm(fileInput.files[0]);
+    if(fileInput.files.length > 0) showConfirm(fileInput.files);
   });
 
-  function showConfirm(file){
-    nameEl.textContent = file.name;
-    var size = file.size;
-    sizeEl.textContent = size < 1024*1024
-      ? (size/1024).toFixed(1) + ' KB'
-      : (size/1024/1024).toFixed(1) + ' MB';
+  function showConfirm(files){
+    var totalSize = 0;
+    var namesArr = [];
+    for(var i=0;i<files.length;i++){ totalSize += files[i].size; namesArr.push(files[i].name); }
+    nameEl.textContent = files.length > 1
+      ? files.length + '個のファイル: ' + namesArr.join('、')
+      : namesArr[0];
+    sizeEl.textContent = totalSize < 1024*1024
+      ? (totalSize/1024).toFixed(1) + ' KB'
+      : (totalSize/1024/1024).toFixed(1) + ' MB';
     step1.style.display = 'none';
     step2.style.display = 'flex';
   }

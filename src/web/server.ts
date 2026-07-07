@@ -7,6 +7,7 @@ import session from 'express-session';
 import helmet from 'helmet';
 import crypto from 'crypto';
 import multer from 'multer';
+import iconv from 'iconv-lite';
 import path from 'path';
 import fs from 'fs';
 import { ReportBuilder } from '../reports/report-builder.js';
@@ -1441,9 +1442,32 @@ app.get('/agent/finance', async (req, res) => {
 // 財務分析：決算書アップロード → AI分析
 
 /**
+ * CSV/TXT の文字コードを自動判定してデコードする。
+ * まず UTF-8 として読み、変換不能文字(U+FFFD)が出たら日本語会計ソフト(弥生等)で
+ * 多い Shift_JIS(CP932) とみなして再デコードする。UTF-8(BOM有無問わず)や freee 書き出しは
+ * そのまま UTF-8 で扱う。
+ */
+function decodeUploadedText(buf: Buffer): string {
+  const utf8 = buf.toString('utf-8');
+  if (utf8.includes('�')) {
+    try {
+      const sjis = iconv.decode(buf, 'Shift_JIS');
+      // 再デコードで U+FFFD が減った(=SJISの方が妥当)なら採用
+      if (!sjis.includes('�') || sjis.split('�').length < utf8.split('�').length) {
+        return sjis;
+      }
+    } catch {
+      /* フォールバックは UTF-8 */
+    }
+  }
+  return utf8;
+}
+
+/**
  * 複数アップロードファイルを1つのテキストに結合する。
  * BS(貸借対照表)と PL(損益計算書)が別CSV/PDFでも、まとめて1つの資料として
  * AI に渡せるようにする。2件以上のときはファイル名の見出しを付けて区切る。
+ * CSV/TXT は文字コードを自動判定(UTF-8/Shift_JIS)する。
  */
 async function readUploadedFilesAsText(
   files: Express.Multer.File[],
@@ -1456,7 +1480,7 @@ async function readUploadedFilesAsText(
     const raw = fs.readFileSync(f.path);
     const t = ext === '.pdf'
       ? await anthropicService.extractTextFromPDF(raw, f.originalname)
-      : raw.toString('utf-8');
+      : decodeUploadedText(raw);
     parts.push(files.length > 1 ? `===== ファイル: ${f.originalname} =====\n${t}` : t);
   }
   return { text: parts.join('\n\n'), names };
@@ -1525,9 +1549,10 @@ app.post('/agent/finance/upload-trend', upload.array('files', 10), async (req, r
   }
 });
 
-app.post('/agent/finance/analyze', upload.single('file'), async (req, res) => {
+app.post('/agent/finance/analyze', upload.array('files', 10), async (req, res) => {
   try {
-    if (!req.file) {
+    const files = (req.files as Express.Multer.File[] | undefined) || [];
+    if (files.length === 0) {
       res.status(400).send('ファイルが選択されていません');
       return;
     }
@@ -1537,23 +1562,11 @@ app.post('/agent/finance/analyze', upload.single('file'), async (req, res) => {
       return;
     }
 
-    const filePath = req.file.path;
-    const fileName = req.file.originalname;
-    const ext = path.extname(fileName).toLowerCase();
+    // 複数ファイル（BS/PLが別ファイル等）を結合。CSV/TXT は文字コード自動判定。
+    const { text: documentText, names } = await readUploadedFilesAsText(files);
+    const fileName = names.join(', ');
 
     logger.info(`決算書分析開始: ${fileName}`);
-
-    let documentText: string;
-
-    if (ext === '.pdf') {
-      // PDFはClaude Vision APIで読み取り
-      const pdfBuffer = fs.readFileSync(filePath);
-      documentText = await anthropicService.extractTextFromPDF(pdfBuffer, fileName);
-    } else if (ext === '.csv') {
-      documentText = fs.readFileSync(filePath, 'utf-8');
-    } else {
-      documentText = fs.readFileSync(filePath, 'utf-8');
-    }
 
     // AIで財務データを抽出
     const { ratingInput, extractionNotes } = await anthropicService.extractFinancialData(documentText, fileName);
