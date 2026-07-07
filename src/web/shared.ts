@@ -68,7 +68,6 @@ export function renderSidebar(active: string, companyName?: string, user?: Sideb
   const agents = [
     { id: 'finance', href: '/agent/finance', icon: ICONS.barChart, label: '財務分析AI' },
     { id: 'plan', href: '/plan', icon: ICONS.star, label: '事業計画AI' },
-    { id: 'accounting', href: '/agent/accounting', icon: ICONS.calculator, label: '会計AI' },
     { id: 'funding', href: '/agent/funding', icon: ICONS.bank, label: '資金調達AI' },
     { id: 'secretary', href: '/agent/secretary', icon: ICONS.file, label: '秘書AI' },
   ];

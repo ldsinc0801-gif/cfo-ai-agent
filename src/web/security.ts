@@ -134,6 +134,24 @@ export function csrfBootstrapScript(token: string): string {
     init.headers=headers;
     return origFetch(input,init);
   };
+  // native <form method="post"> 送信にも CSRF を自動付与（同一オリジンのみ）。
+  // urlencoded はbody に hidden、multipart は検証前にbodyを読めないため action のクエリに付ける。
+  document.addEventListener('submit',function(e){
+    var form=e.target;
+    if(!form||String(form.method||'GET').toUpperCase()!=='POST')return;
+    var action=form.getAttribute('action')||window.location.href;
+    try{if(new URL(action,window.location.origin).origin!==window.location.origin)return;}catch(_){}
+    var enctype=String(form.getAttribute('enctype')||'').toLowerCase();
+    if(enctype.indexOf('multipart')!==-1){
+      if(action.indexOf('_csrf=')===-1){
+        form.setAttribute('action',action+(action.indexOf('?')===-1?'?':'&')+'_csrf='+encodeURIComponent(TOKEN));
+      }
+    }else if(!form.querySelector('input[name="_csrf"]')){
+      var inp=document.createElement('input');
+      inp.type='hidden';inp.name='_csrf';inp.value=TOKEN;
+      form.appendChild(inp);
+    }
+  },true);
 })();
 </script>`;
 }
