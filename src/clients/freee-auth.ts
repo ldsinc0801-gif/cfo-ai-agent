@@ -22,9 +22,20 @@ export class FreeeAuthClient {
   private accessToken: string;
   private refreshToken: string;
 
-  constructor(tokens?: { accessToken: string; refreshToken: string }) {
+  /**
+   * トークン更新(ローテーション)時に呼ばれるコールバック。
+   * freee はリフレッシュの度に refresh_token を再発行し旧トークンを無効化するため、
+   * 新トークンを永続化しないと次回リフレッシュで失敗して連携が切れる。
+   */
+  private onTokenRefresh?: (t: { accessToken: string; refreshToken: string }) => void | Promise<void>;
+
+  constructor(
+    tokens?: { accessToken: string; refreshToken: string },
+    onTokenRefresh?: (t: { accessToken: string; refreshToken: string }) => void | Promise<void>,
+  ) {
     this.accessToken = tokens?.accessToken || config.freee.accessToken;
     this.refreshToken = tokens?.refreshToken || config.freee.refreshToken;
+    this.onTokenRefresh = onTokenRefresh;
   }
 
   /** 認可URLを生成（初回認証用） */
@@ -78,6 +89,12 @@ export class FreeeAuthClient {
       this.accessToken = response.data.access_token;
       this.refreshToken = response.data.refresh_token;
       logger.info('アクセストークンを更新しました');
+      // ローテーションされた新トークンを永続化（保存失敗は連携継続を優先してログのみ）
+      try {
+        await this.onTokenRefresh?.({ accessToken: this.accessToken, refreshToken: this.refreshToken });
+      } catch (e) {
+        logger.error('freeeトークンの永続化に失敗しました', e);
+      }
     } catch (error) {
       logger.error('トークン更新に失敗しました', error);
       throw new FreeeAuthError('トークンの更新に失敗しました。再認証が必要です。');
@@ -86,6 +103,10 @@ export class FreeeAuthClient {
 
   getAccessToken(): string {
     return this.accessToken;
+  }
+
+  getRefreshToken(): string {
+    return this.refreshToken;
   }
 
   hasValidToken(): boolean {

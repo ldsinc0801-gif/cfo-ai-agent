@@ -60,6 +60,32 @@ export async function saveOAuthToken(tenantId: TenantId, provider: OAuthProvider
   }
 }
 
+/**
+ * access/refresh トークンだけを更新する（extra=company_id等は保持）。
+ * freee 等のリフレッシュトークン・ローテーション時に使う。
+ */
+export async function updateOAuthTokens(
+  tenantId: TenantId,
+  provider: OAuthProvider,
+  tokens: { accessToken: string; refreshToken: string },
+): Promise<void> {
+  if (!isSupabaseAvailable()) return;
+  try {
+    const { error } = await getSupabase()
+      .from('tenant_oauth_tokens')
+      .update({
+        access_token: tokens.accessToken,
+        refresh_token: tokens.refreshToken,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('tenant_id', tenantId)
+      .eq('provider', provider);
+    if (error) logger.warn(`OAuthトークン更新失敗 (${provider}):`, error.message);
+  } catch (e) {
+    logger.warn(`OAuthトークン更新失敗 (${provider}):`, e);
+  }
+}
+
 /** テナントのOAuthトークンを削除（連携解除） */
 export async function deleteOAuthToken(tenantId: TenantId, provider: OAuthProvider): Promise<void> {
   if (!isSupabaseAvailable()) return;

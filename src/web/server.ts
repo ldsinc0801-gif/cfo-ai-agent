@@ -726,7 +726,7 @@ const upload = multer({
   limits: { fileSize: 200 * 1024 * 1024 },  // 動画対応のため200MB
 });
 
-import { getOAuthToken, saveOAuthToken, updateOAuthExtra, deleteOAuthToken } from '../services/oauth-token-service.js';
+import { getOAuthToken, saveOAuthToken, updateOAuthExtra, updateOAuthTokens, deleteOAuthToken } from '../services/oauth-token-service.js';
 
 /** freeeトークンを取得（テナント分離、Supabase） */
 async function getFreeeToken(tenantId?: TenantId): Promise<{ access_token: string; refresh_token: string; company_id?: number; company_name?: string } | null> {
@@ -739,6 +739,20 @@ async function getFreeeToken(tenantId?: TenantId): Promise<{ access_token: strin
     company_id: token.extra?.company_id,
     company_name: token.extra?.company_name,
   };
+}
+
+/**
+ * freee 認証クライアントを生成。リフレッシュ時にローテーションされる新トークンを
+ * DBへ自動保存する（tenantId があれば）。これを通さないと約6時間ごとに連携が切れる。
+ */
+function makeFreeeAuth(
+  tenantId: TenantId | undefined,
+  token: { access_token: string; refresh_token: string },
+): FreeeAuthClient {
+  return new FreeeAuthClient(
+    { accessToken: token.access_token, refreshToken: token.refresh_token },
+    tenantId ? (t) => updateOAuthTokens(tenantId, 'freee', t) : undefined,
+  );
 }
 
 /** 選択中の事業所IDを取得 */
@@ -787,10 +801,7 @@ async function buildReport(year?: number, month?: number, isDemo: boolean = fals
   const token = await getFreeeToken(tenantId);
   if (token) {
     try {
-      const auth = new FreeeAuthClient({
-        accessToken: token.access_token,
-        refreshToken: token.refresh_token,
-      });
+      const auth = makeFreeeAuth(tenantId, token);
       const freeeService = new FreeeService(auth);
 
       // 保存済みの事業所IDを使用、なければ最初の事業所
@@ -847,10 +858,7 @@ async function buildTrendData(endYear?: number, endMonth?: number, monthCount: n
   const token = await getFreeeToken(tenantId);
   if (token) {
     try {
-      const auth = new FreeeAuthClient({
-        accessToken: token.access_token,
-        refreshToken: token.refresh_token,
-      });
+      const auth = makeFreeeAuth(tenantId, token);
       const freeeService = new FreeeService(auth);
 
       const savedCompanyId = await getSelectedCompanyId(tenantId);
@@ -933,10 +941,7 @@ async function buildPeriodReport(baseReport: any, fromMonth: string, toMonth: st
   if (cached) return cached;
 
   try {
-    const auth = new FreeeAuthClient({
-      accessToken: token.access_token,
-      refreshToken: token.refresh_token,
-    });
+    const auth = makeFreeeAuth(tenantId, token);
     const freeeService = new FreeeService(auth);
 
     const companyId = await getSelectedCompanyId(tenantId);
@@ -1670,10 +1675,7 @@ app.get('/api/finance/freee', async (req, res) => {
     if (token && await getSelectedCompanyId(getActiveTenantId(req) || undefined)) {
       // freee実データからRatingInputを組み立てる
       // 会計年度の累計PL + 最新月のBSを取得
-      const auth = new FreeeAuthClient({
-        accessToken: token.access_token,
-        refreshToken: token.refresh_token,
-      });
+      const auth = makeFreeeAuth(getActiveTenantId(req) || undefined, token);
       const freeeService = new FreeeService(auth);
       const companyId = await getSelectedCompanyId(getActiveTenantId(req) || undefined);
       if (!companyId) { res.status(400).json({ error: '事業所が未選択です' }); return; }
@@ -2405,13 +2407,14 @@ async function sendEntriesToFreee(
   entries: JournalEntry[],
   companyId: number,
   freeeToken: { access_token: string; refresh_token: string },
+  tenantId?: TenantId,
 ): Promise<{ results: string[]; sentCount: number; skipCount: number }> {
   const { FreeeAuthClient } = await import('../clients/freee-auth.js');
   const { FreeeApiClient } = await import('../clients/freee-api.js');
-  const auth = new FreeeAuthClient({
-    accessToken: freeeToken.access_token,
-    refreshToken: freeeToken.refresh_token,
-  });
+  const auth = new FreeeAuthClient(
+    { accessToken: freeeToken.access_token, refreshToken: freeeToken.refresh_token },
+    tenantId ? (t) => updateOAuthTokens(tenantId, 'freee', t) : undefined,
+  );
   const apiClient = new FreeeApiClient(auth);
 
   const results: string[] = [];
@@ -2529,7 +2532,7 @@ app.post('/agent/accounting/send-freee', express.urlencoded({ extended: true }),
       return;
     }
 
-    const { results, sentCount, skipCount } = await sendEntriesToFreee(entries, companyId, token);
+    const { results, sentCount, skipCount } = await sendEntriesToFreee(entries, companyId, token, getActiveTenantId(req) || undefined);
 
     // 送信成功した（1件でも）ならバッチを自動作成 + freee_sent_at をマーク
     const tid = getActiveTenantId(req);
@@ -2615,7 +2618,7 @@ app.post('/agent/accounting/batch/:id/send-freee', express.urlencoded({ extended
       partnerName: e.partnerName,
       receiptType: e.receiptType || '領収書',
     }));
-    const { sentCount, skipCount } = await sendEntriesToFreee(entries, companyId, token);
+    const { sentCount, skipCount } = await sendEntriesToFreee(entries, companyId, token, tid);
     if (sentCount > 0) {
       await repo.markBatchFreeeSent(tid, req.params.id, skipCount);
     }
@@ -3172,10 +3175,7 @@ app.get('/settings/company', async (req, res) => {
       return;
     }
 
-    const auth = new FreeeAuthClient({
-      accessToken: token!.access_token,
-      refreshToken: token!.refresh_token,
-    });
+    const auth = makeFreeeAuth(getActiveTenantId(req) || undefined, token!);
     const freeeService = new FreeeService(auth);
     const companies = await freeeService.getCompanies();
     const selectedId = await getSelectedCompanyId(getActiveTenantId(req) || undefined);
@@ -3322,10 +3322,7 @@ async function loadFreeeContextForChat(tenantId?: TenantId): Promise<void> {
   }
 
   try {
-    const auth = new FreeeAuthClient({
-      accessToken: token.access_token,
-      refreshToken: token.refresh_token,
-    });
+    const auth = makeFreeeAuth(tenantId, token);
     const freeeService = new FreeeService(auth);
 
     const savedCompanyId = await getSelectedCompanyId(tenantId);
