@@ -3623,6 +3623,17 @@ ${renderSidebar('dashboard')}
       <button type="button" class="upload-modal-close" onclick="document.getElementById('uploadModal').classList.remove('open');resetUploadChoice()">&times;</button>
     </div>
     <div class="upload-modal-body">
+      <style>
+        .upload-dropzone{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+          border:2px dashed #cbd5e1;border-radius:12px;padding:22px 16px;cursor:pointer;text-align:center;
+          background:#f8fafc;transition:border-color .15s,background .15s}
+        .upload-dropzone:hover{border-color:#2298ae;background:#f0f9fb}
+        .upload-dropzone.drag{border-color:#2298ae;background:#e6f4f7}
+        .upload-dropzone input[type=file]{display:none}
+        .upload-dz-icon{font-size:22px;line-height:1}
+        .upload-dz-text{font-size:13px;color:#64748b;line-height:1.5}
+        .upload-dz-files{font-size:12px;color:#1b7f8e;font-weight:700;word-break:break-all;margin-top:2px}
+      </style>
       ${uploadError ? `<div class="upload-error">${escMsg(uploadError)}</div>` : ''}
       <p class="upload-modal-intro">登録する資料の種類を選択してください。資料に応じてダッシュボードの表示内容が変わります。</p>
       <div class="upload-choice-grid">
@@ -3652,8 +3663,13 @@ ${renderSidebar('dashboard')}
       <div class="upload-form-section" id="uploadForm-trend">
         <h4>月次推移試算表のアップロード</h4>
         <form method="POST" action="/agent/finance/upload-trend?_csrf=${encodeURIComponent(csrf)}" enctype="multipart/form-data" onsubmit="onUploadSubmit(this)">
-          <div class="upload-form-row">
-            <input type="file" name="files" accept=".pdf,.csv,.txt" multiple required>
+          <label class="upload-dropzone">
+            <input type="file" name="files" accept=".pdf,.csv,.txt" multiple>
+            <span class="upload-dz-icon">📎</span>
+            <span class="upload-dz-text">ファイルをここにドラッグ&ドロップ<br>またはクリックして選択（複数可）</span>
+            <span class="upload-dz-files"></span>
+          </label>
+          <div class="upload-form-row" style="justify-content:flex-end;margin-top:12px">
             <button type="submit">アップロードして解析</button>
           </div>
           <p class="upload-form-hint">PDF / CSV / TXT 対応。<strong>複数ファイル選択可</strong>（BS・PLが別ファイルでもまとめて選べます）。Gemini AI が月ごとのPL/BSを抽出して保存します（数十秒かかります）。</p>
@@ -3663,8 +3679,13 @@ ${renderSidebar('dashboard')}
       <div class="upload-form-section" id="uploadForm-snapshot">
         <h4>単月試算表 / 決算書のアップロード</h4>
         <form method="POST" action="/agent/finance/upload-snapshot?_csrf=${encodeURIComponent(csrf)}" enctype="multipart/form-data" onsubmit="onUploadSubmit(this)">
-          <div class="upload-form-row">
-            <input type="file" name="files" accept=".pdf,.csv,.txt" multiple required>
+          <label class="upload-dropzone">
+            <input type="file" name="files" accept=".pdf,.csv,.txt" multiple>
+            <span class="upload-dz-icon">📎</span>
+            <span class="upload-dz-text">ファイルをここにドラッグ&ドロップ<br>またはクリックして選択（複数可）</span>
+            <span class="upload-dz-files"></span>
+          </label>
+          <div class="upload-form-row" style="justify-content:flex-end;margin-top:12px">
             <button type="submit">アップロードして解析</button>
           </div>
           <p class="upload-form-hint">PDF / CSV / TXT 対応。<strong>複数ファイル選択可</strong>（貸借対照表と損益計算書が別CSVでもまとめて選べます）。Gemini AI が単月のPL/BSを抽出して保存します。</p>
@@ -3685,11 +3706,38 @@ function resetUploadChoice(){
   document.querySelectorAll('.upload-form-section').forEach(function(s){s.classList.remove('active');});
 }
 function onUploadSubmit(form){
+  var input=form.querySelector('input[type=file]');
+  if(!input || !input.files || input.files.length===0){
+    if(window.__toast) window.__toast('ファイルを選択してください','error'); else alert('ファイルを選択してください');
+    return false;
+  }
   var btn=form.querySelector('button[type=submit]');
   btn.disabled=true;btn.textContent='解析中...（数十秒かかります）';
   if(window.__showLoading) window.__showLoading('AIが資料を解析しています', 'PDFの読取〜PL/BS抽出に30秒〜1分程度かかります');
   return true;
 }
+// ドラッグ&ドロップ（複数ファイル）
+document.querySelectorAll('.upload-dropzone').forEach(function(dz){
+  var input=dz.querySelector('input[type=file]');
+  var filesEl=dz.querySelector('.upload-dz-files');
+  function renderNames(){
+    if(!input.files || !input.files.length){ filesEl.textContent=''; return; }
+    var arr=[]; for(var i=0;i<input.files.length;i++) arr.push(input.files[i].name);
+    filesEl.textContent = input.files.length+'個のファイル: '+arr.join('、');
+  }
+  ['dragenter','dragover'].forEach(function(ev){
+    dz.addEventListener(ev,function(e){e.preventDefault();e.stopPropagation();dz.classList.add('drag');});
+  });
+  ['dragleave','drop'].forEach(function(ev){
+    dz.addEventListener(ev,function(e){e.preventDefault();e.stopPropagation();dz.classList.remove('drag');});
+  });
+  dz.addEventListener('drop',function(e){
+    if(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length){
+      input.files=e.dataTransfer.files; renderNames();
+    }
+  });
+  input.addEventListener('change',renderNames);
+});
 </script>
 </body></html>`;
 }
