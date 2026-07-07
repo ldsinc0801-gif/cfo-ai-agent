@@ -887,8 +887,22 @@ async function buildTrendData(endYear?: number, endMonth?: number, monthCount: n
     }
   }
 
-  // freee未接続・デモモードOFF → データなしを返す
-  logger.info('freee未接続: トレンドデータなし');
+  // freee未接続 → ダッシュボードに取り込んだ実績(monthly_actuals)を使う
+  if (tenantId) {
+    try {
+      const imported = await repo.getAllMonthlyActuals(tenantId);
+      if (imported.length > 0) {
+        const plan = await planAnalysisService.getPlan(tenantId);
+        const result = { months: imported.slice(-monthCount), targets: plan.targets };
+        setCache(cacheKey, result);
+        logger.info(`取込データでトレンド取得: ${imported.length}か月分から直近${monthCount}か月`);
+        return result;
+      }
+    } catch (e) {
+      logger.warn('取込トレンドデータ取得に失敗:', e instanceof Error ? e.message : e);
+    }
+  }
+  logger.info('freee未接続・取込データなし: トレンドデータなし');
   return { months: [], targets: [] };
 }
 
@@ -1212,9 +1226,11 @@ app.get('/report/pdf', async (req, res) => {
 // 事業計画AIエージェント
 app.get('/plan', async (req, res) => {
   try {
-    const trend = await buildTrendData(undefined, undefined, 6, req.session.user?.id === 'demo-user', getActiveTenantId(req) || undefined);
+    const planTid = getActiveTenantId(req);
+    const trend = await buildTrendData(undefined, undefined, 6, req.session.user?.id === 'demo-user', planTid || undefined);
     const files = getUploadedFiles();
-    res.send(renderPlanHTML(trend, files));
+    const fiscalMonth = planTid ? (await repo.getTenantFiscalMonth(asTenantId(planTid))) ?? 3 : 3;
+    res.send(renderPlanHTML(trend, files, fiscalMonth));
   } catch (error) {
     logger.error('事業計画ページエラー', error);
     res.status(500).send('ページの生成に失敗しました');

@@ -69,10 +69,17 @@ function calcActualKpi(months: MonthlySnapshot[], kpi: AnnualKpiTarget) {
 /**
  * 事業計画AIエージェントページのHTMLを生成する
  */
-export function renderPlanHTML(trend: TrendData, uploadedFiles: string[]): string {
+export function renderPlanHTML(trend: TrendData, uploadedFiles: string[], fiscalYearEndMonth: number = 3): string {
   const targets = trend.targets;
   const kpi = loadAnnualKpi();
   const actual = calcActualKpi(trend.months, kpi);
+
+  // 会社情報の決算月に合わせた「◯◯年{決算月}月期」の選択肢（当年±2）
+  const endMonth = fiscalYearEndMonth >= 1 && fiscalYearEndMonth <= 12 ? fiscalYearEndMonth : 3;
+  const fyBase = new Date().getFullYear();
+  const fiscalYearOptions = [fyBase - 2, fyBase - 1, fyBase, fyBase + 1, fyBase + 2].map(
+    (y) => `${y}年${endMonth}月期`,
+  );
 
   // ロカベンベンチマークデータを読み込み
   let locabenData = { categories: [], benchmarks: {} };
@@ -269,7 +276,7 @@ ${uploadedFiles.map(f => `
               <div class="kpi-field">
                 <label>目標年度</label>
                 <select id="kpiFiscalYear">
-                  ${['2024年3月期','2025年3月期','2026年3月期','2027年3月期','2028年3月期'].map(y =>
+                  ${fiscalYearOptions.map(y =>
                     `<option value="${y}" ${y === kpi.fiscalYear ? 'selected' : ''}>${y}</option>`
                   ).join('')}
                 </select>
