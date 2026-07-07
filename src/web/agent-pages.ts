@@ -8,6 +8,7 @@ import type { ImportedMetrics } from '../domain/finance/imported-metrics.js';
 export function renderBankMetricsCard(m: ImportedMetrics): string {
   const fmtPct = (v: number | null) => (v === null ? '—' : v.toFixed(1) + '%');
   const fmtMonths = (v: number | null) => (v === null ? '—' : v.toFixed(1) + 'か月');
+  const fmtYears = (v: number | null) => (v === null ? '算出不可' : v === 0 ? '無借金' : v.toFixed(1) + '年');
   const period = `${m.latest.year}年${m.latest.month}月`;
   const row = (label: string, value: string, sub: string) => `
     <div style="display:flex;justify-content:space-between;align-items:baseline;padding:10px 0;border-bottom:1px solid var(--border)">
@@ -21,11 +22,11 @@ export function renderBankMetricsCard(m: ImportedMetrics): string {
       ${row('自己資本比率', fmtPct(m.equityRatio), '純資産 ÷ 総資産。20%以上が一つの目安')}
       ${row('流動比率', fmtPct(m.currentRatio), '流動資産 ÷ 流動負債。120%以上が目安')}
       ${row('現預金月商倍率', fmtMonths(m.cashMonthsRatio), '現預金 ÷ 月商。1〜2か月以上で安心')}
+      ${row('債務償還年数', fmtYears(m.debtRepaymentYears), '有利子負債 ÷(経常利益+減価償却費)。10年以内が目安')}
+      ${row('借入依存度', fmtPct(m.interestDependency), '有利子負債 ÷ 総資産')}
       ${row('営業利益率', fmtPct(m.operatingMargin), '営業利益 ÷ 売上')}
       ${row('経常利益率', fmtPct(m.ordinaryMargin), '経常利益 ÷ 売上')}
-      <div style="margin-top:14px;font-size:12px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;line-height:1.6">
-        <strong>債務償還年数・借入依存度</strong>は<strong>有利子負債</strong>のデータが必要です。有利子負債を含む決算書の取込、または freee 連携で表示できます。
-      </div>
+      ${m.interestBearingDebt <= 0 ? `<div style="margin-top:14px;font-size:12px;color:#6b7280;background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:10px 12px;line-height:1.6">有利子負債が 0 として取り込まれています。借入がある場合は、有利子負債（借入金）が記載された決算書を取り込むと債務償還年数・借入依存度が正しく算出されます。</div>` : ''}
     </div>
   </div>`;
 }

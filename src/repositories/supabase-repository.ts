@@ -31,6 +31,10 @@ export async function upsertMonthlyActual(tenantId: TenantId, data: MonthlySnaps
       current_liabilities: data.currentLiabilities,
       total_assets: data.totalAssets,
       net_assets: data.netAssets,
+      interest_bearing_debt: data.interestBearingDebt ?? 0,
+      net_income: data.netIncome ?? 0,
+      depreciation: data.depreciation ?? 0,
+      interest_expense: data.interestExpense ?? 0,
     }, { onConflict: 'tenant_id,year,month' });
 
   if (error) throw new Error(`月次実績の保存に失敗: ${error.message}`);
@@ -82,6 +86,10 @@ function mapSnapshot(r: any): MonthlySnapshot {
     currentLiabilities: r.current_liabilities,
     totalAssets: r.total_assets,
     netAssets: r.net_assets,
+    interestBearingDebt: r.interest_bearing_debt ?? 0,
+    netIncome: r.net_income ?? 0,
+    depreciation: r.depreciation ?? 0,
+    interestExpense: r.interest_expense ?? 0,
   };
 }
 

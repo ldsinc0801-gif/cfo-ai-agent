@@ -16,8 +16,9 @@ import { createMockTrendData } from '../../tests/fixtures/mock-trend.js';
 import { renderDashboardHTML } from './dashboard-renderer.js';
 import { renderReportHTML } from './html-renderer.js';
 import { renderPlanHTML } from './plan-renderer.js';
-import { renderFinanceAgentHTML, renderAccountingAgentHTML, renderFundingAgentHTML, renderFinanceImportedHTML } from './agent-pages.js';
+import { renderFinanceAgentHTML, renderAccountingAgentHTML, renderFundingAgentHTML } from './agent-pages.js';
 import { computeImportedMetrics } from '../domain/finance/imported-metrics.js';
+import { buildRatingInputFromSnapshots } from '../domain/finance/imported-rating.js';
 import { renderAccountingPageHTML } from './accounting-page.js';
 import { renderChatHTML } from './chat-page.js';
 import { renderTaskPageHTML } from './task-page.js';
@@ -1435,12 +1436,21 @@ app.get('/agent/finance', async (req, res) => {
       res.redirect('/agent/finance/freee');
       return;
     }
-    // freee未接続 → ダッシュボード取込データがあれば主要指標を表示
+    // freee未接続 → ダッシュボード取込データがあれば、それで129点満点の格付を表示
     const finTid = getActiveTenantId(req);
     if (finTid) {
       const snapshots = await repo.getAllMonthlyActuals(asTenantId(finTid));
-      const metrics = computeImportedMetrics(snapshots);
-      if (metrics) { res.send(renderFinanceImportedHTML(metrics)); return; }
+      const input = buildRatingInputFromSnapshots(snapshots);
+      if (input) {
+        const rating = calculateBankRating(input);
+        const additional = calculateAdditionalMetrics(input);
+        res.send(renderRatingHTML(rating, additional, {
+          aiAvailable: anthropicService.isAvailable(),
+          aiCommentary: null,
+          source: 'upload',
+        }));
+        return;
+      }
     }
     // 取込データも無い → データなしメッセージ
     res.send(renderNoDataPage('財務分析AI', '財務分析を行うには、freee APIとの連携、またはダッシュボードでの決算書・試算表の取込が必要です。'));

@@ -202,6 +202,10 @@ ${additionalJson}
   "currentLiabilities": 流動負債,
   "totalAssets": 総資産,
   "netAssets": 純資産,
+  "interestBearingDebt": 有利子負債（短期借入金＋長期借入金＋社債等。無ければ0）,
+  "netIncome": 当期純利益,
+  "depreciation": 減価償却費,
+  "interestExpense": 支払利息,
   "extractionNotes": ["注意点や推定箇所"]
 }
 
@@ -239,6 +243,10 @@ JSONのみ返してください。`;
         currentLiabilities: p.currentLiabilities ?? 0,
         totalAssets: p.totalAssets ?? 0,
         netAssets: p.netAssets ?? 0,
+        interestBearingDebt: p.interestBearingDebt ?? 0,
+        netIncome: p.netIncome ?? 0,
+        depreciation: p.depreciation ?? 0,
+        interestExpense: p.interestExpense ?? 0,
       },
       extractionNotes: p.extractionNotes || [],
     };
@@ -269,7 +277,8 @@ JSONのみ返してください。`;
       "revenue": ..., "costOfSales": ..., "grossProfit": ...,
       "sgaExpenses": ..., "operatingIncome": ..., "ordinaryIncome": ...,
       "cashAndDeposits": ..., "currentAssets": ..., "currentLiabilities": ...,
-      "totalAssets": ..., "netAssets": ...
+      "totalAssets": ..., "netAssets": ...,
+      "interestBearingDebt": 有利子負債, "netIncome": 当期純利益, "depreciation": 減価償却費, "interestExpense": 支払利息
     }
   ],
   "extractionNotes": ["注意点"]
@@ -307,6 +316,10 @@ JSONのみ返してください。`;
       currentLiabilities: s.currentLiabilities ?? 0,
       totalAssets: s.totalAssets ?? 0,
       netAssets: s.netAssets ?? 0,
+      interestBearingDebt: s.interestBearingDebt ?? 0,
+      netIncome: s.netIncome ?? 0,
+      depreciation: s.depreciation ?? 0,
+      interestExpense: s.interestExpense ?? 0,
     }));
     snapshots.sort((a, b) => (a.year * 100 + a.month) - (b.year * 100 + b.month));
     return { snapshots, extractionNotes: p.extractionNotes || [] };

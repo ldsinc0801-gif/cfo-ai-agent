@@ -15,6 +15,9 @@ export interface ImportedMetrics {
   cashMonthsRatio: number | null; // 現預金月商倍率  = 現預金 / 月商（か月）
   operatingMargin: number | null; // 営業利益率 %
   ordinaryMargin: number | null;  // 経常利益率 %
+  debtRepaymentYears: number | null; // 債務償還年数 = 有利子負債 /(経常利益+減価償却費)
+  interestDependency: number | null; // 借入依存度 % = 有利子負債 / 総資産
+  interestBearingDebt: number;       // 有利子負債
   monthlyRevenue: number;         // 月商（最新月の売上）
   /** 売上・経常利益の推移（グラフ用、最新から最大12か月） */
   trend: { label: string; revenue: number; ordinaryIncome: number }[];
@@ -29,6 +32,8 @@ export function computeImportedMetrics(snapshots: MonthlySnapshot[]): ImportedMe
   if (!snapshots || snapshots.length === 0) return null;
   const latest = snapshots[snapshots.length - 1];
   const monthlyRevenue = latest.revenue;
+  const interestBearingDebt = latest.interestBearingDebt ?? 0;
+  const simpleCashFlow = (latest.ordinaryIncome || 0) + (latest.depreciation ?? 0);
 
   return {
     latest,
@@ -39,6 +44,10 @@ export function computeImportedMetrics(snapshots: MonthlySnapshot[]): ImportedMe
       monthlyRevenue > 0 ? Math.round((latest.cashAndDeposits / monthlyRevenue) * 10) / 10 : null,
     operatingMargin: pct(latest.operatingIncome, latest.revenue),
     ordinaryMargin: pct(latest.ordinaryIncome, latest.revenue),
+    debtRepaymentYears:
+      interestBearingDebt <= 0 ? 0 : simpleCashFlow > 0 ? Math.round((interestBearingDebt / simpleCashFlow) * 10) / 10 : null,
+    interestDependency: pct(interestBearingDebt, latest.totalAssets),
+    interestBearingDebt,
     monthlyRevenue,
     trend: snapshots.slice(-12).map((s) => ({
       label: `${s.year}/${s.month}`,
