@@ -78,6 +78,7 @@ export function renderSidebar(active: string, companyName?: string, user?: Sideb
     { id: 'freee-company', href: '/settings/company', icon: ICONS.building, label: 'freee事業所設定' },
     { id: 'freee', href: '/auth/freee', icon: ICONS.settings, label: 'freee連携設定' },
     { id: 'google', href: '/settings/google', icon: ICONS.link, label: 'Google連携' },
+    { id: 'change-password', href: '/auth/change-password?voluntary=1', icon: ICONS.settings, label: 'パスワード変更' },
   ];
   if (showMemberMenu) {
     settings.push({ id: 'users', href: '/settings/users', icon: ICONS.users, label: 'ユーザー管理' });

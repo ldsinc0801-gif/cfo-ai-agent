@@ -25,6 +25,8 @@ export interface User {
   passwordHash: string;
   mustChangePassword: boolean;
   isSuperAdmin: boolean;
+  /** テナント紐付けと独立した「財務管理者」身分フラグ（migration-015） */
+  isFinancialAdmin: boolean;
   failedLoginCount: number;
   lockedUntil: string | null;
   googleRefreshToken: string | null;

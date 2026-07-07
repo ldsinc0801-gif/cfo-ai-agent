@@ -154,7 +154,12 @@ export class AuthService {
   }
 
   /** 新規ユーザー作成（招待フローで使用） */
-  async createUser(email: string, name: string, passwordHash: string): Promise<User> {
+  async createUser(
+    email: string,
+    name: string,
+    passwordHash: string,
+    opts: { isFinancialAdmin?: boolean } = {},
+  ): Promise<User> {
     const { data, error } = await getSupabase()
       .from('users')
       .insert({
@@ -162,6 +167,7 @@ export class AuthService {
         name,
         password_hash: passwordHash,
         must_change_password: true,
+        is_financial_admin: opts.isFinancialAdmin ?? false,
       })
       .select()
       .single();
@@ -169,6 +175,53 @@ export class AuthService {
     if (error) throw new Error(`ユーザー作成に失敗: ${error.message}`);
     logger.info(`ユーザー作成: ${email}`);
     return this.mapUser(data);
+  }
+
+  /** 財務管理者フラグを設定/解除する（テナント紐付けとは独立） */
+  async setFinancialAdmin(userId: string, value: boolean): Promise<void> {
+    const { error } = await getSupabase()
+      .from('users')
+      .update({ is_financial_admin: value })
+      .eq('id', userId);
+    if (error) throw new Error(`財務管理者フラグ更新に失敗: ${error.message}`);
+  }
+
+  /**
+   * 財務管理者一覧。is_financial_admin=true のユーザーを基準に返す。
+   * 担当テナント（financial_admin の有効なメンバー行）は左結合で付与するので、
+   * 担当テナントが0のユーザーも tenants:[] として一覧に含まれる。
+   */
+  async getFinancialAdmins(): Promise<
+    Array<{ userId: string; email: string; name: string; tenants: Array<{ id: string; name: string }> }>
+  > {
+    const { data: users, error } = await getSupabase()
+      .from('users')
+      .select('id, email, name')
+      .eq('is_financial_admin', true);
+    if (error) throw new Error(`財務管理者一覧取得に失敗: ${error.message}`);
+
+    const ids = (users || []).map((u: any) => u.id);
+    const tenantsByUser = new Map<string, Array<{ id: string; name: string }>>();
+    if (ids.length > 0) {
+      const { data: mems, error: memErr } = await getSupabase()
+        .from('tenant_members')
+        .select('user_id, tenants(id, name)')
+        .eq('role', 'financial_admin')
+        .eq('is_active', true)
+        .in('user_id', ids);
+      if (memErr) throw new Error(`担当テナント取得に失敗: ${memErr.message}`);
+      for (const m of (mems || []) as any[]) {
+        if (!tenantsByUser.has(m.user_id)) tenantsByUser.set(m.user_id, []);
+        if (m.tenants?.id) tenantsByUser.get(m.user_id)!.push({ id: m.tenants.id, name: m.tenants.name || '' });
+      }
+    }
+
+    return (users || []).map((u: any) => ({
+      userId: u.id,
+      email: u.email || '',
+      name: u.name || '',
+      tenants: tenantsByUser.get(u.id) || [],
+    }));
   }
 
   /** テナントメンバーとして追加 */
@@ -254,6 +307,7 @@ export class AuthService {
       passwordHash: data.password_hash,
       mustChangePassword: data.must_change_password,
       isSuperAdmin: data.is_super_admin,
+      isFinancialAdmin: data.is_financial_admin ?? false,
       failedLoginCount: data.failed_login_count,
       lockedUntil: data.locked_until,
       googleRefreshToken: data.google_refresh_token,

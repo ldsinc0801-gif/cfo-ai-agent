@@ -397,6 +397,16 @@ function resetPw(uid,em){
       });
   });
 }
+// 超管理者: 任意ユーザー(財務管理者含む)のPWリセット。テナント不問。
+function resetUserPw(uid,em){
+  showConfirm('パスワードリセット',em+' のパスワードをリセットしますか？新しいパスワードが生成されます。',function(){
+    fetch('/api/users/'+uid+'/reset-password',{method:'POST'})
+      .then(function(r){return r.json()}).then(function(d){
+        if(d.error){window.__toast(d.error,'error');return;}
+        showPw(em+' のパスワードをリセットしました。',d.newPassword);
+      });
+  });
+}
 function delMem(uid,em){
   showConfirm('メンバー削除',em+' をこのテナントから削除しますか？この操作は取り消せません。',function(){
     fetch('/api/tenant/members/'+uid,{method:'DELETE'})
@@ -459,7 +469,7 @@ function loadFAUsers(){
     if(list.length===0){el.innerHTML='<tr><td colspan="4" class="muted">テナント財務管理者がいません</td></tr>';return;}
     el.innerHTML=list.map(function(fa){
       var tenantTags=fa.tenants.map(function(t){return '<span class="tenant-tag">'+t.name+'</span>'}).join(' ');
-      return '<tr><td>'+fa.email+'</td><td>'+(fa.name||'-')+'</td><td>'+(tenantTags||'<span class="muted">未紐付け</span>')+'</td><td><button class="act-btn" onclick="openLinkTenantModal(\\''+fa.userId+'\\',\\''+fa.email+'\\')">テナント紐付け</button> <button class="act-btn danger" onclick="deleteFAUser(\\''+fa.userId+'\\',\\''+fa.email+'\\')">削除</button></td></tr>';
+      return '<tr><td>'+fa.email+'</td><td>'+(fa.name||'-')+'</td><td>'+(tenantTags||'<span class="muted">未紐付け</span>')+'</td><td><button class="act-btn" onclick="openLinkTenantModal(\\''+fa.userId+'\\',\\''+fa.email+'\\')">テナント紐付け</button> <button class="act-btn" onclick="resetUserPw(\\''+fa.userId+'\\',\\''+fa.email+'\\')">PWリセット</button> <button class="act-btn danger" onclick="deleteFAUser(\\''+fa.userId+'\\',\\''+fa.email+'\\')">削除</button></td></tr>';
     }).join('');
   });
 }
@@ -468,24 +478,21 @@ function registerFAUser(){
   var em=document.getElementById('faUserEmail').value.trim();
   var nm=document.getElementById('faUserName').value.trim();
   if(!em){window.__toast('メールアドレスを入力してください','error');return;}
-  // 最初のテナント（任意）に financial_admin として追加（テナント紐付けは後から調整）
-  // まずテナント一覧を取得して最初のテナントに追加
-  fetch('/api/tenants').then(function(r){return r.json()}).then(function(td){
-    var tenants=td.tenants||[];
-    if(tenants.length===0){window.__toast('テナントを先に作成してください','error');return;}
-    var firstTid=tenants[0].id;
-    fetch('/api/tenants/'+firstTid+'/financial-admin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:em,name:nm})})
-      .then(function(r){return r.json()}).then(function(d){
-        if(d.error){window.__toast(d.error,'error');return;}
-        hideModal('addFAUserModal');
-        if(d.isExistingUser){
-          window.__toast(em+' を財務管理者として登録しました（既存ユーザー）','success');
-        } else {
-          showPw(em+' を財務管理者として登録しました。',d.initialPassword);
-        }
-        loadFAUsers();loadTenants();
-      });
-  });
+  // テナント紐付けなしで財務管理者を登録（デフォルト=担当テナントなし）。
+  // テナントへの紐付けは登録後に「テナント紐付け」から行う。
+  fetch('/api/financial-admins',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:em,name:nm})})
+    .then(function(r){return r.json()}).then(function(d){
+      if(d.error){window.__toast(d.error,'error');return;}
+      hideModal('addFAUserModal');
+      document.getElementById('faUserEmail').value='';
+      document.getElementById('faUserName').value='';
+      if(d.isExistingUser){
+        window.__toast(em+' を財務管理者として登録しました（既存ユーザー）','success');
+      } else {
+        showPw(em+' を財務管理者として登録しました。',d.initialPassword);
+      }
+      loadFAUsers();
+    });
 }
 
 function openLinkTenantModal(userId,email){

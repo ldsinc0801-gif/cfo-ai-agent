@@ -229,8 +229,9 @@ app.get('/auth/change-password', (req, res) => {
   if (!req.session.user) { res.redirect('/login'); return; }
   const error = req.query.error as string | undefined;
   const success = req.query.success as string | undefined;
+  const voluntary = req.query.voluntary === '1'; // メニューからの任意変更（初回強制ではない）
   const token = ensureCsrfToken(req);
-  res.send(renderChangePasswordHTML(error, success, token));
+  res.send(renderChangePasswordHTML(error, success, token, { voluntary }));
 });
 
 // パスワード変更処理
@@ -450,8 +451,9 @@ app.post('/api/tenants/:tenantId/financial-admin', express.json(), requireSuperA
       user = await authService.createUser(email, name || email, passwordHash);
     }
 
-    // テナントメンバーとして追加
+    // テナントメンバーとして追加 + 財務管理者フラグを立てる（身分を独立管理）
     await authService.addTenantMember(asTenantId(tenantId), user.id, 'financial_admin');
+    await authService.setFinancialAdmin(user.id, true);
 
     logger.info(`テナント財務管理者を追加: ${email} → テナント ${tenantId}${isExistingUser ? ' (既存ユーザー)' : ' (新規ユーザー)'}`);
     res.json({
@@ -467,27 +469,40 @@ app.post('/api/tenants/:tenantId/financial-admin', express.json(), requireSuperA
 
 // === テナント財務管理者管理API（超管理者のみ） ===
 
-// 財務管理者一覧（全テナントの financial_admin ロールを持つユーザー）
+// 財務管理者一覧（is_financial_admin=true のユーザー。担当テナント0でも含む）
 app.get('/api/financial-admins', requireSuperAdmin, async (req, res) => {
   try {
-    const { data, error } = await getSupabase()
-      .from('tenant_members')
-      .select('user_id, role, tenants(id, name), users(email, name)')
-      .eq('role', 'financial_admin')
-      .eq('is_active', true);
-    if (error) throw error;
+    const financialAdmins = await authService.getFinancialAdmins();
+    res.json({ financialAdmins });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
-    // ユーザーごとにグループ化
-    const grouped = new Map<string, { userId: string; email: string; name: string; tenants: Array<{ id: string; name: string }> }>();
-    for (const r of (data || []) as any[]) {
-      const uid = r.user_id;
-      if (!grouped.has(uid)) {
-        grouped.set(uid, { userId: uid, email: r.users?.email || '', name: r.users?.name || '', tenants: [] });
-      }
-      grouped.get(uid)!.tenants.push({ id: r.tenants?.id || '', name: r.tenants?.name || '' });
+// 財務管理者を登録（テナント紐付けなし。デフォルトは担当テナントなし）
+app.post('/api/financial-admins', express.json(), requireSuperAdmin, async (req, res) => {
+  try {
+    const { email, name } = req.body;
+    if (!email) { res.status(400).json({ error: 'メールアドレスを入力してください' }); return; }
+
+    let user = await authService.getUserByEmail(email);
+    let initialPassword: string | null = null;
+    let isExistingUser = false;
+
+    if (user) {
+      // 既存ユーザー: 財務管理者フラグを立てるだけ（パスワード・テナントは変更しない）
+      isExistingUser = true;
+      await authService.setFinancialAdmin(user.id, true);
+      logger.info(`既存ユーザーを財務管理者に設定: ${email}`);
+    } else {
+      // 新規ユーザー: 初期パスワードを生成して作成（テナント紐付けはしない）
+      initialPassword = generateInitialPassword();
+      const passwordHash = await hashPassword(initialPassword);
+      user = await authService.createUser(email, name || email, passwordHash, { isFinancialAdmin: true });
+      logger.info(`財務管理者を新規登録: ${email}`);
     }
 
-    res.json({ financialAdmins: Array.from(grouped.values()) });
+    res.json({ success: true, userId: user.id, isExistingUser, initialPassword });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -527,6 +542,22 @@ app.post('/api/financial-admins/:userId/tenants', express.json(), requireSuperAd
     }
 
     res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 超管理者: 任意のユーザーのパスワードをリセット（テナント不問）
+app.post('/api/users/:userId/reset-password', requireSuperAdmin, async (req, res) => {
+  try {
+    const userId = req.params.userId as string;
+    const target = await authService.getUserById(userId);
+    if (!target) { res.status(404).json({ error: 'ユーザーが見つかりません' }); return; }
+    const newPassword = generateInitialPassword();
+    const hash = await hashPassword(newPassword);
+    await authService.resetPassword(userId, hash);
+    logger.info(`超管理者がパスワードをリセット: ${target.email}`);
+    res.json({ success: true, newPassword });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

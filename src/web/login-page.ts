@@ -170,7 +170,13 @@ function onSubmit(){
 </html>`;
 }
 
-export function renderChangePasswordHTML(error?: string, success?: string, csrfToken: string = ''): string {
+export function renderChangePasswordHTML(
+  error?: string,
+  success?: string,
+  csrfToken: string = '',
+  opts: { voluntary?: boolean } = {},
+): string {
+  const voluntary = opts.voluntary ?? false;
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -239,7 +245,7 @@ export function renderChangePasswordHTML(error?: string, success?: string, csrfT
   <div class="container">
     <div class="card">
       <h2>パスワード変更</h2>
-      <p>セキュリティのため、初回ログイン時はパスワードの変更が必要です。</p>
+      <p>${voluntary ? '新しいパスワードを設定してください。' : 'セキュリティのため、初回ログイン時はパスワードの変更が必要です。'}</p>
       ${error ? `<div class="error-msg">${escHtml(error)}</div>` : ''}
       ${success ? `<div style="background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.3);color:#86efac;padding:12px 16px;border-radius:8px;font-size:13px;margin-bottom:20px">${escHtml(success)}</div>` : ''}
       <form method="POST" action="/auth/change-password" id="cpForm" onsubmit="return onCpSubmit()">
@@ -271,6 +277,7 @@ export function renderChangePasswordHTML(error?: string, success?: string, csrfT
         </div>
         <button type="submit" class="submit-btn" id="cpBtn">パスワードを変更</button>
       </form>
+      ${voluntary ? `<a href="/" style="display:inline-block;margin-top:16px;color:#94a3b8;font-size:13px;text-decoration:none">← 戻る</a>` : ''}
       <ul class="requirements">
         <li id="req-len">8文字以上</li>
         <li id="req-alpha">英字を1文字以上含む</li>
