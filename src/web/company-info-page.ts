@@ -6,6 +6,7 @@
 import { agentPageShell, esc } from './shared.js';
 import { csrfFormHidden, getCurrentCsrfToken } from './security.js';
 import type { TenantProfile } from '../repositories/supabase-repository.js';
+import { describeFiscalTerm } from '../domain/finance/fiscal-term.js';
 
 export function renderCompanyInfoHTML(opts: {
   profile: TenantProfile;
@@ -15,6 +16,12 @@ export function renderCompanyInfoHTML(opts: {
 }): string {
   const { profile, fiscalMonth } = opts;
   const csrf = csrfFormHidden(getCurrentCsrfToken() || '');
+
+  // 設立日＋決算月から「現在の期」を自動算出
+  const termInfo = describeFiscalTerm(profile.establishedDate, fiscalMonth, new Date());
+  const termHTML = termInfo
+    ? `<strong>${termInfo.term}期目</strong>（今期の決算: ${termInfo.fyeYear}年${termInfo.fyeMonth}月期）`
+    : '<span style="color:var(--text2)">設立日と決算月を設定すると自動算出されます</span>';
 
   const bodyHTML = `
 <style>
@@ -96,6 +103,11 @@ ${opts.success ? `<div class="ci-alert-ok">${esc(opts.success)}</div>` : ''}
           ${[1,2,3,4,5,6,7,8,9,10,11,12].map(m => `<option value="${m}" ${fiscalMonth === m ? 'selected' : ''}>${m}月</option>`).join('')}
         </select>
         <span class="hint">会計AIでの年補完や年度選択に使われます</span>
+      </div>
+      <div class="ci-field">
+        <label>現在の期（自動算出）</label>
+        <div style="padding:8px 0;font-size:15px">${termHTML}</div>
+        <span class="hint">設立日と決算月から自動計算。分析で「何期目」が必要な時はこの値が使われます</span>
       </div>
       <div class="ci-field">
         <label>法人番号（13桁）</label>
