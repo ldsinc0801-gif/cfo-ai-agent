@@ -16,7 +16,8 @@ import { createMockTrendData } from '../../tests/fixtures/mock-trend.js';
 import { renderDashboardHTML } from './dashboard-renderer.js';
 import { renderReportHTML } from './html-renderer.js';
 import { renderPlanHTML } from './plan-renderer.js';
-import { renderFinanceAgentHTML, renderAccountingAgentHTML, renderFundingAgentHTML } from './agent-pages.js';
+import { renderFinanceAgentHTML, renderAccountingAgentHTML, renderFundingAgentHTML, renderFinanceImportedHTML } from './agent-pages.js';
+import { computeImportedMetrics } from '../domain/finance/imported-metrics.js';
 import { renderAccountingPageHTML } from './accounting-page.js';
 import { renderChatHTML } from './chat-page.js';
 import { renderTaskPageHTML } from './task-page.js';
@@ -1434,8 +1435,15 @@ app.get('/agent/finance', async (req, res) => {
       res.redirect('/agent/finance/freee');
       return;
     }
-    // freee未接続・デモモードOFF → データなしメッセージ
-    res.send(renderNoDataPage('財務分析AI', '財務分析を行うには、freee APIとの連携が必要です。'));
+    // freee未接続 → ダッシュボード取込データがあれば主要指標を表示
+    const finTid = getActiveTenantId(req);
+    if (finTid) {
+      const snapshots = await repo.getAllMonthlyActuals(asTenantId(finTid));
+      const metrics = computeImportedMetrics(snapshots);
+      if (metrics) { res.send(renderFinanceImportedHTML(metrics)); return; }
+    }
+    // 取込データも無い → データなしメッセージ
+    res.send(renderNoDataPage('財務分析AI', '財務分析を行うには、freee APIとの連携、またはダッシュボードでの決算書・試算表の取込が必要です。'));
   } catch (error) {
     logger.error('財務分析ページエラー', error);
     res.send(renderNoDataPage('財務分析AI', '財務分析の読み込み中にエラーが発生しました。'));
@@ -2592,8 +2600,18 @@ app.post('/agent/accounting/batch/:id/send-freee', express.urlencoded({ extended
 });
 
 // 資金調達AIエージェント
-app.get('/agent/funding', (_req, res) => {
-  res.send(renderFundingAgentHTML());
+app.get('/agent/funding', async (req, res) => {
+  let metrics = null;
+  try {
+    const tid = getActiveTenantId(req);
+    if (tid) {
+      const snapshots = await repo.getAllMonthlyActuals(asTenantId(tid));
+      metrics = computeImportedMetrics(snapshots);
+    }
+  } catch (e) {
+    logger.error('資金調達: 取込指標の計算に失敗', e);
+  }
+  res.send(renderFundingAgentHTML(metrics));
 });
 
 // ========== 秘書AIエージェント ==========

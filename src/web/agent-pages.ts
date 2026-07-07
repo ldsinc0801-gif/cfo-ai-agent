@@ -1,4 +1,59 @@
 import { agentPageShell } from './shared.js';
+import type { ImportedMetrics } from '../domain/finance/imported-metrics.js';
+
+/**
+ * 取り込みデータから算出した銀行評価の主要指標カード。
+ * 有利子負債が必要な指標（債務償還年数等）は注記で「要詳細取込」を明示。
+ */
+export function renderBankMetricsCard(m: ImportedMetrics): string {
+  const fmtPct = (v: number | null) => (v === null ? '—' : v.toFixed(1) + '%');
+  const fmtMonths = (v: number | null) => (v === null ? '—' : v.toFixed(1) + 'か月');
+  const period = `${m.latest.year}年${m.latest.month}月`;
+  const row = (label: string, value: string, sub: string) => `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;padding:10px 0;border-bottom:1px solid var(--border)">
+      <div><div style="font-weight:700;font-size:14px">${label}</div><div style="font-size:11px;color:var(--text2);margin-top:2px">${sub}</div></div>
+      <div style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums">${value}</div>
+    </div>`;
+  return `
+  <div class="card">
+    <div class="card-header"><h3>銀行評価の主要指標</h3><span class="card-sub">取込データ ${period} 時点</span></div>
+    <div class="card-body">
+      ${row('自己資本比率', fmtPct(m.equityRatio), '純資産 ÷ 総資産。20%以上が一つの目安')}
+      ${row('流動比率', fmtPct(m.currentRatio), '流動資産 ÷ 流動負債。120%以上が目安')}
+      ${row('現預金月商倍率', fmtMonths(m.cashMonthsRatio), '現預金 ÷ 月商。1〜2か月以上で安心')}
+      ${row('営業利益率', fmtPct(m.operatingMargin), '営業利益 ÷ 売上')}
+      ${row('経常利益率', fmtPct(m.ordinaryMargin), '経常利益 ÷ 売上')}
+      <div style="margin-top:14px;font-size:12px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;line-height:1.6">
+        <strong>債務償還年数・借入依存度</strong>は<strong>有利子負債</strong>のデータが必要です。有利子負債を含む決算書の取込、または freee 連携で表示できます。
+      </div>
+    </div>
+  </div>`;
+}
+
+/**
+ * 財務分析AI: 取り込みデータから主要指標を表示するページ（freee未接続時）。
+ */
+export function renderFinanceImportedHTML(metrics: ImportedMetrics): string {
+  return agentPageShell({
+    active: 'finance',
+    title: '財務分析AIエージェント',
+    bodyHTML: `
+    <div class="welcome-banner">
+      <h2>財務分析AIエージェント</h2>
+      <p>ダッシュボードで取り込んだ決算データから、正確に算出できる主要指標を表示しています。129点満点の詳細な銀行格付には、有利子負債を含む詳細な決算データ（freee連携 or 詳細取込）が必要です。</p>
+    </div>
+    <div class="grid-2">
+      ${renderBankMetricsCard(metrics)}
+      <div class="card">
+        <div class="card-header"><h3>データの取込元</h3></div>
+        <div class="card-body">
+          <p style="font-size:13px;color:var(--text2);line-height:1.7">この指標は、ダッシュボードで登録した決算書・試算表（${metrics.monthsCount}か月分）を基に算出しています。数値を更新するには、ダッシュボードから最新の資料を取り込んでください。</p>
+          <a href="/" class="btn-primary" style="margin-top:12px">ダッシュボードで取込・確認</a>
+        </div>
+      </div>
+    </div>`,
+  });
+}
 
 /**
  * 財務分析AIエージェントページ
@@ -170,7 +225,7 @@ export function renderAccountingAgentHTML(): string {
 /**
  * 資金調達AIエージェントページ
  */
-export function renderFundingAgentHTML(): string {
+export function renderFundingAgentHTML(metrics?: ImportedMetrics | null): string {
   return agentPageShell({
     active: 'funding',
     title: '資金調達AIエージェント',
@@ -232,25 +287,26 @@ export function renderFundingAgentHTML(): string {
     </div>
 
     <div class="grid-2">
+      ${metrics ? renderBankMetricsCard(metrics) : `
       <div class="card">
         <div class="card-header"><h3>現在の銀行評価</h3></div>
         <div class="card-body">
           <div class="status-card" style="border:none;padding:16px">
             <div class="status-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg></div>
-            <div class="status-title">ダッシュボードで確認</div>
-            <div class="status-desc">銀行評価の主要指標（自己資本比率・債務償還年数・月商倍率等）はダッシュボードに表示されています。</div>
-            <a href="/" class="btn-primary" style="margin-top:16px">ダッシュボードを見る</a>
+            <div class="status-title">取り込みデータがありません</div>
+            <div class="status-desc">ダッシュボードで決算書・試算表を取り込むと、自己資本比率・流動比率・現預金月商倍率などの主要指標をここに表示します。</div>
+            <a href="/" class="btn-primary" style="margin-top:16px">ダッシュボードで取り込む</a>
           </div>
         </div>
-      </div>
+      </div>`}
       <div class="card">
         <div class="card-header"><h3>資金調達ステータス</h3></div>
         <div class="card-body">
           <table>
             <thead><tr><th>項目</th><th>ステータス</th></tr></thead>
             <tbody>
-              <tr><td>資金繰り余力</td><td>約3.1か月（安全）</td></tr>
-              <tr><td>銀行評価スコア</td><td>良好（Good）</td></tr>
+              <tr><td>現預金月商倍率</td><td>${metrics && metrics.cashMonthsRatio !== null ? metrics.cashMonthsRatio.toFixed(1) + 'か月' : '未取込'}</td></tr>
+              <tr><td>自己資本比率</td><td>${metrics && metrics.equityRatio !== null ? metrics.equityRatio.toFixed(1) + '%' : '未取込'}</td></tr>
               <tr><td>直近の資金調達</td><td>未登録</td></tr>
               <tr><td>返済予定</td><td>未登録</td></tr>
             </tbody>
