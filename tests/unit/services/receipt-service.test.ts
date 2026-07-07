@@ -1,22 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ReceiptService } from '../../../src/services/receipt-service.js';
 
-// Gemini APIモック
+// Gemini (Vertex AI, @google/genai) モック
 const mockGenerateContent = vi.fn();
-vi.mock('@google/generative-ai', () => {
+vi.mock('@google/genai', () => {
   return {
-    GoogleGenerativeAI: class {
-      getGenerativeModel() {
-        return { generateContent: mockGenerateContent };
-      }
+    GoogleGenAI: class {
+      models = { generateContent: mockGenerateContent };
     },
   };
 });
 
-// config モック（GEMINI_API_KEY を設定済みにする）
+// config モック（Vertex AI: gcpProject を設定済みにする）
 vi.mock('../../../src/config/index.js', () => ({
   config: {
-    ai: { geminiApiKey: 'test-key', geminiModel: 'gemini-2.0-flash' },
+    ai: { gcpProject: 'test-project', geminiRegion: 'us-central1', geminiModel: 'gemini-2.0-flash' },
   },
 }));
 
@@ -43,21 +41,34 @@ vi.mock('../../../src/services/journal-learning-service.js', () => ({
   },
 }));
 
+// @google/genai の generateContent が返すレスポンス（response.text は文字列プロパティ）
 function makeGeminiResponse(json: object) {
   return {
-    response: {
-      text: () => '```json\n' + JSON.stringify(json) + '\n```',
-      usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 50 },
-    },
+    text: '```json\n' + JSON.stringify(json) + '\n```',
+    usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 50 },
   };
+}
+
+// 生テキストのレスポンス（parseResponse の直接検証用）
+function makeRawResponse(text: string) {
+  return { text, usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 10 } };
+}
+
+// コンストラクタは import('@google/genai') を非同期解決してから this.ai をセットするため、
+// 初期化完了(isAvailable=true)まで待つ。
+async function waitForInit(s: ReceiptService): Promise<void> {
+  for (let i = 0; i < 100 && !s.isAvailable(); i++) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
 }
 
 describe('ReceiptService', () => {
   let service: ReceiptService;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     service = new ReceiptService();
+    await waitForInit(service);
   });
 
   describe('analyzeVideo', () => {
@@ -96,15 +107,16 @@ describe('ReceiptService', () => {
       const videoBuffer = Buffer.from('fake-video-data');
       const result = await service.analyzeVideo(videoBuffer, 'video/mp4', 'test.mp4');
 
-      // Geminiに正しく送信されたか
+      // Geminiに正しく送信されたか（contents[0].parts に inlineData + text）
       expect(mockGenerateContent).toHaveBeenCalledOnce();
       const callArgs = mockGenerateContent.mock.calls[0][0];
-      expect(callArgs).toHaveLength(2);
+      const parts = callArgs.contents[0].parts;
+      expect(parts).toHaveLength(2);
       // inlineData にbase64エンコードされた動画データが含まれる
-      expect(callArgs[0].inlineData.mimeType).toBe('video/mp4');
-      expect(callArgs[0].inlineData.data).toBe(videoBuffer.toString('base64'));
+      expect(parts[0].inlineData.mimeType).toBe('video/mp4');
+      expect(parts[0].inlineData.data).toBe(videoBuffer.toString('base64'));
       // プロンプトテキストが含まれる
-      expect(callArgs[1].text).toContain('領収書');
+      expect(parts[1].text).toContain('領収書');
 
       // レスポンスが正しくパースされたか
       expect(result.entries).toHaveLength(2);
@@ -115,19 +127,14 @@ describe('ReceiptService', () => {
       expect(result.entries[1].amount).toBe(1200);
     });
 
-    it('Gemini未設定時にエラーをスローする', async () => {
-      // APIキーなしのサービスを作る
-      vi.doMock('../../../src/config/index.js', () => ({
-        config: { ai: { geminiApiKey: '', geminiModel: 'gemini-2.0-flash' } },
-      }));
-      const { ReceiptService: NoKeyService } = await import('../../../src/services/receipt-service.js');
-      const noKeyService = new (NoKeyService as any)();
-      // genAIがnullになるように直接設定
-      (noKeyService as any).genAI = null;
+    it('Vertex AI未設定時にエラーをスローする', async () => {
+      const noAiService = new ReceiptService();
+      // クライアント未初期化状態を再現
+      (noAiService as any).ai = null;
 
       await expect(
-        noKeyService.analyzeVideo(Buffer.from('test'), 'video/mp4', 'test.mp4'),
-      ).rejects.toThrow('GEMINI_API_KEYが未設定です');
+        noAiService.analyzeVideo(Buffer.from('test'), 'video/mp4', 'test.mp4'),
+      ).rejects.toThrow('GOOGLE_CLOUD_PROJECTが未設定です');
     });
 
     it('業種指定時に学習ルールをプロンプトに含める', async () => {
@@ -143,8 +150,9 @@ describe('ReceiptService', () => {
       await service.analyzeVideo(Buffer.from('test'), 'video/mp4', 'test.mp4', '飲食業');
 
       const callArgs = mockGenerateContent.mock.calls[0][0];
-      expect(callArgs[1].text).toContain('学習済み仕訳ルール');
-      expect(callArgs[1].text).toContain('仕入高');
+      const promptText = callArgs.contents[0].parts[1].text;
+      expect(promptText).toContain('学習済み仕訳ルール');
+      expect(promptText).toContain('仕入高');
     });
   });
 
@@ -180,9 +188,10 @@ describe('ReceiptService', () => {
 
       // 全フレーム + プロンプトで合計4パーツ送信
       const callArgs = mockGenerateContent.mock.calls[0][0];
-      expect(callArgs).toHaveLength(4); // 3 frames + 1 text
-      expect(callArgs[0].inlineData.mimeType).toBe('image/jpeg');
-      expect(callArgs[2].inlineData.data).toBe(Buffer.from('frame3').toString('base64'));
+      const parts = callArgs.contents[0].parts;
+      expect(parts).toHaveLength(4); // 3 frames + 1 text
+      expect(parts[0].inlineData.mimeType).toBe('image/jpeg');
+      expect(parts[2].inlineData.data).toBe(Buffer.from('frame3').toString('base64'));
 
       expect(result.entries).toHaveLength(1);
       expect(result.entries[0].debitAccount).toBe('消耗品費');
@@ -193,12 +202,11 @@ describe('ReceiptService', () => {
     // parseResponseはprivateなので、analyzeVideoを通じてテスト
 
     it('JSONブロック内のレスポンスを正しくパースする', async () => {
-      mockGenerateContent.mockResolvedValueOnce({
-        response: {
-          text: () => 'テキスト前文\n```json\n{"entries":[{"date":"2026-01-01","debitAccount":"旅費交通費","creditAccount":"現金","amount":1000,"taxRate":10,"taxAmount":91,"description":"電車代","partnerName":"JR","receiptType":"領収書"}],"confidence":"high","notes":[]}\n```\nテキスト後文',
-          usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 10 },
-        },
-      });
+      mockGenerateContent.mockResolvedValueOnce(
+        makeRawResponse(
+          'テキスト前文\n```json\n{"entries":[{"date":"2026-01-01","debitAccount":"旅費交通費","creditAccount":"現金","amount":1000,"taxRate":10,"taxAmount":91,"description":"電車代","partnerName":"JR","receiptType":"領収書"}],"confidence":"high","notes":[]}\n```\nテキスト後文',
+        ),
+      );
 
       const result = await service.analyzeVideo(Buffer.from('test'), 'video/mp4', 'test.mp4');
       expect(result.entries).toHaveLength(1);
@@ -206,12 +214,9 @@ describe('ReceiptService', () => {
     });
 
     it('不正なレスポンスでもクラッシュせずデフォルト値を返す', async () => {
-      mockGenerateContent.mockResolvedValueOnce({
-        response: {
-          text: () => 'これはJSONではないテキストです。読み取れませんでした。',
-          usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 10 },
-        },
-      });
+      mockGenerateContent.mockResolvedValueOnce(
+        makeRawResponse('これはJSONではないテキストです。読み取れませんでした。'),
+      );
 
       const result = await service.analyzeVideo(Buffer.from('test'), 'video/mp4', 'test.mp4');
       expect(result.entries).toHaveLength(0);

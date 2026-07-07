@@ -31,7 +31,8 @@ describe('ReportBuilder', () => {
 
     const report = await builder.build(rawData, 2026, 2);
 
-    expect(report.executiveSummary.monthlyRevenue).toBe(8_500_000);
+    // 単月値 = 当月累計 8,500,000 − 前月累計 7,800,000（freeeは期首からの累計値）
+    expect(report.executiveSummary.monthlyRevenue).toBe(700_000);
     expect(report.executiveSummary.monthlyProfit).toBe(report.monthlyPL.ordinaryIncome);
     expect(report.executiveSummary.cashBalance).toBeGreaterThan(0);
     expect(report.executiveSummary.revenueChangeRate).not.toBeNull();
@@ -46,11 +47,12 @@ describe('ReportBuilder', () => {
 
     const report = await builder.build(rawData, 2026, 2);
 
-    expect(report.monthlyPL.revenue).toBe(8_500_000);
-    expect(report.monthlyPL.costOfSales).toBe(2_800_000);
-    expect(report.monthlyPL.grossProfit).toBe(5_700_000);
-    expect(report.monthlyPL.sgaExpenses).toBe(4_310_000);
-    expect(report.monthlyPL.operatingIncome).toBe(1_390_000);
+    // 単月PL = 当月累計 − 前月累計（freeeは期首からの累計値のため差分で単月を算出）
+    expect(report.monthlyPL.revenue).toBe(8_500_000 - 7_800_000);       // 700,000
+    expect(report.monthlyPL.costOfSales).toBe(2_800_000 - 2_600_000);   // 200,000
+    expect(report.monthlyPL.grossProfit).toBe(500_000);                 // 700,000 - 200,000
+    expect(report.monthlyPL.sgaExpenses).toBe(4_310_000 - 4_180_000);   // 130,000
+    expect(report.monthlyPL.operatingIncome).toBe(370_000);             // 500,000 - 130,000
     expect(report.monthlyPL.expenseBreakdown.length).toBeGreaterThan(0);
   });
 
@@ -75,7 +77,8 @@ describe('ReportBuilder', () => {
     expect(report.comparison.current).toBeDefined();
     expect(report.comparison.previous).not.toBeNull();
     expect(report.comparison.changes).not.toBeNull();
-    expect(report.comparison.changes!.revenueChange).toBe(8_500_000 - 7_800_000);
+    // 単月ベースの前月比: 当月単月 700,000 − 前月単月 7,800,000（前々月データ無しのため前月累計=前月単月）
+    expect(report.comparison.changes!.revenueChange).toBe(700_000 - 7_800_000);
   });
 
   it('should contain financialMetrics with profitability and safety', async () => {
