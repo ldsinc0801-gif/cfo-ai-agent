@@ -172,10 +172,31 @@ class GoogleTasksClient {
         title: task.title,
         notes: task.notes,
         due: task.due,
+        ...(task.status ? { status: task.status } : {}),
       },
       { headers: { Authorization: `Bearer ${token}` } },
     );
     return res.data.id;
+  }
+
+  /** タイトルで既存タスクを検索（無ければ null） */
+  async findTaskByTitle(taskListId: string, title: string): Promise<GoogleTask | null> {
+    const tasks = await this.listTasks(taskListId);
+    return tasks.find((t) => t.title === title) || null;
+  }
+
+  /** タスクの状態を更新（completed / needsAction） */
+  async updateTaskStatus(
+    taskListId: string,
+    taskId: string,
+    status: 'completed' | 'needsAction',
+  ): Promise<void> {
+    const token = await this.getAccessToken();
+    await axios.patch(
+      `${TASKS_API_BASE}/lists/${taskListId}/tasks/${taskId}`,
+      { status, ...(status === 'needsAction' ? { completed: null } : {}) },
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
   }
 
   /** 認証解除 */

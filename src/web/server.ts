@@ -1150,10 +1150,13 @@ app.get('/report/pdf', async (req, res) => {
 
     // Chart.jsの描画完了を待ち、全Canvasを画像（img）に変換
     await page.evaluate(() => {
+      // Puppeteer: このコールバックはブラウザ内で実行される。Node側のtscにはDOM型が
+      // 無いため document/canvas を any 扱いにして型エラーを避ける（実行はブラウザで正常）。
+      const document: any = (globalThis as { document?: unknown }).document;
       return new Promise<void>((resolve) => {
         setTimeout(() => {
           const canvases = document.querySelectorAll('canvas');
-          canvases.forEach((canvas) => {
+          canvases.forEach((canvas: any) => {
             try {
               const img = document.createElement('img');
               img.src = canvas.toDataURL('image/png');
@@ -3496,7 +3499,7 @@ app.post('/tasks/sync-google', express.urlencoded({ extended: true }), async (re
 
       if (existingTitles.has(fullTitle)) continue; // 同名タスクはスキップ
 
-      await googleTasksClient.addTask(listId, {
+      await googleTasksClient.createTask(listId, {
         title: fullTitle,
         notes: task.description || undefined,
         due: task.dueDate || undefined,
