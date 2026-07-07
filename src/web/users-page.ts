@@ -151,6 +151,22 @@ ${isSuperAdmin ? `
   </div>
 </div>
 
+<!-- パスワード指定モーダル（超管理者：任意ユーザーのPWを指定して設定） -->
+<div class="modal-overlay" id="setPwModal" style="display:none" onclick="if(event.target===this)hideModal('setPwModal')">
+  <div class="modal-card">
+    <h3>パスワードを設定</h3>
+    <p class="muted" id="setPwUserName" style="margin-bottom:16px"></p>
+    <div class="fg"><label>新しいパスワード <span style="color:#ef4444">*</span></label>
+      <input type="text" id="setPwValue" placeholder="8文字以上・英字と数字を含む" autocomplete="off"></div>
+    <p class="muted" style="font-size:12px;margin-bottom:16px">この値がそのままログインパスワードになります（初回の強制変更は付きません）。</p>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="hideModal('setPwModal')">キャンセル</button>
+      <button class="btn-secondary" onclick="genSetPw()">自動生成して設定</button>
+      <button class="btn-primary" onclick="submitSetPw()">設定</button>
+    </div>
+  </div>
+</div>
+
 <!-- パスワード表示モーダル -->
 <div class="modal-overlay" id="pwModal" style="display:none">
   <div class="modal-card">
@@ -397,15 +413,32 @@ function resetPw(uid,em){
       });
   });
 }
-// 超管理者: 任意ユーザー(財務管理者含む)のPWリセット。テナント不問。
-function resetUserPw(uid,em){
-  showConfirm('パスワードリセット',em+' のパスワードをリセットしますか？新しいパスワードが生成されます。',function(){
-    fetch('/api/users/'+uid+'/reset-password',{method:'POST'})
-      .then(function(r){return r.json()}).then(function(d){
-        if(d.error){window.__toast(d.error,'error');return;}
-        showPw(em+' のパスワードをリセットしました。',d.newPassword);
-      });
-  });
+// 超管理者: 任意ユーザー(財務管理者含む)のPWを指定して設定。テナント不問。
+var setPwUid='';var setPwEm='';
+function openSetPwModal(uid,em){
+  setPwUid=uid;setPwEm=em;
+  document.getElementById('setPwUserName').textContent=em+' のパスワードを設定';
+  document.getElementById('setPwValue').value='';
+  showModal('setPwModal');
+}
+function submitSetPw(){
+  var pw=document.getElementById('setPwValue').value.trim();
+  if(!pw){window.__toast('パスワードを入力してください','error');return;}
+  fetch('/api/users/'+setPwUid+'/reset-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({newPassword:pw})})
+    .then(function(r){return r.json()}).then(function(d){
+      if(d.error){window.__toast(d.error,'error');return;}
+      hideModal('setPwModal');
+      window.__toast(setPwEm+' のパスワードを設定しました','success');
+    });
+}
+function genSetPw(){
+  // 未指定でPOST → サーバーが自動生成し、生成値を表示
+  fetch('/api/users/'+setPwUid+'/reset-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})})
+    .then(function(r){return r.json()}).then(function(d){
+      if(d.error){window.__toast(d.error,'error');return;}
+      hideModal('setPwModal');
+      showPw(setPwEm+' のパスワードを自動生成しました。',d.newPassword);
+    });
 }
 function delMem(uid,em){
   showConfirm('メンバー削除',em+' をこのテナントから削除しますか？この操作は取り消せません。',function(){
@@ -469,7 +502,7 @@ function loadFAUsers(){
     if(list.length===0){el.innerHTML='<tr><td colspan="4" class="muted">テナント財務管理者がいません</td></tr>';return;}
     el.innerHTML=list.map(function(fa){
       var tenantTags=fa.tenants.map(function(t){return '<span class="tenant-tag">'+t.name+'</span>'}).join(' ');
-      return '<tr><td>'+fa.email+'</td><td>'+(fa.name||'-')+'</td><td>'+(tenantTags||'<span class="muted">未紐付け</span>')+'</td><td><button class="act-btn" onclick="openLinkTenantModal(\\''+fa.userId+'\\',\\''+fa.email+'\\')">テナント紐付け</button> <button class="act-btn" onclick="resetUserPw(\\''+fa.userId+'\\',\\''+fa.email+'\\')">PWリセット</button> <button class="act-btn danger" onclick="deleteFAUser(\\''+fa.userId+'\\',\\''+fa.email+'\\')">削除</button></td></tr>';
+      return '<tr><td>'+fa.email+'</td><td>'+(fa.name||'-')+'</td><td>'+(tenantTags||'<span class="muted">未紐付け</span>')+'</td><td><button class="act-btn" onclick="openLinkTenantModal(\\''+fa.userId+'\\',\\''+fa.email+'\\')">テナント紐付け</button> <button class="act-btn" onclick="openSetPwModal(\\''+fa.userId+'\\',\\''+fa.email+'\\')">パスワード設定</button><button class="act-btn danger" onclick="deleteFAUser(\\''+fa.userId+'\\',\\''+fa.email+'\\')">削除</button></td></tr>';
     }).join('');
   });
 }

@@ -547,16 +547,30 @@ app.post('/api/financial-admins/:userId/tenants', express.json(), requireSuperAd
   }
 });
 
-// 超管理者: 任意のユーザーのパスワードをリセット（テナント不問）
-app.post('/api/users/:userId/reset-password', requireSuperAdmin, async (req, res) => {
+// 超管理者: 任意ユーザーのパスワードを設定（テナント不問）
+// newPassword を指定 → その値に設定（強制変更なし）。未指定 → 自動生成してリセット（従来動作）
+app.post('/api/users/:userId/reset-password', express.json(), requireSuperAdmin, async (req, res) => {
   try {
     const userId = req.params.userId as string;
     const target = await authService.getUserById(userId);
     if (!target) { res.status(404).json({ error: 'ユーザーが見つかりません' }); return; }
+
+    const specified = typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
+    if (specified) {
+      const validation = validatePassword(specified);
+      if (!validation.valid) { res.status(400).json({ error: validation.errors.join('、') }); return; }
+      // 管理者が意図して設定した値なので、初回強制変更は付けない（changePassword: must_change=false）
+      await authService.changePassword(userId, specified);
+      logger.info(`超管理者がパスワードを指定設定: ${target.email}`);
+      res.json({ success: true, specified: true });
+      return;
+    }
+
+    // 未指定: 従来どおり自動生成
     const newPassword = generateInitialPassword();
     const hash = await hashPassword(newPassword);
     await authService.resetPassword(userId, hash);
-    logger.info(`超管理者がパスワードをリセット: ${target.email}`);
+    logger.info(`超管理者がパスワードをリセット(自動生成): ${target.email}`);
     res.json({ success: true, newPassword });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
