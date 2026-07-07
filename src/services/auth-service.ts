@@ -194,27 +194,39 @@ export class AuthService {
   async getFinancialAdmins(): Promise<
     Array<{ userId: string; email: string; name: string; tenants: Array<{ id: string; name: string }> }>
   > {
-    const { data: users, error } = await getSupabase()
-      .from('users')
-      .select('id, email, name')
-      .eq('is_financial_admin', true);
-    if (error) throw new Error(`財務管理者一覧取得に失敗: ${error.message}`);
-
-    const ids = (users || []).map((u: any) => u.id);
-    const tenantsByUser = new Map<string, Array<{ id: string; name: string }>>();
-    if (ids.length > 0) {
-      const { data: mems, error: memErr } = await getSupabase()
+    // 財務管理者の定義 = フラグ(is_financial_admin) が立っている OR
+    // financial_admin の有効なメンバー行を持つ。どちらでも拾うことで、
+    // フラグ付け漏れ（旧コード/切替の谷間で追加）でも一覧から消えないようにする。
+    const [flaggedRes, memRes] = await Promise.all([
+      getSupabase().from('users').select('id').eq('is_financial_admin', true),
+      getSupabase()
         .from('tenant_members')
         .select('user_id, tenants(id, name)')
         .eq('role', 'financial_admin')
-        .eq('is_active', true)
-        .in('user_id', ids);
-      if (memErr) throw new Error(`担当テナント取得に失敗: ${memErr.message}`);
-      for (const m of (mems || []) as any[]) {
-        if (!tenantsByUser.has(m.user_id)) tenantsByUser.set(m.user_id, []);
-        if (m.tenants?.id) tenantsByUser.get(m.user_id)!.push({ id: m.tenants.id, name: m.tenants.name || '' });
-      }
+        .eq('is_active', true),
+    ]);
+    if (flaggedRes.error) throw new Error(`財務管理者一覧取得に失敗: ${flaggedRes.error.message}`);
+    if (memRes.error) throw new Error(`担当テナント取得に失敗: ${memRes.error.message}`);
+
+    // 対象ユーザーID = フラグ持ち ∪ financial_admin メンバー
+    const ids = new Set<string>();
+    for (const u of (flaggedRes.data || []) as any[]) ids.add(u.id);
+    for (const m of (memRes.data || []) as any[]) ids.add(m.user_id);
+    if (ids.size === 0) return [];
+
+    // 担当テナントをユーザーごとに集約
+    const tenantsByUser = new Map<string, Array<{ id: string; name: string }>>();
+    for (const m of (memRes.data || []) as any[]) {
+      if (!tenantsByUser.has(m.user_id)) tenantsByUser.set(m.user_id, []);
+      if (m.tenants?.id) tenantsByUser.get(m.user_id)!.push({ id: m.tenants.id, name: m.tenants.name || '' });
     }
+
+    // メール・名前を取得（メンバー行だけの人も含めるため users を別引き）
+    const { data: users, error: usersErr } = await getSupabase()
+      .from('users')
+      .select('id, email, name')
+      .in('id', [...ids]);
+    if (usersErr) throw new Error(`財務管理者ユーザー取得に失敗: ${usersErr.message}`);
 
     return (users || []).map((u: any) => ({
       userId: u.id,
