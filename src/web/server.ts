@@ -19,6 +19,8 @@ import { renderPlanHTML } from './plan-renderer.js';
 import { renderFinanceAgentHTML, renderAccountingAgentHTML, renderFundingAgentHTML } from './agent-pages.js';
 import { computeImportedMetrics } from '../domain/finance/imported-metrics.js';
 import { buildRatingInputFromSnapshots } from '../domain/finance/imported-rating.js';
+import { renderFinanceDataEditHTML } from './finance-data-edit-page.js';
+import type { MonthlySnapshot } from '../types/trend.js';
 import { renderAccountingPageHTML } from './accounting-page.js';
 import { renderChatHTML } from './chat-page.js';
 import { renderTaskPageHTML } from './task-page.js';
@@ -2638,6 +2640,42 @@ app.get('/agent/funding', async (req, res) => {
     logger.error('資金調達: 取込指標の計算に失敗', e);
   }
   res.send(renderFundingAgentHTML(metrics));
+});
+
+// 財務データの確認・修正（取込値の手修正 + 年間返済元本の手入力）
+app.get('/finance/data-edit', async (req, res) => {
+  const tid = getActiveTenantId(req);
+  const snapshots = tid ? await repo.getAllMonthlyActuals(asTenantId(tid)) : [];
+  res.send(renderFinanceDataEditHTML(snapshots, req.query.saved as string | undefined));
+});
+
+app.post('/finance/data-edit', express.urlencoded({ extended: true }), async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.redirect('/agent/finance'); return; }
+    const b = req.body;
+    const n = (v: unknown) => { const x = Number(v); return Number.isFinite(x) ? x : 0; };
+    const nOrNull = (v: unknown) => {
+      if (v === '' || v === undefined || v === null) return null;
+      const x = Number(v); return Number.isFinite(x) ? x : null;
+    };
+    const snap: MonthlySnapshot = {
+      year: n(b.year), month: n(b.month),
+      revenue: n(b.revenue), costOfSales: n(b.costOfSales), grossProfit: n(b.grossProfit),
+      sgaExpenses: n(b.sgaExpenses), operatingIncome: n(b.operatingIncome), ordinaryIncome: n(b.ordinaryIncome),
+      cashAndDeposits: n(b.cashAndDeposits), currentAssets: n(b.currentAssets), currentLiabilities: n(b.currentLiabilities),
+      totalAssets: n(b.totalAssets), netAssets: n(b.netAssets),
+      interestBearingDebt: n(b.interestBearingDebt), netIncome: n(b.netIncome),
+      depreciation: n(b.depreciation), interestExpense: n(b.interestExpense),
+      annualDebtRepayment: nOrNull(b.annualDebtRepayment),
+    };
+    await repo.upsertMonthlyActual(asTenantId(tid), snap);
+    clearCache();
+    res.redirect(`/finance/data-edit?saved=${snap.year}-${snap.month}`);
+  } catch (e) {
+    logger.error('財務データ保存エラー', e);
+    res.redirect('/finance/data-edit');
+  }
 });
 
 // ========== 秘書AIエージェント ==========

@@ -46,8 +46,8 @@ export function buildRatingInputFromSnapshots(snapshots: MonthlySnapshot[]): Rat
     // 前期
     prevOrdinaryIncome: prev ? prev.ordinaryIncome || 0 : null,
     prevTotalAssets: prev ? prev.totalAssets || 0 : null,
-    // 返済（取込では未取得）
-    annualDebtRepayment: null,
+    // 返済（決算書に無いため手入力。未入力なら null）
+    annualDebtRepayment: latest.annualDebtRepayment ?? null,
     // 収益フロー履歴（最大3期の経常利益符号、古い順）
     profitFlowHistory: snapshots.slice(-3).map((s) => signOf(s.ordinaryIncome || 0)),
   };

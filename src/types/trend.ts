@@ -18,6 +18,7 @@ export interface MonthlySnapshot {
   netIncome?: number;           // 当期純利益
   depreciation?: number;        // 減価償却費
   interestExpense?: number;     // 支払利息
+  annualDebtRepayment?: number | null; // 年間返済元本（手入力。未入力は null）
 }
 
 /** 月次目標データ */

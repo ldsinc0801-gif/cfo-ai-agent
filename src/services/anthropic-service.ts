@@ -187,6 +187,8 @@ ${additionalJson}
 - year/month は資料の対象期間。月次試算表なら対象月、年度決算書なら期末年月（不明なら ${today.getFullYear()}/${today.getMonth() + 1}）。
 - 売上総利益が無ければ 売上高 - 売上原価 で計算。
 - 経常利益が無ければ営業利益で代用。
+- 売上高・売上原価・販管費・各資産・有利子負債は必ず0以上の正の数。マイナスで読み取れたら符号の取り違えなので見直すこと。
+- 有利子負債は BS の「短期借入金＋長期借入金＋社債＋リース債務」等の合計。借入があるのに0にしない。
 
 【出力JSON】
 {
@@ -228,28 +230,32 @@ JSONのみ返してください。`;
     if (!jsonMatch) throw new Error('AIからの応答からJSONを解析できませんでした');
 
     const p = JSON.parse(jsonMatch[0]);
-    return {
-      snapshot: {
-        year: p.year ?? today.getFullYear(),
-        month: p.month ?? today.getMonth() + 1,
-        revenue: p.revenue ?? 0,
-        costOfSales: p.costOfSales ?? 0,
-        grossProfit: p.grossProfit ?? ((p.revenue ?? 0) - (p.costOfSales ?? 0)),
-        sgaExpenses: p.sgaExpenses ?? 0,
-        operatingIncome: p.operatingIncome ?? 0,
-        ordinaryIncome: p.ordinaryIncome ?? p.operatingIncome ?? 0,
-        cashAndDeposits: p.cashAndDeposits ?? 0,
-        currentAssets: p.currentAssets ?? 0,
-        currentLiabilities: p.currentLiabilities ?? 0,
-        totalAssets: p.totalAssets ?? 0,
-        netAssets: p.netAssets ?? 0,
-        interestBearingDebt: p.interestBearingDebt ?? 0,
-        netIncome: p.netIncome ?? 0,
-        depreciation: p.depreciation ?? 0,
-        interestExpense: p.interestExpense ?? 0,
-      },
-      extractionNotes: p.extractionNotes || [],
+    const snapshot = {
+      year: p.year ?? today.getFullYear(),
+      month: p.month ?? today.getMonth() + 1,
+      revenue: p.revenue ?? 0,
+      costOfSales: p.costOfSales ?? 0,
+      grossProfit: p.grossProfit ?? ((p.revenue ?? 0) - (p.costOfSales ?? 0)),
+      sgaExpenses: p.sgaExpenses ?? 0,
+      operatingIncome: p.operatingIncome ?? 0,
+      ordinaryIncome: p.ordinaryIncome ?? p.operatingIncome ?? 0,
+      cashAndDeposits: p.cashAndDeposits ?? 0,
+      currentAssets: p.currentAssets ?? 0,
+      currentLiabilities: p.currentLiabilities ?? 0,
+      totalAssets: p.totalAssets ?? 0,
+      netAssets: p.netAssets ?? 0,
+      interestBearingDebt: p.interestBearingDebt ?? 0,
+      netIncome: p.netIncome ?? 0,
+      depreciation: p.depreciation ?? 0,
+      interestExpense: p.interestExpense ?? 0,
     };
+    const notes: string[] = Array.isArray(p.extractionNotes) ? p.extractionNotes : [];
+    // 明らかに不正な値を警告（自動補正はせず、確認・修正を促す）
+    if (snapshot.revenue < 0) notes.push('⚠ 売上高がマイナスで抽出されました。確認・修正画面で見直してください。');
+    if (snapshot.costOfSales < 0) notes.push('⚠ 売上原価がマイナスで抽出されました。見直してください。');
+    if (snapshot.netAssets < 0) notes.push('⚠ 純資産がマイナス（債務超過）で抽出されました。実態と異なる場合は修正してください。');
+    if (snapshot.totalAssets <= 0) notes.push('⚠ 総資産が0以下で抽出されました。確認してください。');
+    return { snapshot, extractionNotes: notes };
   }
 
   /**
@@ -267,6 +273,7 @@ JSONのみ返してください。`;
 - 各月の数値は円単位の整数。不明な項目は null（数値が0なら0）。
 - 売上総利益が無ければ 売上高 - 売上原価 で計算。
 - 経常利益が無ければ営業利益で代用。
+- 売上高・売上原価・販管費・各資産・有利子負債は必ず0以上。マイナスは符号の取り違えなので見直す。有利子負債は借入金＋社債等の合計で、借入があるのに0にしない。
 - 月の並びは古い順（昇順）にソート。
 
 【出力JSON】
