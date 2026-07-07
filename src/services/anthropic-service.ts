@@ -332,6 +332,64 @@ JSONのみ返してください。`;
     return { snapshots, extractionNotes: p.extractionNotes || [] };
   }
 
+  /**
+   * 補助書類（決算書に載らない書類）から、必要な項目だけをピンポイント抽出する。
+   * - loan_repayment（借入金の返済計画表）: 年間返済元本・有利子負債・支払利息
+   * - fixed_asset（固定資産台帳）: 減価償却費
+   * - account_breakdown（勘定科目内訳書）: 有利子負債（借入金内訳）
+   */
+  async extractSupplementaryDoc(
+    documentText: string,
+    docType: 'loan_repayment' | 'fixed_asset' | 'account_breakdown',
+    fileName: string,
+  ): Promise<{ fields: Record<string, number>; notes: string[] }> {
+    if (!this.ai) throw new Error('Gemini APIが初期化されていません');
+    const spec = {
+      loan_repayment: {
+        name: '借入金の返済計画表（借入金一覧・返済予定表）',
+        json: '{ "annualDebtRepayment": 年間の返済元本合計, "interestBearingDebt": 借入金残高の合計(有利子負債), "interestExpense": 年間の支払利息合計, "notes": ["補足や推定"] }',
+      },
+      fixed_asset: {
+        name: '固定資産台帳',
+        json: '{ "depreciation": 当期の減価償却費合計, "notes": ["補足や推定"] }',
+      },
+      account_breakdown: {
+        name: '勘定科目内訳明細書',
+        json: '{ "interestBearingDebt": 借入金合計(短期借入金+長期借入金+社債+リース債務), "notes": ["補足や推定"] }',
+      },
+    }[docType];
+
+    const prompt = `以下は「${spec.name}」です。ここから指定項目だけを読み取り、JSONで返してください。
+【ルール】
+- 数値は円単位の整数。該当が無ければ null。金額は必ず0以上。合計値を優先。
+- 年間返済元本は「元本」のみ（利息は含めない）。
+【出力JSON】
+${spec.json}
+【資料】
+ファイル名: ${fileName}
+${documentText}
+JSONのみ返してください。`;
+
+    const response = await this.ai.models.generateContent({
+      model: config.ai.geminiModel,
+      contents: prompt,
+    });
+    const text = response.text || '';
+    this.recordUsage(response, `補助書類抽出(${docType})`);
+
+    const jsonStr = text.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1] || text;
+    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('AIからの応答からJSONを解析できませんでした');
+    const p = JSON.parse(jsonMatch[0]);
+
+    const fields: Record<string, number> = {};
+    for (const k of ['annualDebtRepayment', 'interestBearingDebt', 'interestExpense', 'depreciation']) {
+      const v = p[k];
+      if (typeof v === 'number' && Number.isFinite(v) && v >= 0) fields[k] = v;
+    }
+    return { fields, notes: Array.isArray(p.notes) ? p.notes : [] };
+  }
+
   async extractTextFromPDF(pdfBuffer: Buffer, fileName: string): Promise<string> {
     if (!this.ai) throw new Error('Gemini APIが初期化されていません');
 

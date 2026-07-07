@@ -2649,7 +2649,21 @@ app.get('/agent/funding', async (req, res) => {
 app.get('/finance/data-edit', async (req, res) => {
   const tid = getActiveTenantId(req);
   const snapshots = tid ? await repo.getAllMonthlyActuals(asTenantId(tid)) : [];
-  res.send(renderFinanceDataEditHTML(snapshots, req.query.saved as string | undefined));
+  const q = req.query;
+  const docLabels: Record<string, string> = {
+    loan_repayment: '借入金の返済計画表', fixed_asset: '固定資産台帳', account_breakdown: '勘定科目内訳書',
+  };
+  let notice: string | undefined;
+  if (q.saved) notice = `✓ ${String(q.saved).replace(/[<>&"']/g, '')} を保存しました`;
+  else if (q.imported) {
+    const n = Number(q.n) || 0;
+    notice = n > 0
+      ? `✓ 「${docLabels[String(q.imported)] || '書類'}」を取り込み、${n}項目を最新期に反映しました`
+      : `「${docLabels[String(q.imported)] || '書類'}」を読み取りましたが、該当する数値が見つかりませんでした。別の書類か手修正をお試しください`;
+  } else if (q.err === 'ai') notice = '⚠ AI(Vertex)が未設定のため書類を読み取れません';
+  else if (q.err === 'nofile') notice = '⚠ ファイルが選択されていません';
+  else if (q.err) notice = '⚠ 取り込みに失敗しました。ファイルを確認してください';
+  res.send(renderFinanceDataEditHTML(snapshots, notice));
 });
 
 app.post('/finance/data-edit', express.urlencoded({ extended: true }), async (req, res) => {
@@ -2678,6 +2692,46 @@ app.post('/finance/data-edit', express.urlencoded({ extended: true }), async (re
   } catch (e) {
     logger.error('財務データ保存エラー', e);
     res.redirect('/finance/data-edit');
+  }
+});
+
+// 補助書類（借入金返済計画表/固定資産台帳/勘定科目内訳書）の取り込み。
+// AIが必要項目だけを抽出し、最新期の財務データにマージして保存する。
+app.post('/finance/import-doc', upload.array('files', 10), async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.redirect('/agent/finance'); return; }
+    const docType = String((req.body?.docType) || '');
+    if (!['loan_repayment', 'fixed_asset', 'account_breakdown'].includes(docType)) {
+      res.redirect('/finance/data-edit'); return;
+    }
+    const files = (req.files as Express.Multer.File[] | undefined) || [];
+    if (files.length === 0) { res.redirect('/finance/data-edit?err=nofile'); return; }
+    if (!anthropicService.isAvailable()) { res.redirect('/finance/data-edit?err=ai'); return; }
+
+    const snapshots = await repo.getAllMonthlyActuals(asTenantId(tid));
+    if (snapshots.length === 0) { res.redirect('/finance/data-edit?err=nodata'); return; }
+    const latest = snapshots[snapshots.length - 1];
+
+    const { text, names } = await readUploadedFilesAsText(files);
+    const { fields } = await anthropicService.extractSupplementaryDoc(
+      text, docType as 'loan_repayment' | 'fixed_asset' | 'account_breakdown', names.join(', '),
+    );
+
+    const merged: MonthlySnapshot = {
+      ...latest,
+      ...(fields.interestBearingDebt !== undefined ? { interestBearingDebt: fields.interestBearingDebt } : {}),
+      ...(fields.interestExpense !== undefined ? { interestExpense: fields.interestExpense } : {}),
+      ...(fields.depreciation !== undefined ? { depreciation: fields.depreciation } : {}),
+      ...(fields.annualDebtRepayment !== undefined ? { annualDebtRepayment: fields.annualDebtRepayment } : {}),
+    };
+    await repo.upsertMonthlyActual(asTenantId(tid), merged);
+    clearCache();
+    logger.info(`補助書類取込(${docType}): ${Object.keys(fields).length}項目を最新期に反映`);
+    res.redirect(`/finance/data-edit?imported=${docType}&n=${Object.keys(fields).length}`);
+  } catch (e) {
+    logger.error('補助書類の取込エラー', e);
+    res.redirect('/finance/data-edit?err=1');
   }
 });
 
