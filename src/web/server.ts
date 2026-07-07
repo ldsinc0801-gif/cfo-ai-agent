@@ -1439,28 +1439,48 @@ app.get('/agent/finance', async (req, res) => {
 });
 
 // 財務分析：決算書アップロード → AI分析
+
+/**
+ * 複数アップロードファイルを1つのテキストに結合する。
+ * BS(貸借対照表)と PL(損益計算書)が別CSV/PDFでも、まとめて1つの資料として
+ * AI に渡せるようにする。2件以上のときはファイル名の見出しを付けて区切る。
+ */
+async function readUploadedFilesAsText(
+  files: Express.Multer.File[],
+): Promise<{ text: string; names: string[] }> {
+  const names: string[] = [];
+  const parts: string[] = [];
+  for (const f of files) {
+    names.push(f.originalname);
+    const ext = path.extname(f.originalname).toLowerCase();
+    const raw = fs.readFileSync(f.path);
+    const t = ext === '.pdf'
+      ? await anthropicService.extractTextFromPDF(raw, f.originalname)
+      : raw.toString('utf-8');
+    parts.push(files.length > 1 ? `===== ファイル: ${f.originalname} =====\n${t}` : t);
+  }
+  return { text: parts.join('\n\n'), names };
+}
+
 /**
  * ダッシュボード用: 単月試算表 or 年度決算書のアップロード。
  * Gemini で PL/BS を1件抽出し monthly_actuals に upsert。
+ * BS/PL が別ファイルのケースに対応し、複数ファイルを結合して1件として抽出する。
  */
-app.post('/agent/finance/upload-snapshot', upload.single('file'), async (req, res) => {
+app.post('/agent/finance/upload-snapshot', upload.array('files', 10), async (req, res) => {
   try {
-    if (!req.file) { res.redirect('/?upload_error=' + encodeURIComponent('ファイルが選択されていません')); return; }
+    const files = (req.files as Express.Multer.File[] | undefined) || [];
+    if (files.length === 0) { res.redirect('/?upload_error=' + encodeURIComponent('ファイルが選択されていません')); return; }
     if (!anthropicService.isAvailable()) { res.redirect('/?upload_error=' + encodeURIComponent('Vertex AIが未設定です')); return; }
     const tenantId = getActiveTenantId(req);
     if (!tenantId) { res.redirect('/?upload_error=' + encodeURIComponent('テナントが選択されていません')); return; }
 
-    const ext = path.extname(req.file.originalname).toLowerCase();
-    let text: string;
-    if (ext === '.pdf') {
-      text = await anthropicService.extractTextFromPDF(fs.readFileSync(req.file.path), req.file.originalname);
-    } else {
-      text = fs.readFileSync(req.file.path, 'utf-8');
-    }
+    const { text, names } = await readUploadedFilesAsText(files);
+    const sourceName = names.join(', ');
 
-    const { snapshot, extractionNotes } = await anthropicService.extractMonthlySnapshot(text, req.file.originalname);
+    const { snapshot, extractionNotes } = await anthropicService.extractMonthlySnapshot(text, sourceName);
     await repo.upsertMonthlyActual(tenantId, snapshot);
-    logger.info(`単月スナップショット保存: ${snapshot.year}年${snapshot.month}月 (${req.file.originalname})`);
+    logger.info(`単月スナップショット保存: ${snapshot.year}年${snapshot.month}月 (${sourceName})`);
 
     clearCache();
     const noteParam = extractionNotes.length > 0 ? '&notes=' + encodeURIComponent(extractionNotes.join('; ')) : '';
@@ -1475,22 +1495,18 @@ app.post('/agent/finance/upload-snapshot', upload.single('file'), async (req, re
  * ダッシュボード用: 月次推移試算表のアップロード。
  * Gemini で複数月分の PL/BS を抽出し monthly_actuals に upsert。
  */
-app.post('/agent/finance/upload-trend', upload.single('file'), async (req, res) => {
+app.post('/agent/finance/upload-trend', upload.array('files', 10), async (req, res) => {
   try {
-    if (!req.file) { res.redirect('/?upload_error=' + encodeURIComponent('ファイルが選択されていません')); return; }
+    const files = (req.files as Express.Multer.File[] | undefined) || [];
+    if (files.length === 0) { res.redirect('/?upload_error=' + encodeURIComponent('ファイルが選択されていません')); return; }
     if (!anthropicService.isAvailable()) { res.redirect('/?upload_error=' + encodeURIComponent('Vertex AIが未設定です')); return; }
     const tenantId = getActiveTenantId(req);
     if (!tenantId) { res.redirect('/?upload_error=' + encodeURIComponent('テナントが選択されていません')); return; }
 
-    const ext = path.extname(req.file.originalname).toLowerCase();
-    let text: string;
-    if (ext === '.pdf') {
-      text = await anthropicService.extractTextFromPDF(fs.readFileSync(req.file.path), req.file.originalname);
-    } else {
-      text = fs.readFileSync(req.file.path, 'utf-8');
-    }
+    const { text, names } = await readUploadedFilesAsText(files);
+    const sourceName = names.join(', ');
 
-    const { snapshots, extractionNotes } = await anthropicService.extractMonthlyTrend(text, req.file.originalname);
+    const { snapshots, extractionNotes } = await anthropicService.extractMonthlyTrend(text, sourceName);
     if (snapshots.length === 0) {
       res.redirect('/?upload_error=' + encodeURIComponent('月次データを抽出できませんでした'));
       return;
@@ -1498,7 +1514,7 @@ app.post('/agent/finance/upload-trend', upload.single('file'), async (req, res) 
     for (const s of snapshots) {
       await repo.upsertMonthlyActual(tenantId, s);
     }
-    logger.info(`月次推移保存: ${snapshots.length}か月分 (${req.file.originalname})`);
+    logger.info(`月次推移保存: ${snapshots.length}か月分 (${sourceName})`);
 
     clearCache();
     const noteParam = extractionNotes.length > 0 ? '&notes=' + encodeURIComponent(extractionNotes.join('; ')) : '';
@@ -3621,10 +3637,10 @@ ${renderSidebar('dashboard')}
         <h4>月次推移試算表のアップロード</h4>
         <form method="POST" action="/agent/finance/upload-trend?_csrf=${encodeURIComponent(csrf)}" enctype="multipart/form-data" onsubmit="onUploadSubmit(this)">
           <div class="upload-form-row">
-            <input type="file" name="file" accept=".pdf,.csv,.txt" required>
+            <input type="file" name="files" accept=".pdf,.csv,.txt" multiple required>
             <button type="submit">アップロードして解析</button>
           </div>
-          <p class="upload-form-hint">PDF / CSV / TXT 対応。Gemini AI が月ごとのPL/BSを抽出して保存します（数十秒かかります）。</p>
+          <p class="upload-form-hint">PDF / CSV / TXT 対応。<strong>複数ファイル選択可</strong>（BS・PLが別ファイルでもまとめて選べます）。Gemini AI が月ごとのPL/BSを抽出して保存します（数十秒かかります）。</p>
         </form>
       </div>
 
@@ -3632,10 +3648,10 @@ ${renderSidebar('dashboard')}
         <h4>単月試算表 / 決算書のアップロード</h4>
         <form method="POST" action="/agent/finance/upload-snapshot?_csrf=${encodeURIComponent(csrf)}" enctype="multipart/form-data" onsubmit="onUploadSubmit(this)">
           <div class="upload-form-row">
-            <input type="file" name="file" accept=".pdf,.csv,.txt" required>
+            <input type="file" name="files" accept=".pdf,.csv,.txt" multiple required>
             <button type="submit">アップロードして解析</button>
           </div>
-          <p class="upload-form-hint">PDF / CSV / TXT 対応。Gemini AI が単月のPL/BSを抽出して保存します。</p>
+          <p class="upload-form-hint">PDF / CSV / TXT 対応。<strong>複数ファイル選択可</strong>（貸借対照表と損益計算書が別CSVでもまとめて選べます）。Gemini AI が単月のPL/BSを抽出して保存します。</p>
         </form>
       </div>
     </div>
