@@ -1,5 +1,6 @@
 import type { ChatMessage, CompanyMemory } from '../services/chat-service.js';
 import { renderSidebar, esc, SHARED_CSS } from './shared.js';
+import { csrfFormHidden, getCurrentCsrfToken } from './security.js';
 
 type OSCategory = { id: string; name: string; fileCount: number; titles: string[] };
 
@@ -61,6 +62,7 @@ ${renderSidebar('chat')}
       <div class="mem-card">
         <h3>${osSummary.length > 0 ? '追加メモ' : '記憶している情報'}</h3>
         <form action="/chat/memory" method="post" class="mem-form">
+          ${csrfFormHidden(getCurrentCsrfToken() || '')}
           <label>会社名<input name="companyName" value="${esc(memory.companyName)}" placeholder="株式会社〇〇"/></label>
           <label>業種<input name="industry" value="${esc(memory.industry)}" placeholder="IT、飲食、建設 等"/></label>
           <label>従業員数<input name="employeeCount" value="${esc(memory.employeeCount)}" placeholder="10人"/></label>
