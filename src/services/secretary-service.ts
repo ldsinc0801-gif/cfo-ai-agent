@@ -549,8 +549,8 @@ export class SecretaryService {
   }
 
   /** テンプレートファイルのパスを取得 */
-  getTemplateFilePath(id: string): string | null {
-    const template = this.getTemplate(id);
+  async getTemplateFilePath(id: string): Promise<string | null> {
+    const template = await this.getTemplate(id);
     if (!template) return null;
     return path.join(TEMPLATES_DIR, id, template.templateFile);
   }

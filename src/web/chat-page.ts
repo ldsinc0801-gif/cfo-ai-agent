@@ -1,9 +1,14 @@
 import type { ChatMessage, CompanyMemory } from '../services/chat-service.js';
 import { renderSidebar, esc, SHARED_CSS } from './shared.js';
-import { getOSSummary, isEnterpriseOSAvailable } from '../services/enterprise-os.js';
 
-export function renderChatHTML(history: ChatMessage[], memory: CompanyMemory, aiAvailable: boolean): string {
-  const osSummary = isEnterpriseOSAvailable() ? getOSSummary() : [];
+type OSCategory = { id: string; name: string; fileCount: number; titles: string[] };
+
+export function renderChatHTML(
+  history: ChatMessage[],
+  memory: CompanyMemory,
+  aiAvailable: boolean,
+  osSummary: OSCategory[] = [],
+): string {
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -49,7 +54,7 @@ ${renderSidebar('chat')}
                 <span class="os-cat-name">${esc(c.id.replace(/_/g, ' '))}</span>
                 <span class="os-cat-count">${c.fileCount}件</span>
               </div>
-              <div class="os-cat-files">${c.fileNames.map(f => esc(f)).join('、')}</div>
+              <div class="os-cat-files">${c.titles.map(f => esc(f)).join('、')}</div>
             </div>`).join('')}
         </div>
       </div>` : ''}

@@ -3178,7 +3178,8 @@ app.get('/chat', async (req, res) => {
   const uid = req.session.user?.id;
   const history = await chatService.getHistory(tid, uid);
   const memory = await chatService.getMemory(tid);
-  res.send(renderChatHTML(history, memory, chatService.isAvailable()));
+  const osSummary = (tid && isEnterpriseOSAvailable()) ? await getOSSummary(asTenantId(tid)) : [];
+  res.send(renderChatHTML(history, memory, chatService.isAvailable(), osSummary));
 });
 
 app.post('/chat/send', express.json(), async (req, res) => {
@@ -3325,7 +3326,7 @@ app.post('/chat/clear', async (req, res) => {
 });
 
 // 企業AI OSへの保存を確定
-import { saveKnowledge } from '../services/enterprise-os.js';
+import { saveKnowledge, getOSSummary, isEnterpriseOSAvailable } from '../services/enterprise-os.js';
 app.post('/chat/save-to-os', express.json(), async (req, res) => {
   const tenantId = getActiveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: 'テナントが選択されていません' }); return; }

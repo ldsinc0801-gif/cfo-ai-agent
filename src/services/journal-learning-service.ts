@@ -156,7 +156,7 @@ export class JournalLearningService {
     // 頻出の修正パターン
     const { data: corrections } = await getSupabase()
       .from('journal_corrections')
-      .select('original_debit_account, corrected_debit_account, count(*)')
+      .select('original_debit_account, corrected_debit_account')
       .eq('industry', industry)
       .limit(50);
 
