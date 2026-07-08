@@ -1543,14 +1543,19 @@ async function readUploadedFilesAsText(
 async function buildDocParts(
   files: Express.Multer.File[],
 ): Promise<Array<{ text: string } | { inlineData: { mimeType: string; data: string } }>> {
+  const IMG_MIME: Record<string, string> = {
+    '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
+    '.heic': 'image/heic', '.heif': 'image/heif', '.gif': 'image/gif',
+  };
   const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
   for (const f of files) {
     const ext = path.extname(f.originalname).toLowerCase();
     const buf = fs.readFileSync(f.path);
-    const isImage = (f.mimetype || '').startsWith('image/') ||
-      ['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.gif'].includes(ext);
+    const isImage = (f.mimetype || '').startsWith('image/') || IMG_MIME[ext] !== undefined;
     if (isImage) {
-      parts.push({ inlineData: { mimeType: f.mimetype || 'image/jpeg', data: buf.toString('base64') } });
+      // mimetype は空/不正なことがある(特にHEIC)ので拡張子から確定
+      const mime = IMG_MIME[ext] || (f.mimetype && f.mimetype.startsWith('image/') ? f.mimetype : 'image/jpeg');
+      parts.push({ inlineData: { mimeType: mime, data: buf.toString('base64') } });
     } else if (ext === '.pdf' || f.mimetype === 'application/pdf') {
       parts.push({ inlineData: { mimeType: 'application/pdf', data: buf.toString('base64') } });
     } else {
