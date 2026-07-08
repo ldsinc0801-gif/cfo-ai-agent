@@ -15,10 +15,33 @@ function signOf(n: number): 'positive' | 'negative' | 'zero' {
   return n > 0 ? 'positive' : n < 0 ? 'negative' : 'zero';
 }
 
+/** 直近2スナップショットが隣接月なら「月次データ」とみなす（年次決算書は年単位で離れる）。 */
+function isMonthlyData(snapshots: MonthlySnapshot[]): boolean {
+  if (snapshots.length < 2) return false;
+  const a = snapshots[snapshots.length - 2];
+  const b = snapshots[snapshots.length - 1];
+  const diff = (b.year * 12 + b.month) - (a.year * 12 + a.month);
+  return diff === 1;
+}
+
 export function buildRatingInputFromSnapshots(snapshots: MonthlySnapshot[]): RatingInput | null {
   if (!snapshots || snapshots.length === 0) return null;
   const latest = snapshots[snapshots.length - 1];
-  const prev = snapshots.length >= 2 ? snapshots[snapshots.length - 2] : null;
+  const monthly = isMonthlyData(snapshots);
+
+  // PL(フロー)は年間額で採点する。月次取込なら直近最大12か月を合算、年次決算書なら最新をそのまま。
+  const plWindow = monthly ? snapshots.slice(-12) : [latest];
+  const sum = (k: keyof MonthlySnapshot) => plWindow.reduce((s, m) => s + (Number(m[k]) || 0), 0);
+  const revenue = sum('revenue');
+  const operatingIncome = sum('operatingIncome');
+  const ordinaryIncome = sum('ordinaryIncome');
+  const netIncome = sum('netIncome');
+  const interestExpense = sum('interestExpense');
+  const depreciation = sum('depreciation');
+
+  // 前期比較(成長性)は、年次決算書のときだけ「前期スナップショット」を使う。
+  // 月次取込では前年同期の12か月合計が無いことが多いので算出不可(null)にする。
+  const prev = (!monthly && snapshots.length >= 2) ? snapshots[snapshots.length - 2] : null;
 
   const fixedAssets = Math.max(0, (latest.totalAssets || 0) - (latest.currentAssets || 0));
   const fixedLiabilities = Math.max(
@@ -27,7 +50,7 @@ export function buildRatingInputFromSnapshots(snapshots: MonthlySnapshot[]): Rat
   );
 
   return {
-    // BS
+    // BS(ストック)は常に最新スナップショット
     totalAssets: latest.totalAssets || 0,
     currentAssets: latest.currentAssets || 0,
     fixedAssets,
@@ -36,15 +59,15 @@ export function buildRatingInputFromSnapshots(snapshots: MonthlySnapshot[]): Rat
     netAssets: latest.netAssets || 0,
     interestBearingDebt: latest.interestBearingDebt ?? 0,
     cashAndDeposits: latest.cashAndDeposits || 0,
-    // PL
-    revenue: latest.revenue || 0,
-    operatingIncome: latest.operatingIncome || 0,
-    ordinaryIncome: latest.ordinaryIncome || 0,
-    netIncome: latest.netIncome ?? 0,
-    interestExpense: latest.interestExpense ?? 0,
+    // PL(フロー)は年間額
+    revenue,
+    operatingIncome,
+    ordinaryIncome,
+    netIncome,
+    interestExpense,
     interestIncome: 0, // 取込では未取得（影響軽微）
-    depreciation: latest.depreciation ?? 0,
-    // 前期
+    depreciation,
+    // 前期（月次取込では null＝算出不可）
     prevOrdinaryIncome: prev ? prev.ordinaryIncome || 0 : null,
     prevTotalAssets: prev ? prev.totalAssets || 0 : null,
     // 返済元本：返済計画表の手入力値を優先、無ければ期首−期末で概算
