@@ -28,7 +28,7 @@ export function renderBankMetricsCard(m: ImportedMetrics): string {
       ${row('営業利益率', fmtPct(m.operatingMargin), '営業利益 ÷ 売上')}
       ${row('経常利益率', fmtPct(m.ordinaryMargin), '経常利益 ÷ 売上')}
       ${m.interestBearingDebt <= 0 ? `<div style="margin-top:14px;font-size:12px;color:#6b7280;background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:10px 12px;line-height:1.6">有利子負債が 0 として取り込まれています。借入がある場合は、有利子負債（借入金）が記載された決算書を取り込むか、下記から手入力してください。</div>` : ''}
-      <div style="margin-top:14px"><a href="/finance/data-edit" style="font-size:13px;color:var(--primary);font-weight:700;text-decoration:none">→ 数値を確認・修正 ／ 年間返済元本を入力</a></div>
+      <div style="margin-top:14px"><a href="/finance/data-edit" style="font-size:13px;color:var(--primary);font-weight:700;text-decoration:none">→ 不足書類のアップロード</a></div>
     </div>
   </div>`;
 }

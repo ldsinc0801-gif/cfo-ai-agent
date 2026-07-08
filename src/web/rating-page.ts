@@ -609,7 +609,7 @@ export function renderRatingHTML(
 
 <div class="analysis-toolbar">
   <div class="source-badge source-badge--${options.source}">${sourceLabel}</div>
-  ${options.source === 'upload' ? `<a href="/finance/data-edit" style="font-size:13px;color:var(--primary);font-weight:700;text-decoration:none;margin-left:12px">→ 数値を確認・修正</a>` : ''}
+  ${options.source === 'upload' ? `<a href="/finance/data-edit" style="font-size:13px;color:var(--primary);font-weight:700;text-decoration:none;margin-left:12px">→ 不足書類のアップロード</a>` : ''}
 ${options.analysisId ? `
   <div class="save-status">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2298ae" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
