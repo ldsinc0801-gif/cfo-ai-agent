@@ -2782,7 +2782,7 @@ app.get('/finance/data-edit', async (req, res) => {
   else if (q.err === 'ai') notice = '⚠ AI(Vertex)が未設定のため書類を読み取れません';
   else if (q.err === 'nofile') notice = '⚠ ファイルが選択されていません';
   else if (q.err) notice = '⚠ 取り込みに失敗しました。ファイルを確認してください';
-  res.send(renderFinanceDataEditHTML(snapshots, notice));
+  res.send(renderFinanceDataEditHTML(snapshots, notice, q.mode === 'add'));
 });
 
 app.post('/finance/data-edit', express.urlencoded({ extended: true }), async (req, res) => {
@@ -2880,7 +2880,7 @@ app.post('/finance/reset-loan', express.urlencoded({ extended: true }), async (r
       });
       clearCache();
     }
-    res.redirect('/finance/data-edit?resetloan=1');
+    res.redirect('/finance/data-edit?resetloan=1&mode=add');
   } catch (e) {
     logger.error('借入リセットエラー', e);
     res.redirect('/finance/data-edit');

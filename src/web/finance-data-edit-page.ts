@@ -18,7 +18,7 @@ const DOCS: { type: string; icon: string; label: string; desc: string }[] = [
 ];
 
 /** 財務データの確認・修正ページ。不足書類の取込 + 期ごとの手修正。 */
-export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?: string): string {
+export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?: string, keepAddMode?: boolean): string {
   const latest = snapshots.length ? snapshots[snapshots.length - 1] : null;
   // 決算書で埋まらない項目の検知
   const needRepay = !!latest && latest.annualDebtRepayment == null; // 年間返済元本(決算書に無い)
@@ -37,8 +37,8 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
     const isLoan = d.type === 'loan_repayment';
     const loanMode = isLoan
       ? `<div style="margin-top:8px;font-size:12px;text-align:left">
-           <label style="display:block;margin-bottom:3px"><input type="radio" name="mode" value="replace" checked> 全借入をまとめて取り込む（上書き）</label>
-           <label style="display:block"><input type="radio" name="mode" value="add"> 借入を1件ずつ追加（加算）</label>
+           <label style="display:block;margin-bottom:3px"><input type="radio" name="mode" value="replace" ${keepAddMode ? '' : 'checked'}> 全借入をまとめて取り込む（上書き）</label>
+           <label style="display:block"><input type="radio" name="mode" value="add" ${keepAddMode ? 'checked' : ''}> 借入を1件ずつ追加（加算）${keepAddMode ? ' <span style="color:#16a34a;font-weight:700">← 継続中</span>' : ''}</label>
            <div style="font-size:11px;color:var(--text2);margin-top:6px;line-height:1.6">1つの借入が複数ページの時は<strong>全ファイルをまとめて選択</strong>（AIが1件として合計）。借入が複数なら全部まとめて選び「上書き」で1回でOK。1件ずつ入れたい時は「リセット→加算」。</div>
          </div>`
       : '';
