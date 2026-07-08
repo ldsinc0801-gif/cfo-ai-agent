@@ -779,6 +779,15 @@ async function isFreeeConnected(tenantId?: TenantId): Promise<boolean> {
   return (await getFreeeToken(tenantId)) !== null;
 }
 
+/**
+ * デモデータは「デモセッション(demo-user)」のときだけ返す。
+ * グローバルのデモフラグが ON でも、実際にログインしている実テナントの画面には
+ * デモデータを染み出させない（過去、実テナントにデモ企業Aが表示される不具合の対策）。
+ */
+function demoForReq(req: express.Request): ReturnType<typeof getDemoProfile> {
+  return req.session?.user?.id === 'demo-user' ? getDemoProfile() : null;
+}
+
 /** レポートデータを生成（freee接続時は実データ、デモモード時はデモデータ、それ以外はnull） */
 async function buildReport(year?: number, month?: number, isDemo: boolean = false, tenantId?: TenantId) {
   // デモモード: セッションがデモユーザーの場合のみデモデータを使用
@@ -1447,8 +1456,8 @@ app.get('/api/learn/insights', async (_req, res) => {
 // 財務分析AIエージェント
 app.get('/agent/finance', async (req, res) => {
   try {
-    // デモモード
-    const demoProfile = getDemoProfile();
+    // デモモード（デモセッションのときだけ）
+    const demoProfile = demoForReq(req);
     if (demoProfile) {
       logger.info(`デモモード財務分析: ${demoProfile.companyName}`);
       res.send(renderRatingHTML(demoProfile.rating, demoProfile.additional, {
@@ -2533,11 +2542,11 @@ app.post('/agent/accounting/send-freee', express.urlencoded({ extended: true }),
       }));
       return;
     }
-    // デモモード: freee送信成功画面を返す
-    if (isDemoMode()) {
+    // デモモード: freee送信成功画面を返す（デモセッションのときだけ）
+    const demoProfileSend = demoForReq(req);
+    if (demoProfileSend) {
       const entries: JournalEntry[] = JSON.parse(req.body.entries || '[]');
-      const demoProfile = getDemoProfile();
-      const companyName = demoProfile?.companyName || 'デモ会社';
+      const companyName = demoProfileSend.companyName || 'デモ会社';
       const results = entries.map(e =>
         `[送信完了] ${e.date} ${e.debitAccount} ${e.amount.toLocaleString()}円 → ${e.creditAccount}で決済済み - ${e.description}`
       );
@@ -2674,7 +2683,7 @@ app.post('/agent/accounting/batch/:id/send-freee', express.urlencoded({ extended
 // 資金調達AIエージェント
 // 深掘り質問の文脈（業種＋主要指標）をデモ/実データから取得
 async function getDeepDiveContext(req: express.Request): Promise<{ industry: string; context: string }> {
-  const demo = getDemoProfile();
+  const demo = demoForReq(req);
   if (demo) {
     return {
       industry: (demo as any).industry || '',
@@ -2747,7 +2756,7 @@ app.get('/agent/funding', async (req, res) => {
   let forecast = null;
   let loanDetails: import('../repositories/supabase-repository.js').LoanDetail[] = [];
   try {
-    const demo = getDemoProfile();
+    const demo = demoForReq(req);
     let snapshots: MonthlySnapshot[] = [];
     if (demo) {
       // デモ: 月次推移(cashAndDeposits等)を使い、最新月に借入・減価償却等を補完
@@ -3026,8 +3035,9 @@ app.get('/agent/secretary', async (req, res) => {
   const billingConfigs = await loadBillingConfigs(getActiveTenantId(req)!);
   let detectedTasks: Array<{ title: string; customerName: string }> = [];
 
-  if (isDemoMode()) {
-    // デモモード: プリセットタスクとテンプレート
+  const secretaryDemo = demoForReq(req);
+  if (secretaryDemo) {
+    // デモモード: プリセットタスクとテンプレート（デモセッションのときだけ）
     detectedTasks = [
       { title: '株式会社ABC 4月分請求書作成', customerName: '株式会社ABC' },
       { title: 'DEFコンサル 4月分請求書', customerName: 'DEFコンサル' },
@@ -3042,7 +3052,7 @@ app.get('/agent/secretary', async (req, res) => {
     // デモ用会社設定
     const cs = await loadCompanySettings(getActiveTenantId(req) || undefined);
     if (!cs || !cs.companyName) {
-      const demoProfile = getDemoProfile();
+      const demoProfile = secretaryDemo;
       await saveCompanySettings({
         companyName: demoProfile?.companyName || 'デモ企業A（ITコンサル）',
         postalCode: '100-0001',
