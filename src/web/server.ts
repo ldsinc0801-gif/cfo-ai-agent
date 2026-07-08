@@ -1454,7 +1454,7 @@ app.get('/agent/finance', async (req, res) => {
       res.send(renderRatingHTML(demoProfile.rating, demoProfile.additional, {
         aiAvailable: true,
         aiCommentary: demoProfile.aiCommentary,
-        source: 'freee',
+        source: 'mock', // デモは「デモデータ（モック）」バッジで表示し、実データと区別する
       }));
       return;
     }
