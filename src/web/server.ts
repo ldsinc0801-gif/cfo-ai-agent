@@ -4165,6 +4165,8 @@ document.querySelectorAll('#uploadModal .ua-drop').forEach(function(dz){
   dz.addEventListener('drop',function(e){if(e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files.length){input.files=e.dataTransfer.files;r();}});
   input.addEventListener('change',r);
 });
+// /finance/data-edit の「決算書を取り込む」から ?upload=1 で来たら自動でモーダルを開く
+if(new URLSearchParams(location.search).get('upload')==='1'){var _um=document.getElementById('uploadModal');if(_um)_um.classList.add('open');}
 </script>
 </body></html>`;
 }

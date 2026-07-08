@@ -76,7 +76,7 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
       <div class="card-body">
         <div class="doc-first">
           <div><strong>まず「決算書（BS/PL）」を取り込むのが基本です。</strong>売上・資産・借入残高・減価償却費など、分析に必要な数値の大半が自動で埋まります。数字がおかしい・借入が0のときは、決算書を取り込み直してください。</div>
-          <a href="/" class="btn-primary btn-sm" style="margin-top:10px;display:inline-block;text-decoration:none">決算書を取り込む／取り込み直す</a>
+          <a href="/?upload=1" class="btn-primary btn-sm" style="margin-top:10px;display:inline-block;text-decoration:none">決算書を取り込む／取り込み直す</a>
         </div>
         ${missingLabels.length
           ? `<div class="doc-warn">決算書で埋まっていない項目があります：<strong>${missingLabels.join(' / ')}</strong>。下記の該当書類（オレンジ枠）で補えます。<strong>年間返済元本は決算書に無い</strong>ため、これだけは取り込みが必要です。</div>`
