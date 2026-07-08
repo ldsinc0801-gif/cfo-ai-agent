@@ -1537,6 +1537,30 @@ async function readUploadedFilesAsText(
 }
 
 /**
+ * アップロードファイルを Gemini のマルチモーダル入力(parts)に変換する。
+ * 画像(スマホ写真等)・PDF は inlineData でそのままAIに渡し、CSV/テキストは文字列に。
+ */
+async function buildDocParts(
+  files: Express.Multer.File[],
+): Promise<Array<{ text: string } | { inlineData: { mimeType: string; data: string } }>> {
+  const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
+  for (const f of files) {
+    const ext = path.extname(f.originalname).toLowerCase();
+    const buf = fs.readFileSync(f.path);
+    const isImage = (f.mimetype || '').startsWith('image/') ||
+      ['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.gif'].includes(ext);
+    if (isImage) {
+      parts.push({ inlineData: { mimeType: f.mimetype || 'image/jpeg', data: buf.toString('base64') } });
+    } else if (ext === '.pdf' || f.mimetype === 'application/pdf') {
+      parts.push({ inlineData: { mimeType: 'application/pdf', data: buf.toString('base64') } });
+    } else {
+      parts.push({ text: `===== ${f.originalname} =====\n${decodeUploadedText(buf)}` });
+    }
+  }
+  return parts;
+}
+
+/**
  * ダッシュボード用: 単月試算表 or 年度決算書のアップロード。
  * Gemini で PL/BS を1件抽出し monthly_actuals に upsert。
  * BS/PL が別ファイルのケースに対応し、複数ファイルを結合して1件として抽出する。
@@ -2739,9 +2763,9 @@ app.post('/finance/import-doc', upload.array('files', 10), async (req, res) => {
     if (snapshots.length === 0) { res.redirect('/finance/data-edit?err=nodata'); return; }
     const latest = snapshots[snapshots.length - 1];
 
-    const { text, names } = await readUploadedFilesAsText(files);
+    const parts = await buildDocParts(files);
     const { fields } = await anthropicService.extractSupplementaryDoc(
-      text, docType as 'loan_repayment' | 'fixed_asset' | 'account_breakdown', names.join(', '),
+      parts, docType as 'loan_repayment' | 'fixed_asset' | 'account_breakdown',
     );
 
     const merged: MonthlySnapshot = {

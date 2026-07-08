@@ -30,11 +30,11 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
     <form method="post" action="/finance/import-doc" enctype="multipart/form-data" class="doc-card${highlight ? ' doc-card--need' : ''}">
       <input type="hidden" name="docType" value="${d.type}">
       <label class="doc-dropzone">
-        <input type="file" name="files" accept=".pdf,.csv,.xlsx,.txt" multiple>
+        <input type="file" name="files" accept=".pdf,.csv,.xlsx,.txt,image/*" multiple>
         <div class="doc-icon">${d.icon}</div>
         <div class="doc-title">${d.label}</div>
         <div class="doc-desc">${d.desc}</div>
-        <div class="doc-hint">クリック または ドラッグ&ドロップ</div>
+        <div class="doc-hint">写真・PDF・CSV可／クリック・ドラッグ&ドロップ・複数選択可</div>
         <div class="doc-files"></div>
       </label>
       <button type="submit" class="btn-primary btn-sm" style="width:100%;margin-top:10px">この書類を取り込む</button>
@@ -87,6 +87,7 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
     .doc-warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px;line-height:1.6}
     .doc-ok{background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px}
   </style>
+  <a href="/agent/finance" style="display:inline-flex;align-items:center;gap:4px;margin-bottom:14px;color:var(--primary);font-weight:700;text-decoration:none;font-size:14px">← 財務分析AIに戻る</a>
   ${body}
   <script>
   document.querySelectorAll('.doc-dropzone').forEach(function(dz){

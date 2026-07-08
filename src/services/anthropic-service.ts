@@ -339,15 +339,14 @@ JSONのみ返してください。`;
    * - account_breakdown（勘定科目内訳書）: 有利子負債（借入金内訳）
    */
   async extractSupplementaryDoc(
-    documentText: string,
+    parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }>,
     docType: 'loan_repayment' | 'fixed_asset' | 'account_breakdown',
-    fileName: string,
   ): Promise<{ fields: Record<string, number>; notes: string[] }> {
     if (!this.ai) throw new Error('Gemini APIが初期化されていません');
     const spec = {
       loan_repayment: {
         name: '借入金の返済計画表（借入金一覧・返済予定表）',
-        json: '{ "annualDebtRepayment": 年間の返済元本合計, "interestBearingDebt": 借入金残高の合計(有利子負債), "interestExpense": 年間の支払利息合計, "notes": ["補足や推定"] }',
+        json: '{ "annualDebtRepayment": 全借入の年間返済元本の合計, "interestBearingDebt": 全借入の残高の合計(有利子負債), "interestExpense": 全借入の年間支払利息の合計, "notes": ["補足や推定"] }',
       },
       fixed_asset: {
         name: '固定資産台帳',
@@ -359,20 +358,19 @@ JSONのみ返してください。`;
       },
     }[docType];
 
-    const prompt = `以下は「${spec.name}」です。ここから指定項目だけを読み取り、JSONで返してください。
+    const prompt = `添付は「${spec.name}」です（写真・PDF・CSV等）。ここから指定項目だけを読み取り、JSONで返してください。
 【ルール】
-- 数値は円単位の整数。該当が無ければ null。金額は必ず0以上。合計値を優先。
+- 数値は円単位の整数。該当が無ければ null。金額は必ず0以上。
+- **借入が複数ある場合は、全ての借入を合算した合計値**を返す（1つだけにしない）。
 - 年間返済元本は「元本」のみ（利息は含めない）。
+- 資料が複数枚/複数ファイルに分かれている場合も、全体を合算する。
 【出力JSON】
 ${spec.json}
-【資料】
-ファイル名: ${fileName}
-${documentText}
 JSONのみ返してください。`;
 
     const response = await this.ai.models.generateContent({
       model: config.ai.geminiModel,
-      contents: prompt,
+      contents: [{ role: 'user', parts: [...parts, { text: prompt }] }],
     });
     const text = response.text || '';
     this.recordUsage(response, `補助書類抽出(${docType})`);
