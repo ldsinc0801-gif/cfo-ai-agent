@@ -1,6 +1,6 @@
 import { agentPageShell } from './shared.js';
 import type { MonthlySnapshot } from '../types/trend.js';
-import type { LoanDetail } from '../repositories/supabase-repository.js';
+import type { LoanDetail, FixedAssetDetail } from '../repositories/supabase-repository.js';
 import {
   openingInterestBearingDebt,
   effectiveAnnualDebtRepayment,
@@ -24,7 +24,7 @@ const DOCS: { type: string; icon: string; label: string; desc: string }[] = [
 ];
 
 /** 財務データの確認・修正ページ。不足書類の取込 + 期ごとの手修正。 */
-export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?: string, loanDetails: LoanDetail[] = []): string {
+export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?: string, loanDetails: LoanDetail[] = [], fixedAssetDetails: FixedAssetDetail[] = []): string {
   const latest = snapshots.length ? snapshots[snapshots.length - 1] : null;
   // 借入金：期首→期末残高（決算書BSより）と年間返済元本（実績 or 期首−期末の概算）
   const openingDebt = openingInterestBearingDebt(snapshots);
@@ -59,6 +59,21 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
           </form>
         </div>`).join('')
     : '<div style="font-size:12px;color:var(--text2);padding:6px 0">まだ借入明細がありません。返済予定表を1件ずつ取り込んでください。</div>';
+  // 固定資産明細（資産別、簿価の大きい順）
+  const assetRows = fixedAssetDetails.length
+    ? fixedAssetDetails.map((a) => `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px dashed var(--border)">
+          <div style="font-size:13px;line-height:1.4">
+            <strong style="color:var(--text)">${esc(a.name)}</strong>
+            <span style="color:var(--text2);font-size:12px;display:block">簿価 ${fmtYen(a.bookValue)}${a.depreciation != null ? ` ／ 当期償却 ${fmtYen(a.depreciation)}` : ''}${a.acquisitionCost != null ? ` ／ 取得 ${fmtYen(a.acquisitionCost)}` : ''}</span>
+          </div>
+          <form method="post" action="/finance/delete-asset" onsubmit="return confirm('この資産（${esc(a.name)}）を削除しますか？')">
+            <input type="hidden" name="id" value="${esc(a.id)}">
+            <button type="submit" title="削除" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:18px;line-height:1;padding:0 4px">×</button>
+          </form>
+        </div>`).join('')
+    : '<div style="font-size:12px;color:var(--text2);padding:6px 0">まだ固定資産明細がありません。固定資産台帳を取り込んでください。</div>';
+  const assetBookTotal = fixedAssetDetails.reduce((s, a) => s + (a.bookValue || 0), 0);
   const docCard = (d: (typeof DOCS)[number], highlight: boolean) => {
     const isLoan = d.type === 'loan_repayment';
     const loanMode = isLoan
@@ -90,7 +105,16 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
       : d.type === 'account_breakdown'
         ? `<div style="margin-top:12px;text-align:left;border-top:1px solid var(--border);padding-top:10px">${curValRow('現在の借入残高（有利子負債）', latest?.interestBearingDebt)}</div>`
         : d.type === 'fixed_asset'
-          ? `<div style="margin-top:12px;text-align:left;border-top:1px solid var(--border);padding-top:10px">${curValRow('現在の減価償却費', latest?.depreciation)}</div>`
+          ? `<div style="margin-top:12px;text-align:left;border-top:1px solid var(--border);padding-top:10px">
+               <div style="margin-bottom:8px">${curValRow('現在の減価償却費（合計）', latest?.depreciation)}</div>
+               <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:2px">固定資産明細（簿価の大きい順）</div>
+               <div style="margin-bottom:8px">${assetRows}</div>
+               <div style="font-size:13px;margin-bottom:8px">期末簿価 合計：<strong style="color:var(--text)">${fmtYen(assetBookTotal)}</strong></div>
+               ${fixedAssetDetails.length ? `<form method="post" action="/finance/reset-asset" onsubmit="return confirm('固定資産明細を全て消去します。よろしいですか？')">
+                 <button type="submit" style="width:100%;background:#f97316;color:#fff;border:none;border-radius:8px;padding:9px;font-size:13px;font-weight:700;cursor:pointer">🔄 固定資産明細をリセット</button>
+               </form>` : ''}
+               <div style="font-size:11px;color:var(--text2);margin-top:6px">※ 固定資産台帳を取り込み直すと明細は置き換わります。1件だけ消したい時は各行の × 。</div>
+             </div>`
           : '';
     return `
     <div>

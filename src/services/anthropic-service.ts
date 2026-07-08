@@ -344,7 +344,12 @@ JSONのみ返してください。`;
   async extractSupplementaryDoc(
     parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }>,
     docType: 'loan_repayment' | 'fixed_asset' | 'account_breakdown',
-  ): Promise<{ fields: Record<string, number>; lender?: string; notes: string[] }> {
+  ): Promise<{
+    fields: Record<string, number>;
+    lender?: string;
+    assets?: { name: string; acquisitionCost: number | null; depreciation: number | null; bookValue: number | null }[];
+    notes: string[];
+  }> {
     if (!this.ai) throw new Error('Gemini APIが初期化されていません');
     const spec = {
       loan_repayment: {
@@ -354,8 +359,8 @@ JSONのみ返してください。`;
       },
       fixed_asset: {
         name: '固定資産台帳',
-        json: '{ "depreciation": 当期の減価償却費合計, "notes": ["補足や推定"] }',
-        hint: '当期の減価償却費の合計額を読み取る。',
+        json: '{ "assets": [{"name": 資産名, "acquisitionCost": 取得価額, "depreciation": 当期償却額, "bookValue": 期末簿価(残存価格)}], "depreciation": 当期の減価償却費の合計, "notes": ["補足や推定"] }',
+        hint: '固定資産台帳から、資産ごとに「資産名・取得価額・当期減価償却費・期末簿価(残存価格)」を assets 配列で読み取る。多数ある場合も全て列挙する（同じ資産の重複行や小計行は除く）。depreciation には当期減価償却費の合計を入れる。',
       },
       account_breakdown: {
         name: '勘定科目内訳明細書',
@@ -390,7 +395,20 @@ JSONのみ返してください。`;
       if (typeof v === 'number' && Number.isFinite(v) && v >= 0) fields[k] = v;
     }
     const lender = typeof p.lender === 'string' ? p.lender.trim() : '';
-    return { fields, lender, notes: Array.isArray(p.notes) ? p.notes : [] };
+    // 固定資産台帳: 資産ごとの明細（最大200件）
+    const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
+    const assets = docType === 'fixed_asset' && Array.isArray(p.assets)
+      ? p.assets
+          .filter((a: any) => a && (typeof a.name === 'string') && (a.name.trim() !== ''))
+          .slice(0, 200)
+          .map((a: any) => ({
+            name: String(a.name).trim().slice(0, 80),
+            acquisitionCost: num(a.acquisitionCost),
+            depreciation: num(a.depreciation),
+            bookValue: num(a.bookValue),
+          }))
+      : undefined;
+    return { fields, lender, assets, notes: Array.isArray(p.notes) ? p.notes : [] };
   }
 
   /** 業種を踏まえた深掘り質問を生成する。 */

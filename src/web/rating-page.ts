@@ -71,6 +71,47 @@ export interface RatingPageOptions {
   extractionNotes?: string[];
   analysisId?: string;
   savedAt?: string;
+  /** 固定資産明細（資産名・簿価・当期償却）。担保余力の把握用に一覧表示する。 */
+  fixedAssets?: { id: string; name: string; acquisitionCost: number | null; depreciation: number | null; bookValue: number | null }[];
+}
+
+/** 固定資産明細カード（簿価の大きい順）。担保余力・設備実態の把握用。 */
+export function renderFixedAssetsCard(
+  assets: { name: string; acquisitionCost: number | null; depreciation: number | null; bookValue: number | null }[],
+): string {
+  if (!assets || assets.length === 0) return '';
+  const fmtYen = (n: number | null) => (n == null ? '—' : '¥' + new Intl.NumberFormat('ja-JP').format(Math.round(n)));
+  const esc = (s: string) =>
+    String(s).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c] as string));
+  const bookTotal = assets.reduce((a, x) => a + (x.bookValue || 0), 0);
+  const depTotal = assets.reduce((a, x) => a + (x.depreciation || 0), 0);
+  return `
+  <div class="card" style="margin-bottom:20px">
+    <div class="card-header"><h3>固定資産の明細</h3><span class="card-sub">何が・簿価いくら残っているか（担保余力の目安）</span></div>
+    <div class="card-body">
+      <table style="width:100%;font-size:13px;border-collapse:collapse">
+        <thead><tr>
+          <th style="text-align:left;padding:8px 4px;border-bottom:2px solid var(--border)">資産</th>
+          <th style="text-align:right;padding:8px 4px;border-bottom:2px solid var(--border)">取得価額</th>
+          <th style="text-align:right;padding:8px 4px;border-bottom:2px solid var(--border)">当期償却</th>
+          <th style="text-align:right;padding:8px 4px;border-bottom:2px solid var(--border)">期末簿価</th>
+        </tr></thead>
+        <tbody>${assets.map((a) => `<tr>
+          <td style="padding:8px 4px;border-bottom:1px solid var(--border)"><strong>${esc(a.name)}</strong></td>
+          <td style="text-align:right;padding:8px 4px;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums">${fmtYen(a.acquisitionCost)}</td>
+          <td style="text-align:right;padding:8px 4px;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums">${fmtYen(a.depreciation)}</td>
+          <td style="text-align:right;padding:8px 4px;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums">${fmtYen(a.bookValue)}</td>
+        </tr>`).join('')}
+        <tr style="font-weight:800">
+          <td style="padding:8px 4px">合計</td>
+          <td style="text-align:right;padding:8px 4px"></td>
+          <td style="text-align:right;padding:8px 4px;font-variant-numeric:tabular-nums">${fmtYen(depTotal)}</td>
+          <td style="text-align:right;padding:8px 4px;font-variant-numeric:tabular-nums">${fmtYen(bookTotal)}</td>
+        </tr></tbody>
+      </table>
+      <p style="font-size:11px;color:var(--text2);margin-top:8px">※ 簿価の大きい設備・不動産は担保余力の目安になります。編集は<a href="/finance/data-edit" style="color:var(--primary)">財務データの取込</a>から。</p>
+    </div>
+  </div>`;
 }
 
 /** 分析中ローディング画面（パーティクルアニメーション） */
@@ -633,6 +674,8 @@ ${options.analysisId ? `
 ${extractionNotesHTML}
 
 ${aiCommentaryHTML}
+
+${options.fixedAssets ? renderFixedAssetsCard(options.fixedAssets) : ''}
 
 <!-- Section 1: Welcome Banner -->
 <div class="rating-banner">

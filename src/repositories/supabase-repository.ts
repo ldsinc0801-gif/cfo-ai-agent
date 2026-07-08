@@ -511,6 +511,62 @@ export async function clearLoanDetails(tenantId: TenantId): Promise<void> {
   if (error) throw new Error(`借入明細のリセットに失敗: ${error.message}`);
 }
 
+// ========== 固定資産明細（資産ごとの内訳） ==========
+
+export interface FixedAssetDetail {
+  id: string;
+  name: string;                 // 資産名（例: 車両運搬具, 工具器具備品）
+  acquisitionCost: number | null; // 取得価額
+  depreciation: number | null;    // 当期減価償却費
+  bookValue: number | null;       // 期末簿価（残存価格）
+  note: string | null;
+}
+
+export async function listFixedAssetDetails(tenantId: TenantId): Promise<FixedAssetDetail[]> {
+  const { data, error } = await getSupabase()
+    .from('fixed_asset_details')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .order('book_value', { ascending: false });
+  if (error) throw new Error(`固定資産明細の取得に失敗: ${error.message}`);
+  return (data || []).map((r: any) => ({
+    id: r.id,
+    name: r.name ?? '資産',
+    acquisitionCost: r.acquisition_cost == null ? null : Number(r.acquisition_cost),
+    depreciation: r.depreciation == null ? null : Number(r.depreciation),
+    bookValue: r.book_value == null ? null : Number(r.book_value),
+    note: r.note ?? null,
+  }));
+}
+
+/** 固定資産台帳は全資産の一覧なので、取込時は全消去→全挿入で置き換える。 */
+export async function replaceFixedAssetDetails(tenantId: TenantId, items: Omit<FixedAssetDetail, 'id'>[]): Promise<void> {
+  await clearFixedAssetDetails(tenantId);
+  if (!items.length) return;
+  const rows = items.map((a) => ({
+    tenant_id: tenantId,
+    name: a.name || '資産',
+    acquisition_cost: a.acquisitionCost,
+    depreciation: a.depreciation,
+    book_value: a.bookValue,
+    note: a.note,
+  }));
+  const { error } = await getSupabase().from('fixed_asset_details').insert(rows);
+  if (error) throw new Error(`固定資産明細の保存に失敗: ${error.message}`);
+}
+
+export async function deleteFixedAssetDetail(tenantId: TenantId, id: string): Promise<void> {
+  const { error } = await getSupabase()
+    .from('fixed_asset_details').delete().eq('tenant_id', tenantId).eq('id', id);
+  if (error) throw new Error(`固定資産明細の削除に失敗: ${error.message}`);
+}
+
+export async function clearFixedAssetDetails(tenantId: TenantId): Promise<void> {
+  const { error } = await getSupabase()
+    .from('fixed_asset_details').delete().eq('tenant_id', tenantId);
+  if (error) throw new Error(`固定資産明細のリセットに失敗: ${error.message}`);
+}
+
 // ========== テナント設定 ==========
 
 /** テナントの決算月（1-12）を取得。未設定なら null。 */

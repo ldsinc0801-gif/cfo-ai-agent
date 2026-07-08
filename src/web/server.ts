@@ -1473,10 +1473,12 @@ app.get('/agent/finance', async (req, res) => {
       if (input) {
         const rating = calculateBankRating(input);
         const additional = calculateAdditionalMetrics(input);
+        const fixedAssets = await repo.listFixedAssetDetails(asTenantId(finTid));
         res.send(renderRatingHTML(rating, additional, {
           aiAvailable: anthropicService.isAvailable(),
           aiCommentary: null,
           source: 'upload',
+          fixedAssets,
         }));
         return;
       }
@@ -1811,11 +1813,13 @@ app.get('/api/finance/freee', async (req, res) => {
       extractionNotes: [],
     });
 
+    const freeeFixedAssets = await repo.listFixedAssetDetails(asTenantId(getActiveTenantId(req)!));
     res.send(renderRatingHTML(rating, additional, {
       aiAvailable: anthropicService.isAvailable(),
       aiCommentary,
       source: 'freee',
       analysisId,
+      fixedAssets: freeeFixedAssets,
     }));
   } catch (error) {
     logger.error('freee分析エラー', error);
@@ -2697,6 +2701,13 @@ async function getDeepDiveContext(req: express.Request): Promise<{ industry: str
           .join('、');
         context += ` / 借入先: ${loanStr}`;
       }
+      // 固定資産（簿価上位＝担保余力の目安）
+      const fa = await repo.listFixedAssetDetails(asTenantId(tid));
+      if (fa.length) {
+        const fmt = (n: number) => new Intl.NumberFormat('ja-JP').format(Math.round(n));
+        const top = fa.slice(0, 5).map((a) => `${a.name}(簿価${a.bookValue != null ? '¥' + fmt(a.bookValue) : '不明'})`).join('、');
+        context += ` / 主な固定資産: ${top}`;
+      }
     } catch (e) {
       logger.warn('深掘りコンテキスト取得失敗:', e);
     }
@@ -2773,6 +2784,7 @@ app.get('/finance/data-edit', async (req, res) => {
   const tid = getActiveTenantId(req);
   const snapshots = tid ? await repo.getAllMonthlyActuals(asTenantId(tid)) : [];
   const loanDetails = tid ? await repo.listLoanDetails(asTenantId(tid)) : [];
+  const fixedAssetDetails = tid ? await repo.listFixedAssetDetails(asTenantId(tid)) : [];
   const q = req.query;
   const docLabels: Record<string, string> = {
     loan_repayment: '借入金の返済計画表', fixed_asset: '固定資産台帳', account_breakdown: '勘定科目内訳書',
@@ -2792,7 +2804,8 @@ app.get('/finance/data-edit', async (req, res) => {
       } else if (q.imported === 'account_breakdown') {
         detail = `<br><strong>借入残高（有利子負債）: ${yen(q.t_val)}</strong> を反映しました`;
       } else {
-        detail = `<br><strong>減価償却費: ${yen(q.t_val)}</strong> を反映しました`;
+        const nAssets = Number(q.n_assets) || 0;
+        detail = `<br><strong>減価償却費: ${yen(q.t_val)}</strong> を反映${nAssets ? `／固定資産 ${nAssets}件の明細を取り込みました` : ''}`;
       }
       notice = `✓ 「${label}」を取り込みました。${detail}`;
     } else {
@@ -2800,10 +2813,12 @@ app.get('/finance/data-edit', async (req, res) => {
     }
   } else if (q.resetloan) notice = '借入明細を全て消去しました。借入を1件ずつ入れ直せます（借入残高・利息は決算書の値のまま保持）。';
   else if (q.deletedloan) notice = '借入明細を1件削除し、年間返済元本の合計を再計算しました。';
+  else if (q.resetasset) notice = '固定資産明細を全て消去しました。固定資産台帳を取り込み直せます。';
+  else if (q.deletedasset) notice = '固定資産明細を1件削除し、減価償却費の合計を再計算しました。';
   else if (q.err === 'ai') notice = '⚠ AI(Vertex)が未設定のため書類を読み取れません';
   else if (q.err === 'nofile') notice = '⚠ ファイルが選択されていません';
   else if (q.err) notice = '⚠ 取り込みに失敗しました。ファイルを確認してください';
-  res.send(renderFinanceDataEditHTML(snapshots, notice, loanDetails));
+  res.send(renderFinanceDataEditHTML(snapshots, notice, loanDetails, fixedAssetDetails));
 });
 
 app.post('/finance/data-edit', express.urlencoded({ extended: true }), async (req, res) => {
@@ -2854,7 +2869,7 @@ app.post('/finance/import-doc', upload.array('files', 30), async (req, res) => {
     const latest = snapshots[snapshots.length - 1];
 
     const parts = await buildDocParts(files);
-    const { fields, lender } = await anthropicService.extractSupplementaryDoc(
+    const { fields, lender, assets } = await anthropicService.extractSupplementaryDoc(
       parts, docType as 'loan_repayment' | 'fixed_asset' | 'account_breakdown',
     );
 
@@ -2883,7 +2898,15 @@ app.post('/finance/import-doc', upload.array('files', 30), async (req, res) => {
       merged = { ...latest, ...(fields.interestBearingDebt === undefined ? {} : { interestBearingDebt: fields.interestBearingDebt }) };
       mainVal = merged.interestBearingDebt;
     } else {
-      merged = { ...latest, ...(fields.depreciation === undefined ? {} : { depreciation: fields.depreciation }) };
+      // 固定資産台帳: 資産明細を置き換え、減価償却費は明細合計を優先（無ければ抽出した合計値）
+      if (assets && assets.length) {
+        await repo.replaceFixedAssetDetails(asTenantId(tid), assets.map((a) => ({ ...a, note: null })));
+        const sumDep = assets.reduce((s, a) => s + (a.depreciation || 0), 0);
+        const dep = sumDep > 0 ? sumDep : (fields.depreciation ?? latest.depreciation);
+        merged = { ...latest, ...(dep === undefined ? {} : { depreciation: dep }) };
+      } else {
+        merged = { ...latest, ...(fields.depreciation === undefined ? {} : { depreciation: fields.depreciation }) };
+      }
       mainVal = merged.depreciation;
     }
     await repo.upsertMonthlyActual(asTenantId(tid), merged);
@@ -2893,6 +2916,7 @@ app.post('/finance/import-doc', upload.array('files', 30), async (req, res) => {
     const q = new URLSearchParams({
       imported: docType,
       lender: lenderUsed,
+      n_assets: String(assets?.length ?? ''),
       x_repay: String(fields.annualDebtRepayment ?? ''), t_val: String(mainVal ?? ''),
     });
     res.redirect(`/finance/data-edit?${q.toString()}`);
@@ -2918,6 +2942,47 @@ app.post('/finance/reset-loan', express.urlencoded({ extended: true }), async (r
     res.redirect('/finance/data-edit?resetloan=1');
   } catch (e) {
     logger.error('借入リセットエラー', e);
+    res.redirect('/finance/data-edit');
+  }
+});
+
+// 固定資産明細を全消去し、減価償却費を空に戻す
+app.post('/finance/reset-asset', express.urlencoded({ extended: true }), async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.redirect('/finance/data-edit'); return; }
+    await repo.clearFixedAssetDetails(asTenantId(tid));
+    const snapshots = await repo.getAllMonthlyActuals(asTenantId(tid));
+    if (snapshots.length) {
+      const latest = snapshots[snapshots.length - 1];
+      await repo.upsertMonthlyActual(asTenantId(tid), { ...latest, depreciation: 0 });
+      clearCache();
+    }
+    res.redirect('/finance/data-edit?resetasset=1');
+  } catch (e) {
+    logger.error('固定資産リセットエラー', e);
+    res.redirect('/finance/data-edit');
+  }
+});
+
+// 固定資産明細を1件だけ削除し、減価償却費の合計を再計算
+app.post('/finance/delete-asset', express.urlencoded({ extended: true }), async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.redirect('/finance/data-edit'); return; }
+    const id = String(req.body?.id || '');
+    if (id) await repo.deleteFixedAssetDetail(asTenantId(tid), id);
+    const details = await repo.listFixedAssetDetails(asTenantId(tid));
+    const sumDep = details.reduce((a, d) => a + (d.depreciation || 0), 0);
+    const snapshots = await repo.getAllMonthlyActuals(asTenantId(tid));
+    if (snapshots.length) {
+      const latest = snapshots[snapshots.length - 1];
+      await repo.upsertMonthlyActual(asTenantId(tid), { ...latest, depreciation: sumDep });
+      clearCache();
+    }
+    res.redirect('/finance/data-edit?deletedasset=1');
+  } catch (e) {
+    logger.error('固定資産明細削除エラー', e);
     res.redirect('/finance/data-edit');
   }
 });
