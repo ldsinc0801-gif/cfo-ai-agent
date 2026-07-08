@@ -758,11 +758,11 @@ ${rating.cautions.map(c => `          <li>${esc(c)}</li>`).join('\n')}
         </tr>
       </thead>
       <tbody>
-${rating.actions.map(a => `        <tr>
+${rating.actions.map((a: any) => `        <tr>
           <td style="text-align:center">${priorityBadge(a.priority)}</td>
-          <td>${esc(a.content)}</td>
-          <td>${esc(a.effect)}</td>
-          <td>${esc(a.timeframe)}</td>
+          <td>${esc(a.content ?? a.title ?? '')}</td>
+          <td>${esc(a.effect ?? a.description ?? '')}</td>
+          <td>${esc(a.timeframe ?? '')}</td>
         </tr>`).join('\n')}
       </tbody>
     </table>
