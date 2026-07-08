@@ -1258,7 +1258,7 @@ function updateLocaBenchmark(){
     { key:'revenueGrowth', label:'売上増加率', unit:'%', simVal:simVals.revenueGrowth, reverse:false },
     { key:'operatingMargin', label:'営業利益率', unit:'%', simVal:simVals.operatingMargin, reverse:false },
     { key:'laborProductivity', label:'労働生産性', unit:'千円', simVal:simVals.laborProductivity, reverse:false },
-    { key:'ebitdaRatio', label:'EBITDA有利子負債倍率', unit:'倍', simVal:simVals.ebitdaRatio, reverse:true },
+    { key:'ebitdaRatio', label:'EBITDA有利子負債倍率', unit:'倍', simVal:simVals.ebitdaRatio, reverse:true, lossFlag:simVals.ebitdaLoss },
     { key:'workingCapitalTurnover', label:'営業運転資本回転期間', unit:'ヶ月', simVal:simVals.workingCapitalTurnover, reverse:true },
     { key:'equityRatio', label:'自己資本比率', unit:'%', simVal:simVals.equityRatio, reverse:false },
   ];
@@ -1272,7 +1272,10 @@ function updateLocaBenchmark(){
     var rank = '-';
     var rankColor = '#9ca3af';
 
-    if(val !== null){
+    if(val === null && ind.lossFlag){
+      // EBITDA赤字等：本業で返済原資が無い＝最悪評価(E)
+      rank='E'; rankColor='#ef4444';
+    } else if(val !== null){
       if(ind.reverse){
         // 低いほど良い指標
         if(val <= ranks.A) { rank='A'; rankColor='#10b981'; }
@@ -1307,7 +1310,8 @@ function updateLocaBenchmark(){
     html += '</div>';
     // 数値
     html += '<div class="locaben-values">';
-    html += '<div><span class="locaben-val-label">シミュ値</span><span class="locaben-val">'+(val!==null? (typeof val==='number'?val.toFixed(1):val)+ind.unit : '---')+'</span></div>';
+    var simText = (val!==null) ? ((typeof val==='number'?val.toFixed(1):val)+ind.unit) : (ind.lossFlag ? '算出不可(赤字)' : '---');
+    html += '<div><span class="locaben-val-label">シミュ値</span><span class="locaben-val"'+(val===null&&ind.lossFlag?' style="color:#ef4444"':'')+'>'+simText+'</span></div>';
     html += '<div><span class="locaben-val-label">業種中央値</span><span class="locaben-val">'+data.median.toFixed(1)+ind.unit+'</span></div>';
     html += '<div><span class="locaben-val-label">上位(A)</span><span class="locaben-val" style="color:#10b981">'+ranks.A.toFixed(1)+ind.unit+'</span></div>';
     html += '</div>';
@@ -1416,13 +1420,16 @@ function getSimAnnualValues(){
   var revenueGrowth = baseTotalRev>0 ? ((totalRev-baseTotalRev)/baseTotalRev*100) : 0;
   var margin = totalRev>0 ? (totalProfit/totalRev*100) : 0;
   var productivity = totalRev / emp / 1000; // 千円単位
-  // 自己資本比率（簡易: 最終月のnetAssets/totalAssets）
+  // 自己資本比率（最終月のnetAssets/totalAssets）。債務超過ならマイナスのまま表示する
+  // （0にクランプすると債務超過が隠れて評価が甘くなるバグになる）。
   var lastB = baseData[baseData.length-1];
-  var eqRatio = (lastB.totalAssets>0 && lastB.netAssets>0) ? (lastB.netAssets/lastB.totalAssets*100) : 0;
+  var eqRatio = (lastB.totalAssets>0) ? (lastB.netAssets/lastB.totalAssets*100) : 0;
   // EBITDA有利子負債倍率 = 有利子負債 /（営業利益＋減価償却）。EBITDAが0以下なら算出不可(null)。
   var ebitda = totalProfit + totalDepr;
   var debt = lastB.debt || 0;
   var ebitdaRatio = (ebitda > 0) ? Math.round(debt/ebitda*10)/10 : null;
+  // EBITDAが赤字（0以下）で借入がある＝本業で返済原資が無い＝最悪評価（E）
+  var ebitdaLoss = (ebitda <= 0 && debt > 0);
   // 営業運転資本回転期間(月) = (売上債権＋棚卸資産−仕入債務) / 月商。
   // 売掛金・在庫・買掛金が全て0でも「運転資本0＝0.0ヶ月」は正しい結果（即日仕入即日売上の卸売等）。
   // 売上が無い時だけ算出不可(null)。
@@ -1436,6 +1443,7 @@ function getSimAnnualValues(){
     laborProductivity: Math.round(productivity*10)/10,
     equityRatio: Math.round(eqRatio*10)/10,
     ebitdaRatio: ebitdaRatio,
+    ebitdaLoss: ebitdaLoss,
     workingCapitalTurnover: wcTurnover,
   };
 }
