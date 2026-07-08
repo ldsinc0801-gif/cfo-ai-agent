@@ -764,8 +764,10 @@ const upload = multer({
       cb(null, dir);
     },
     filename: (_req, file, cb) => {
-      const ext = path.extname(file.originalname);
-      const base = path.basename(file.originalname, ext);
+      // multerは日本語ファイル名をlatin1として渡すため、UTF-8に復元して文字化けを防ぐ
+      const original = Buffer.from(file.originalname, 'latin1').toString('utf8');
+      const ext = path.extname(original);
+      const base = path.basename(original, ext);
       cb(null, `${base}-${Date.now()}${ext}`);
     },
   }),
