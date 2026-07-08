@@ -1,29 +1,35 @@
 import { agentPageShell } from './shared.js';
 import type { MonthlySnapshot } from '../types/trend.js';
 
-// 決算書に載らない補助書類 → 抽出項目
-const DOCS: { type: string; icon: string; label: string; desc: string; needs: (s: MonthlySnapshot) => boolean }[] = [
+// 補助書類（決算書で埋まらない/読めなかった時の補完）。基本は決算書(BS/PL)で足りる。
+const DOCS: { type: string; icon: string; label: string; desc: string }[] = [
   {
     type: 'loan_repayment', icon: '📄', label: '借入金の返済計画表',
-    desc: '年間返済元本・借入金残高(有利子負債)・支払利息を読み取ります',
-    needs: (s) => s.annualDebtRepayment == null || (s.interestBearingDebt ?? 0) === 0,
-  },
-  {
-    type: 'fixed_asset', icon: '🏭', label: '固定資産台帳',
-    desc: '減価償却費を読み取ります',
-    needs: (s) => (s.depreciation ?? 0) === 0,
+    desc: '★決算書に無い「年間返済元本」を読み取ります（借入残高・支払利息も）',
   },
   {
     type: 'account_breakdown', icon: '📑', label: '勘定科目内訳書',
-    desc: '借入金(有利子負債)の内訳を読み取ります',
-    needs: (s) => (s.interestBearingDebt ?? 0) === 0,
+    desc: '決算書で借入が読めなかった場合の補完（有利子負債の内訳）',
+  },
+  {
+    type: 'fixed_asset', icon: '🏭', label: '固定資産台帳',
+    desc: '決算書PLで減価償却費が読めなかった場合の補完',
   },
 ];
 
 /** 財務データの確認・修正ページ。不足書類の取込 + 期ごとの手修正。 */
 export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?: string): string {
   const latest = snapshots.length ? snapshots[snapshots.length - 1] : null;
-  const missing = latest ? DOCS.filter((d) => d.needs(latest)) : [];
+  // 決算書で埋まらない項目の検知
+  const needRepay = !!latest && latest.annualDebtRepayment == null; // 年間返済元本(決算書に無い)
+  const needDebt = !!latest && (latest.interestBearingDebt ?? 0) === 0; // 有利子負債
+  const needDep = !!latest && (latest.depreciation ?? 0) === 0; // 減価償却費
+  const docRelevant: Record<string, boolean> = {
+    loan_repayment: needRepay || needDebt,
+    account_breakdown: needDebt,
+    fixed_asset: needDep,
+  };
+  const missingLabels = [needRepay ? '年間返済元本' : '', needDebt ? '有利子負債' : '', needDep ? '減価償却費' : ''].filter(Boolean);
 
   // --- 不足書類の取り込みパネル ---
   const fmtYen = (v: number | null | undefined) =>
@@ -66,15 +72,19 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
   const docPanel = latest
     ? `
     <div class="card" style="margin-bottom:20px">
-      <div class="card-header"><h3>分析に必要な書類の取り込み</h3></div>
+      <div class="card-header"><h3>書類の取り込み</h3></div>
       <div class="card-body">
-        ${missing.length
-          ? `<div class="doc-warn">⚠ 分析に必要な書類が不足しています：<strong>${missing.map((d) => d.label).join(' / ')}</strong>。下記から取り込むと自動で数値が埋まります。</div>`
-          : `<div class="doc-ok">✓ 主要な書類は揃っています。追加で取り込みたい書類があれば下記からどうぞ。</div>`}
-        <div class="doc-grid">
-          ${DOCS.map((d) => docCard(d, missing.includes(d))).join('')}
+        <div class="doc-first">
+          <div><strong>まず「決算書（BS/PL）」を取り込むのが基本です。</strong>売上・資産・借入残高・減価償却費など、分析に必要な数値の大半が自動で埋まります。数字がおかしい・借入が0のときは、決算書を取り込み直してください。</div>
+          <a href="/" class="btn-primary btn-sm" style="margin-top:10px;display:inline-block;text-decoration:none">決算書を取り込む／取り込み直す</a>
         </div>
-        <p style="font-size:12px;color:var(--text2);margin-top:10px">取り込んだ書類の内容は<strong>最新期（${latest.year}年${latest.month}月）</strong>に反映されます。AIが必要項目だけを抽出します。</p>
+        ${missingLabels.length
+          ? `<div class="doc-warn">決算書で埋まっていない項目があります：<strong>${missingLabels.join(' / ')}</strong>。下記の該当書類（オレンジ枠）で補えます。<strong>年間返済元本は決算書に無い</strong>ため、これだけは取り込みが必要です。</div>`
+          : `<div class="doc-ok">✓ 主要項目は揃っています。補助書類が必要な場合のみ下記からどうぞ。</div>`}
+        <div class="doc-grid">
+          ${DOCS.map((d) => docCard(d, !!docRelevant[d.type])).join('')}
+        </div>
+        <p style="font-size:12px;color:var(--text2);margin-top:10px">補助書類の内容は<strong>最新期（${latest.year}年${latest.month}月）</strong>に反映されます。AIが必要項目だけを抽出します。</p>
       </div>
     </div>`
     : '';
@@ -109,6 +119,7 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
     .doc-files{font-size:11px;color:#1b7f8e;font-weight:700;word-break:break-all;margin-top:2px}
     .doc-warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px;line-height:1.6}
     .doc-ok{background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px}
+    .doc-first{background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;border-radius:10px;padding:14px 16px;margin-bottom:14px;font-size:13px;line-height:1.7}
   </style>
   <a href="/agent/finance" style="display:inline-flex;align-items:center;gap:4px;margin-bottom:14px;color:var(--primary);font-weight:700;text-decoration:none;font-size:14px">← 財務分析AIに戻る</a>
   ${body}
