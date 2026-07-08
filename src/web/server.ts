@@ -2786,7 +2786,7 @@ app.get('/finance/data-edit', async (req, res) => {
   else if (q.err === 'ai') notice = '⚠ AI(Vertex)が未設定のため書類を読み取れません';
   else if (q.err === 'nofile') notice = '⚠ ファイルが選択されていません';
   else if (q.err) notice = '⚠ 取り込みに失敗しました。ファイルを確認してください';
-  res.send(renderFinanceDataEditHTML(snapshots, notice, q.mode === 'add'));
+  res.send(renderFinanceDataEditHTML(snapshots, notice));
 });
 
 app.post('/finance/data-edit', express.urlencoded({ extended: true }), async (req, res) => {
@@ -2845,8 +2845,8 @@ app.post('/finance/import-doc', upload.array('files', 30), async (req, res) => {
     //  - 借入金返済計画表 → 年間返済元本のみ（借入残高/利息は決算書から取得済み。二重計上を防ぐ）
     //  - 勘定科目内訳書   → 有利子負債（借入残高）の補完のみ
     //  - 固定資産台帳     → 減価償却費の補完のみ
-    // 返済計画表を mode=add で入れると年間返済元本を加算（借入を1件ずつ足すケース）。
-    const add = docType === 'loan_repayment' && req.body?.mode === 'add';
+    // 返済計画表は常に加算（借入を1件ずつ足す運用に統一）。上書きモードは廃止。
+    const add = docType === 'loan_repayment';
     const curRepay = Number(latest.annualDebtRepayment ?? 0);
     let merged: MonthlySnapshot;
     let mainVal: number | null | undefined;

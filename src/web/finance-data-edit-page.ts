@@ -18,7 +18,7 @@ const DOCS: { type: string; icon: string; label: string; desc: string }[] = [
 ];
 
 /** 財務データの確認・修正ページ。不足書類の取込 + 期ごとの手修正。 */
-export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?: string, keepAddMode?: boolean): string {
+export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?: string): string {
   const latest = snapshots.length ? snapshots[snapshots.length - 1] : null;
   // 決算書で埋まらない項目の検知
   const needRepay = !!latest && latest.annualDebtRepayment == null; // 年間返済元本(決算書に無い)
@@ -36,22 +36,17 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
   const docCard = (d: (typeof DOCS)[number], highlight: boolean) => {
     const isLoan = d.type === 'loan_repayment';
     const loanMode = isLoan
-      ? `<div style="margin-top:8px;font-size:12px;text-align:left">
-           <label style="display:block;margin-bottom:3px"><input type="radio" name="mode" value="add" checked> 借入を1件ずつ足していく（加算）<span style="color:#16a34a;font-weight:700"> ← ${keepAddMode ? '継続中' : 'おすすめ'}</span></label>
-           <label style="display:block"><input type="radio" name="mode" value="replace"> 全借入がこの1回でまとまっている（上書き）</label>
-           <div style="font-size:11px;color:var(--text2);margin-top:6px;line-height:1.6">
-             借入が複数あるとき：<strong>「1件ずつ足していく」を選んで、借入ごとに取り込むだけ</strong>。年間返済元本が自動で合算されます（リセット不要）。<br>
-             1つの借入が複数ページの写真なら、その<strong>全ページをまとめて選択</strong>して取り込み（AIが1件分として合計）。<br>
-             入れ直したい時だけ下の「リセット」で0に戻せます。
-           </div>
+      ? `<div style="margin-top:8px;font-size:12px;color:var(--text2);text-align:left;line-height:1.6">
+           <strong style="color:var(--text)">借入は1件ずつ取り込みます</strong>（1件が複数ページの写真なら全部まとめて選択）。取り込むたびに<strong style="color:var(--text)">自動で合算</strong>されます。
          </div>`
       : '';
     const loanFooter = isLoan
-      ? `<div style="margin-top:8px;font-size:11px;color:var(--text2);text-align:left">
-           現在の年間返済元本（合計）：<strong>${fmtYen(latest?.annualDebtRepayment)}</strong>
-           <form method="post" action="/finance/reset-loan" style="display:inline;margin-left:6px" onsubmit="return confirm('年間返済元本を空(0)に戻します。借入残高・利息（決算書の値）はそのままです。よろしいですか？')">
-             <button type="submit" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:11px;text-decoration:underline;padding:0">リセット</button>
+      ? `<div style="margin-top:12px;text-align:left;border-top:1px solid var(--border);padding-top:10px">
+           <div style="font-size:13px;margin-bottom:8px">現在の年間返済元本（合計）：<strong style="font-size:17px;color:var(--text)">${fmtYen(latest?.annualDebtRepayment)}</strong></div>
+           <form method="post" action="/finance/reset-loan" onsubmit="return confirm('年間返済元本を0に戻します（借入残高・利息＝決算書の値はそのまま）。よろしいですか？')">
+             <button type="submit" style="width:100%;background:#f97316;color:#fff;border:none;border-radius:8px;padding:11px;font-size:14px;font-weight:700;cursor:pointer">🔄 年間返済元本をリセット（0に戻す）</button>
            </form>
+           <div style="font-size:11px;color:var(--text2);margin-top:6px">※ 入れ間違えたら、これで0に戻して1件ずつ入れ直してください</div>
          </div>`
       : '';
     return `
@@ -67,7 +62,7 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
           <div class="doc-files"></div>
         </label>
         ${loanMode}
-        <button type="submit" class="btn-primary btn-sm" style="width:100%;margin-top:10px">この書類を取り込む</button>
+        <button type="submit" class="btn-primary btn-sm" style="width:100%;margin-top:10px">${isLoan ? 'この借入を取り込む（合算）' : 'この書類を取り込む'}</button>
       </form>
       ${loanFooter}
     </div>`;
