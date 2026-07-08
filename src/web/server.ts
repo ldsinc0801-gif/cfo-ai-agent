@@ -749,9 +749,20 @@ app.get('/settings/members', (req, res) => res.redirect('/settings/users'));
 const uploadDir = path.resolve('uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
+/** テナントごとのアップロード保存先（他テナントにファイル/一覧が漏れないように分離）。 */
+function tenantUploadDir(tenantId?: TenantId | string | null): string {
+  const safe = tenantId ? String(tenantId).replace(/[^a-zA-Z0-9_-]/g, '') : '_notenant';
+  return path.join(uploadDir, safe || '_notenant');
+}
+
 const upload = multer({
   storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, uploadDir),
+    destination: (req, _file, cb) => {
+      const tid = getActiveTenantId(req as express.Request);
+      const dir = tenantUploadDir(tid);
+      try { fs.mkdirSync(dir, { recursive: true }); } catch { /* ignore */ }
+      cb(null, dir);
+    },
     filename: (_req, file, cb) => {
       const ext = path.extname(file.originalname);
       const base = path.basename(file.originalname, ext);
@@ -966,13 +977,15 @@ async function buildTrendData(endYear?: number, endMonth?: number, monthCount: n
 }
 
 /** アップロード済みファイル一覧 */
-function getUploadedFiles(): string[] {
+function getUploadedFiles(tenantId?: TenantId | string): string[] {
+  if (!tenantId) return []; // テナント未指定なら一覧を出さない（他テナントのファイル名漏洩防止）
+  const dir = tenantUploadDir(tenantId);
   try {
-    return fs.readdirSync(uploadDir)
+    return fs.readdirSync(dir)
       .filter(f => !f.startsWith('.'))
       .sort((a, b) => {
-        const sa = fs.statSync(path.join(uploadDir, a)).mtime;
-        const sb = fs.statSync(path.join(uploadDir, b)).mtime;
+        const sa = fs.statSync(path.join(dir, a)).mtime;
+        const sb = fs.statSync(path.join(dir, b)).mtime;
         return sb.getTime() - sa.getTime();
       });
   } catch {
@@ -1285,14 +1298,20 @@ app.get('/plan', async (req, res) => {
     const isDemo = req.session.user?.id === 'demo-user';
     const planTid = getActiveTenantId(req);
     const trend = await buildTrendData(undefined, undefined, 6, isDemo, planTid || undefined);
-    const files = getUploadedFiles();
+    const files = getUploadedFiles(planTid || undefined);
     // デモは仮想テナント(demo-tenant)なので決算月クエリを叩かない(無効UUIDで例外→500になる)
     let fiscalMonth = 3;
     let profileHint: {
       industry?: string | null; employeeCount?: string | null;
       locabenMajor?: string | null; locabenMinor?: string | null; locabenScale?: string | null;
     } = {};
-    if (!isDemo && planTid) {
+    // 年間KPIはテナント単位（デモはデモプロファイル、実テナントはDB）
+    let kpi = defaultAnnualKpi();
+    if (isDemo) {
+      const demo = demoForReq(req);
+      const demoKpi = demo ? (demo as unknown as Record<string, unknown>).annualKpi : null;
+      if (demoKpi) kpi = { ...kpi, ...(demoKpi as Record<string, unknown>) } as typeof kpi;
+    } else if (planTid) {
       try { fiscalMonth = (await repo.getTenantFiscalMonth(asTenantId(planTid))) ?? 3; } catch { fiscalMonth = 3; }
       try {
         const prof = await repo.getTenantProfile(asTenantId(planTid));
@@ -1301,8 +1320,12 @@ app.get('/plan', async (req, res) => {
           locabenMajor: prof.locabenMajor, locabenMinor: prof.locabenMinor, locabenScale: prof.locabenScale,
         };
       } catch { /* 会社情報が無ければヒント無し */ }
+      try {
+        const saved = await repo.getTenantAnnualKpi(asTenantId(planTid));
+        if (saved) kpi = { ...kpi, ...saved } as typeof kpi;
+      } catch { /* KPI未設定なら初期値 */ }
     }
-    res.send(renderPlanHTML(trend, files, fiscalMonth, profileHint, req.session.csrfToken || ''));
+    res.send(renderPlanHTML(trend, files, fiscalMonth, profileHint, req.session.csrfToken || '', kpi));
   } catch (error) {
     logger.error('事業計画ページエラー', error);
     res.status(500).send('ページの生成に失敗しました');
@@ -1395,10 +1418,10 @@ app.post('/plan/upload', upload.single('file'), async (req, res) => {
   }
   logger.info(`ファイルアップロード: ${req.file.originalname} → ${req.file.filename}`);
 
-  // AI解析で数値抽出 → 目標に自動反映
+  // AI解析で数値抽出 → 目標に自動反映（テナント単位）
   if (planExtractService.isAvailable()) {
     try {
-      const result = await planExtractService.extractAndApply(req.file.path, req.file.originalname);
+      const result = await planExtractService.extractAndApply(req.file.path, req.file.originalname, getActiveTenantId(req) || undefined);
       clearCache();
       logger.info(`事業計画解析完了: 月次${result.monthlyTargets.length}件, 年間KPI${result.annualKpi ? 'あり' : 'なし'}, 確信度${result.confidence}`);
     } catch (e) {
@@ -1411,6 +1434,8 @@ app.post('/plan/upload', upload.single('file'), async (req, res) => {
 
 // 手動で再解析するAPI
 app.post('/plan/analyze-file', express.json(), async (req, res) => {
+  const anTid = getActiveTenantId(req);
+  if (!anTid) { res.status(400).json({ error: 'テナントが選択されていません' }); return; }
   const filename = req.body.filename;
   if (!filename || filename.includes('..') || filename.includes('/')) {
     res.status(400).json({ error: '不正なファイル名' });
@@ -1420,13 +1445,13 @@ app.post('/plan/analyze-file', express.json(), async (req, res) => {
     res.status(400).json({ error: 'Vertex AI の認証が未設定です' });
     return;
   }
-  const filePath = path.join(uploadDir, filename);
+  const filePath = path.join(tenantUploadDir(anTid), filename);
   if (!fs.existsSync(filePath)) {
     res.status(404).json({ error: 'ファイルが見つかりません' });
     return;
   }
   try {
-    const result = await planExtractService.extractAndApply(filePath, filename);
+    const result = await planExtractService.extractAndApply(filePath, filename, anTid);
     clearCache();
     res.json({
       ok: true,
@@ -1442,14 +1467,16 @@ app.post('/plan/analyze-file', express.json(), async (req, res) => {
   }
 });
 
-// ファイル削除
+// ファイル削除（自テナントのファイルのみ）
 app.post('/plan/delete', express.json(), async (req, res) => {
+  const delTid = getActiveTenantId(req);
+  if (!delTid) { res.status(400).json({ error: 'テナントが選択されていません' }); return; }
   const filename = req.body.filename;
   if (!filename || filename.includes('..') || filename.includes('/')) {
     res.status(400).json({ error: '不正なファイル名' });
     return;
   }
-  const filePath = path.join(uploadDir, filename);
+  const filePath = path.join(tenantUploadDir(delTid), filename);
   if (fs.existsSync(filePath)) {
     fs.unlinkSync(filePath);
     logger.info(`ファイル削除: ${filename}`);
@@ -1459,12 +1486,14 @@ app.post('/plan/delete', express.json(), async (req, res) => {
   }
 });
 
-app.post('/plan/delete-all', (_req, res) => {
-  const files = fs.readdirSync(uploadDir).filter(f => !f.startsWith('.'));
-  for (const f of files) {
-    fs.unlinkSync(path.join(uploadDir, f));
-  }
-  logger.info(`全ファイル削除: ${files.length}件`);
+app.post('/plan/delete-all', (req, res) => {
+  const daTid = getActiveTenantId(req);
+  if (!daTid) { res.json({ ok: true, count: 0 }); return; }
+  const dir = tenantUploadDir(daTid);
+  let files: string[] = [];
+  try { files = fs.readdirSync(dir).filter(f => !f.startsWith('.')); } catch { /* 無し */ }
+  for (const f of files) { try { fs.unlinkSync(path.join(dir, f)); } catch { /* ignore */ } }
+  logger.info(`全ファイル削除(tenant=${daTid}): ${files.length}件`);
   res.json({ ok: true, count: files.length });
 });
 
@@ -1532,13 +1561,18 @@ app.post('/api/plan/apply', express.json(), async (req, res) => {
 });
 
 // 年間KPI目標の保存
-import { saveAnnualKpi, loadAnnualKpi } from './plan-renderer.js';
+import { defaultAnnualKpi } from './plan-renderer.js';
 
-app.get('/api/plan/kpi', (_req, res) => {
-  res.json(loadAnnualKpi());
+// 年間KPIはテナント単位でDB(tenant_profile.annual_kpi)に保存する（旧: グローバルファイル）。
+app.get('/api/plan/kpi', async (req, res) => {
+  const tid = getActiveTenantId(req);
+  const kpi = tid ? (await repo.getTenantAnnualKpi(asTenantId(tid))) : null;
+  res.json(kpi ?? defaultAnnualKpi());
 });
 
 app.post('/api/plan/kpi', express.json(), async (req, res) => {
+  const tid = getActiveTenantId(req);
+  if (!tid) { res.status(400).json({ error: 'テナントが選択されていません' }); return; }
   const kpi = {
     fiscalYear: req.body.fiscalYear || '',
     targetRevenue: Number(req.body.targetRevenue) || 0,
@@ -1549,8 +1583,9 @@ app.post('/api/plan/kpi', express.json(), async (req, res) => {
     employeeCount: Number(req.body.employeeCount) || 1,
     customKpis: Array.isArray(req.body.customKpis) ? req.body.customKpis : [],
   };
-  saveAnnualKpi(kpi);
-  logger.info(`年間KPI目標を保存: ${kpi.fiscalYear}`);
+  await repo.saveTenantAnnualKpi(asTenantId(tid), kpi);
+  clearCache();
+  logger.info(`年間KPI目標を保存(tenant=${tid}): ${kpi.fiscalYear}`);
   res.json({ ok: true });
 });
 

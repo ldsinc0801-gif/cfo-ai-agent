@@ -448,6 +448,28 @@ export async function getTenantProfile(tenantId: TenantId): Promise<TenantProfil
   };
 }
 
+/** テナントの年間KPI目標(JSON)を取得。未設定なら null。 */
+export async function getTenantAnnualKpi(tenantId: TenantId): Promise<Record<string, unknown> | null> {
+  const { data, error } = await getSupabase()
+    .from('tenant_profile')
+    .select('annual_kpi')
+    .eq('tenant_id', tenantId)
+    .single();
+  if (error) {
+    if (error.code === 'PGRST116') return null;
+    throw new Error(`年間KPIの取得に失敗: ${error.message}`);
+  }
+  return (data?.annual_kpi as Record<string, unknown>) ?? null;
+}
+
+/** テナントの年間KPI目標(JSON)を保存（他の会社情報は変更しない）。 */
+export async function saveTenantAnnualKpi(tenantId: TenantId, kpi: Record<string, unknown>): Promise<void> {
+  const { error } = await getSupabase()
+    .from('tenant_profile')
+    .upsert({ tenant_id: tenantId, annual_kpi: kpi, updated_at: new Date().toISOString() }, { onConflict: 'tenant_id' });
+  if (error) throw new Error(`年間KPIの保存に失敗: ${error.message}`);
+}
+
 /** ロカベン6指標で選んだ業種・規模だけを保存（他の会社情報は変更しない）。 */
 export async function updateLocabenSelection(
   tenantId: TenantId,

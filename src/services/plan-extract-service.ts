@@ -5,9 +5,11 @@ import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { usageTracker } from './usage-tracker.js';
 import { planAnalysisService } from './plan-analysis-service.js';
-import { saveAnnualKpi, loadAnnualKpi } from '../web/plan-renderer.js';
+import { defaultAnnualKpi } from '../web/plan-renderer.js';
+import { getTenantAnnualKpi, saveTenantAnnualKpi } from '../repositories/supabase-repository.js';
 import type { MonthlyTarget } from '../types/trend.js';
 import type { AnnualKpiTarget, CustomKpiItem } from '../web/plan-renderer.js';
+import type { TenantId } from '../types/auth.js';
 
 /** 抽出結果 */
 export interface PlanExtractResult {
@@ -92,7 +94,7 @@ export class PlanExtractService {
   /**
    * ファイルから数値を抽出して目標に反映
    */
-  async extractAndApply(filePath: string, fileName: string): Promise<PlanExtractResult> {
+  async extractAndApply(filePath: string, fileName: string, tenantId?: TenantId): Promise<PlanExtractResult> {
     const ext = path.extname(fileName).toLowerCase();
     let result: PlanExtractResult;
 
@@ -108,7 +110,7 @@ export class PlanExtractService {
     }
 
     // 抽出結果を反映
-    this.applyResults(result);
+    await this.applyResults(result, tenantId);
     return result;
   }
 
@@ -233,18 +235,26 @@ export class PlanExtractService {
   /**
    * 抽出結果を月次目標・年間KPIに反映
    */
-  private applyResults(result: PlanExtractResult): void {
+  private async applyResults(result: PlanExtractResult, tenantId?: TenantId): Promise<void> {
+    // テナント未指定時はグローバル汚染を防ぐため反映しない
+    if (!tenantId) {
+      logger.warn('プラン抽出: テナント未指定のため反映をスキップ（情報漏洩防止）');
+      return;
+    }
+    const loadKpi = async (): Promise<AnnualKpiTarget> =>
+      ({ ...defaultAnnualKpi(), ...((await getTenantAnnualKpi(tenantId)) ?? {}) } as AnnualKpiTarget);
+
     // 月次目標を反映
     if (result.monthlyTargets.length > 0) {
       for (const t of result.monthlyTargets) {
-        planAnalysisService.setTarget(t);
+        await planAnalysisService.setTarget(t, tenantId);
       }
       logger.info(`月次目標を反映: ${result.monthlyTargets.length}か月分`);
     }
 
     // 年間KPIを反映（nullでない値のみ上書き）
     if (result.annualKpi) {
-      const current = loadAnnualKpi();
+      const current = await loadKpi();
       const update: AnnualKpiTarget = { ...current };
 
       if (result.annualKpi.targetRevenue != null) update.targetRevenue = result.annualKpi.targetRevenue;
@@ -272,11 +282,11 @@ export class PlanExtractService {
         logger.info(`カスタムKPIを反映: ${result.customKpis.length}件`);
       }
 
-      saveAnnualKpi(update);
+      await saveTenantAnnualKpi(tenantId, update as unknown as Record<string, unknown>);
       logger.info('年間KPI目標を反映');
     } else if (result.customKpis.length > 0) {
       // annualKpiはないがcustomKpisはある場合
-      const current = loadAnnualKpi();
+      const current = await loadKpi();
       const existing = current.customKpis || [];
       for (const ck of result.customKpis) {
         const found = existing.find(e => e.name === ck.name);
@@ -289,7 +299,7 @@ export class PlanExtractService {
         }
       }
       current.customKpis = existing;
-      saveAnnualKpi(current);
+      await saveTenantAnnualKpi(tenantId, current as unknown as Record<string, unknown>);
       logger.info(`カスタムKPIを反映: ${result.customKpis.length}件`);
     }
   }

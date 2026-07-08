@@ -27,14 +27,8 @@ export interface AnnualKpiTarget {
   customKpis?: CustomKpiItem[];
 }
 
-const KPI_FILE = path.resolve('data/plans/annual-kpi.json');
-
-export function loadAnnualKpi(): AnnualKpiTarget {
-  try {
-    if (fs.existsSync(KPI_FILE)) {
-      return JSON.parse(fs.readFileSync(KPI_FILE, 'utf-8'));
-    }
-  } catch { /* ignore */ }
+/** 年間KPIの初期値（未設定テナント用）。※保存はテナント単位DB(tenant_profile.annual_kpi)。 */
+export function defaultAnnualKpi(): AnnualKpiTarget {
   return {
     fiscalYear: `${new Date().getFullYear()}年3月期`,
     targetRevenue: 0,
@@ -44,12 +38,6 @@ export function loadAnnualKpi(): AnnualKpiTarget {
     targetProductivity: 0,
     employeeCount: 1,
   };
-}
-
-export function saveAnnualKpi(kpi: AnnualKpiTarget): void {
-  const dir = path.dirname(KPI_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(KPI_FILE, JSON.stringify(kpi, null, 2), 'utf-8');
 }
 
 /** freee実績から年間KPI実績を算出 */
@@ -79,9 +67,9 @@ export function renderPlanHTML(
     locabenMajor?: string | null; locabenMinor?: string | null; locabenScale?: string | null;
   } = {},
   csrfToken: string = '',
+  kpi: AnnualKpiTarget = defaultAnnualKpi(),
 ): string {
   const targets = trend.targets;
-  const kpi = loadAnnualKpi();
   const actual = calcActualKpi(trend.months, kpi);
 
   // シナリオ調整の「現状値」（スライダーの初期値＝現状維持）
