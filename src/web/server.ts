@@ -2115,6 +2115,8 @@ app.post('/settings/company-info', express.urlencoded({ extended: true }), async
       corporateNumber: (b.corporateNumber || '').trim() || null,
       invoiceRegistered: b.invoiceRegistered === '1',
       invoiceNumber: (b.invoiceNumber || '').trim() || null,
+      invoiceRegisteredDate: (b.invoiceRegisteredDate || '').trim() || null,
+      capital: b.capital != null && String(b.capital).trim() !== '' && Number.isFinite(Number(b.capital)) ? Number(b.capital) : null,
       industry: (b.industry || '').trim() || null,
       employeeCount: (b.employeeCount || '').trim() || null,
       notes: (b.notes || '').trim() || null,

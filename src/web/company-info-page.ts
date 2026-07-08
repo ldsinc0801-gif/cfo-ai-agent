@@ -90,6 +90,11 @@ ${opts.success ? `<div class="ci-alert-ok">${esc(opts.success)}</div>` : ''}
         <label>従業員数</label>
         <input type="text" name="employeeCount" value="${esc(profile.employeeCount || '')}" placeholder="10名"/>
       </div>
+      <div class="ci-field">
+        <label>資本金</label>
+        <input type="number" step="1" name="capital" value="${profile.capital ?? ''}" placeholder="10000000"/>
+        <span class="hint">円単位。分析で自己資本の内訳等に参照されます</span>
+      </div>
     </div>
   </div>
 
@@ -131,6 +136,11 @@ ${opts.success ? `<div class="ci-alert-ok">${esc(opts.success)}</div>` : ''}
         <input type="text" name="invoiceNumber" value="${esc(profile.invoiceNumber || '')}" placeholder="T1234567890123" pattern="T[0-9]{13}"/>
         <span class="hint">T + 法人番号13桁（個人事業主の場合は別途付与された番号）</span>
       </div>
+      <div class="ci-field" id="invoiceDateField" style="display:${profile.invoiceRegistered ? 'flex' : 'none'}">
+        <label>登録年月日</label>
+        <input type="date" name="invoiceRegisteredDate" value="${esc(profile.invoiceRegisteredDate || '')}"/>
+        <span class="hint">適格請求書発行事業者としての登録日</span>
+      </div>
     </div>
   </div>
 
@@ -138,7 +148,7 @@ ${opts.success ? `<div class="ci-alert-ok">${esc(opts.success)}</div>` : ''}
     <h3>備考</h3>
     <div class="ci-grid">
       <div class="ci-field full">
-        <textarea name="notes" rows="3" placeholder="その他のメモ（任意）">${esc(profile.notes || '')}</textarea>
+        <textarea name="notes" rows="10" style="min-height:220px;resize:vertical;line-height:1.7" placeholder="その他のメモ（任意）">${esc(profile.notes || '')}</textarea>
       </div>
     </div>
   </div>
@@ -151,6 +161,7 @@ ${opts.success ? `<div class="ci-alert-ok">${esc(opts.success)}</div>` : ''}
 <script>
 function toggleInvoice(cb){
   document.getElementById('invoiceNumberField').style.display = cb.checked ? 'flex' : 'none';
+  var df = document.getElementById('invoiceDateField'); if(df) df.style.display = cb.checked ? 'flex' : 'none';
 }
 </script>`;
 

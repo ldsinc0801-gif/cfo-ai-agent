@@ -384,6 +384,8 @@ export interface TenantProfile {
   corporateNumber: string | null;
   invoiceRegistered: boolean;
   invoiceNumber: string | null;
+  invoiceRegisteredDate: string | null; // インボイス登録年月日 YYYY-MM-DD
+  capital: number | null;               // 資本金
   industry: string | null;
   employeeCount: string | null;
   notes: string | null;
@@ -392,7 +394,8 @@ export interface TenantProfile {
 const EMPTY_PROFILE: TenantProfile = {
   companyName: null, postalCode: null, address: null, phone: null,
   representative: null, establishedDate: null, corporateNumber: null,
-  invoiceRegistered: false, invoiceNumber: null, industry: null,
+  invoiceRegistered: false, invoiceNumber: null, invoiceRegisteredDate: null,
+  capital: null, industry: null,
   employeeCount: null, notes: null,
 };
 
@@ -417,6 +420,8 @@ export async function getTenantProfile(tenantId: TenantId): Promise<TenantProfil
     corporateNumber: data.corporate_number,
     invoiceRegistered: !!data.invoice_registered,
     invoiceNumber: data.invoice_number,
+    invoiceRegisteredDate: data.invoice_registered_date,
+    capital: data.capital ?? null,
     industry: data.industry,
     employeeCount: data.employee_count,
     notes: data.notes,
@@ -437,6 +442,8 @@ export async function upsertTenantProfile(tenantId: TenantId, p: TenantProfile):
       corporate_number: p.corporateNumber,
       invoice_registered: p.invoiceRegistered,
       invoice_number: p.invoiceNumber,
+      invoice_registered_date: p.invoiceRegisteredDate,
+      capital: p.capital,
       industry: p.industry,
       employee_count: p.employeeCount,
       notes: p.notes,
