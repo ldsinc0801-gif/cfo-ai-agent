@@ -5,7 +5,7 @@ import type { MonthlySnapshot } from '../types/trend.js';
 const DOCS: { type: string; icon: string; label: string; desc: string }[] = [
   {
     type: 'loan_repayment', icon: '📄', label: '借入金の返済計画表',
-    desc: '★決算書に無い「年間返済元本」を読み取ります（借入残高・支払利息も）',
+    desc: '決算書に無い「年間返済元本（1年で返す元金）」だけを読み取ります',
   },
   {
     type: 'account_breakdown', icon: '📑', label: '勘定科目内訳書',
@@ -25,7 +25,7 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
   const needDebt = !!latest && (latest.interestBearingDebt ?? 0) === 0; // 有利子負債
   const needDep = !!latest && (latest.depreciation ?? 0) === 0; // 減価償却費
   const docRelevant: Record<string, boolean> = {
-    loan_repayment: needRepay || needDebt,
+    loan_repayment: needRepay,
     account_breakdown: needDebt,
     fixed_asset: needDep,
   };
@@ -37,16 +37,20 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
     const isLoan = d.type === 'loan_repayment';
     const loanMode = isLoan
       ? `<div style="margin-top:8px;font-size:12px;text-align:left">
-           <label style="display:block;margin-bottom:3px"><input type="radio" name="mode" value="replace" ${keepAddMode ? '' : 'checked'}> 全借入をまとめて取り込む（上書き）</label>
-           <label style="display:block"><input type="radio" name="mode" value="add" ${keepAddMode ? 'checked' : ''}> 借入を1件ずつ追加（加算）${keepAddMode ? ' <span style="color:#16a34a;font-weight:700">← 継続中</span>' : ''}</label>
-           <div style="font-size:11px;color:var(--text2);margin-top:6px;line-height:1.6">1つの借入が複数ページの時は<strong>全ファイルをまとめて選択</strong>（AIが1件として合計）。借入が複数なら全部まとめて選び「上書き」で1回でOK。1件ずつ入れたい時は「リセット→加算」。</div>
+           <label style="display:block;margin-bottom:3px"><input type="radio" name="mode" value="add" checked> 借入を1件ずつ足していく（加算）<span style="color:#16a34a;font-weight:700"> ← ${keepAddMode ? '継続中' : 'おすすめ'}</span></label>
+           <label style="display:block"><input type="radio" name="mode" value="replace"> 全借入がこの1回でまとまっている（上書き）</label>
+           <div style="font-size:11px;color:var(--text2);margin-top:6px;line-height:1.6">
+             借入が複数あるとき：<strong>「1件ずつ足していく」を選んで、借入ごとに取り込むだけ</strong>。年間返済元本が自動で合算されます（リセット不要）。<br>
+             1つの借入が複数ページの写真なら、その<strong>全ページをまとめて選択</strong>して取り込み（AIが1件分として合計）。<br>
+             入れ直したい時だけ下の「リセット」で0に戻せます。
+           </div>
          </div>`
       : '';
     const loanFooter = isLoan
       ? `<div style="margin-top:8px;font-size:11px;color:var(--text2);text-align:left">
-           現在の合計：借入残高 <strong>${fmtYen(latest?.interestBearingDebt)}</strong> ／ 年間返済元本 <strong>${fmtYen(latest?.annualDebtRepayment)}</strong>
-           <form method="post" action="/finance/reset-loan" style="display:inline;margin-left:6px" onsubmit="return confirm('借入データ(有利子負債・年間返済元本・支払利息)を0に戻します。よろしいですか？')">
-             <button type="submit" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:11px;text-decoration:underline;padding:0">借入をリセット</button>
+           現在の年間返済元本（合計）：<strong>${fmtYen(latest?.annualDebtRepayment)}</strong>
+           <form method="post" action="/finance/reset-loan" style="display:inline;margin-left:6px" onsubmit="return confirm('年間返済元本を空(0)に戻します。借入残高・利息（決算書の値）はそのままです。よろしいですか？')">
+             <button type="submit" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:11px;text-decoration:underline;padding:0">リセット</button>
            </form>
          </div>`
       : '';
