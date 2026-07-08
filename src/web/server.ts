@@ -4124,23 +4124,48 @@ ${renderSidebar('dashboard')}
     <div style="padding:24px;overflow-y:auto;flex:1">
       <p style="font-size:13px;color:var(--text2);margin-bottom:16px">追加する資料の種類を選んでください。</p>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <form method="POST" action="/agent/finance/upload-trend?_csrf=${encodeURIComponent(csrf)}" enctype="multipart/form-data" style="padding:16px;border:2px solid var(--border);border-radius:10px" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='解析中...';window.__showLoading&&window.__showLoading('AIが資料を解析しています','30秒〜1分程度かかります')">
+        <form method="POST" action="/agent/finance/upload-trend?_csrf=${encodeURIComponent(csrf)}" enctype="multipart/form-data" style="padding:16px;border:2px solid var(--border);border-radius:10px" onsubmit="return uaSubmit(this)">
           <h4 style="font-size:14px;font-weight:700;margin-bottom:8px">📊 月次推移試算表</h4>
           <p style="font-size:12px;color:var(--text2);margin-bottom:10px">複数月分。詳細表示。</p>
-          <input type="file" name="file" accept=".pdf,.csv,.txt" required style="width:100%;font-size:12px;margin-bottom:8px">
-          <button type="submit" class="btn-primary btn-sm" style="width:100%;border:none;font-family:inherit;cursor:pointer">アップロード</button>
+          <label class="ua-drop"><input type="file" name="files" accept=".pdf,.csv,.txt" multiple><div class="ua-dt">ドラッグ&ドロップ<br>またはクリック（複数可）</div><div class="ua-files"></div></label>
+          <button type="submit" class="btn-primary btn-sm" style="width:100%;margin-top:8px;border:none;font-family:inherit;cursor:pointer">アップロード</button>
         </form>
-        <form method="POST" action="/agent/finance/upload-snapshot?_csrf=${encodeURIComponent(csrf)}" enctype="multipart/form-data" style="padding:16px;border:2px solid var(--border);border-radius:10px" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='解析中...';window.__showLoading&&window.__showLoading('AIが資料を解析しています','30秒〜1分程度かかります')">
+        <form method="POST" action="/agent/finance/upload-snapshot?_csrf=${encodeURIComponent(csrf)}" enctype="multipart/form-data" style="padding:16px;border:2px solid var(--border);border-radius:10px" onsubmit="return uaSubmit(this)">
           <h4 style="font-size:14px;font-weight:700;margin-bottom:8px">📄 単月試算表/決算書</h4>
           <p style="font-size:12px;color:var(--text2);margin-bottom:10px">1時点。簡易表示。</p>
-          <input type="file" name="file" accept=".pdf,.csv,.txt" required style="width:100%;font-size:12px;margin-bottom:8px">
-          <button type="submit" class="btn-secondary btn-sm" style="width:100%;border:1px solid var(--border);background:var(--bg);font-family:inherit;cursor:pointer">アップロード</button>
+          <label class="ua-drop"><input type="file" name="files" accept=".pdf,.csv,.txt" multiple><div class="ua-dt">ドラッグ&ドロップ<br>またはクリック（複数可）</div><div class="ua-files"></div></label>
+          <button type="submit" class="btn-secondary btn-sm" style="width:100%;margin-top:8px;border:1px solid var(--border);background:var(--bg);font-family:inherit;cursor:pointer">アップロード</button>
         </form>
       </div>
     </div>
   </div>
 </div>
-<style>.upload-modal-overlay.open{display:flex !important}</style>
+<style>
+.upload-modal-overlay.open{display:flex !important}
+.ua-drop{display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center;cursor:pointer;border:2px dashed #cbd5e1;border-radius:10px;padding:16px 10px;background:#f8fafc;transition:border-color .15s,background .15s;margin-bottom:4px}
+.ua-drop:hover{border-color:#2298ae;background:#f0f9fb}
+.ua-drop.drag{border-color:#2298ae;background:#e6f4f7}
+.ua-drop input[type=file]{display:none}
+.ua-dt{font-size:12px;color:#64748b;line-height:1.5}
+.ua-files{font-size:11px;color:#1b7f8e;font-weight:700;word-break:break-all}
+</style>
+<script>
+function uaSubmit(form){
+  var input=form.querySelector('input[type=file]');
+  if(!input||!input.files||!input.files.length){ if(window.__toast)window.__toast('ファイルを選択してください','error');else alert('ファイルを選択してください'); return false; }
+  var b=form.querySelector('button'); b.disabled=true; b.textContent='解析中...';
+  if(window.__showLoading) window.__showLoading('AIが資料を解析しています','30秒〜1分程度かかります');
+  return true;
+}
+document.querySelectorAll('#uploadModal .ua-drop').forEach(function(dz){
+  var input=dz.querySelector('input[type=file]'); var f=dz.querySelector('.ua-files');
+  function r(){ if(!input.files||!input.files.length){f.textContent='';return;} var a=[];for(var i=0;i<input.files.length;i++)a.push(input.files[i].name); f.textContent=input.files.length+'件: '+a.join('、'); }
+  ['dragenter','dragover'].forEach(function(e){dz.addEventListener(e,function(ev){ev.preventDefault();ev.stopPropagation();dz.classList.add('drag');});});
+  ['dragleave','drop'].forEach(function(e){dz.addEventListener(e,function(ev){ev.preventDefault();ev.stopPropagation();dz.classList.remove('drag');});});
+  dz.addEventListener('drop',function(e){if(e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files.length){input.files=e.dataTransfer.files;r();}});
+  input.addEventListener('change',r);
+});
+</script>
 </body></html>`;
 }
 
