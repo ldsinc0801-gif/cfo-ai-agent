@@ -40,15 +40,22 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
            <strong style="color:var(--text)">借入は1件ずつ取り込みます</strong>（1件が複数ページの写真なら全部まとめて選択）。取り込むたびに<strong style="color:var(--text)">自動で合算</strong>されます。
          </div>`
       : '';
-    const loanFooter = isLoan
+    // 各カードに「今そのカードから取り込まれている値」を表示（返済計画表はリセット付き）
+    const curValRow = (label: string, val: number | null | undefined) =>
+      `<div style="font-size:13px">${label}：<strong style="font-size:16px;color:var(--text)">${fmtYen(val)}</strong></div>`;
+    const footer = isLoan
       ? `<div style="margin-top:12px;text-align:left;border-top:1px solid var(--border);padding-top:10px">
-           <div style="font-size:13px;margin-bottom:8px">現在の年間返済元本（合計）：<strong style="font-size:17px;color:var(--text)">${fmtYen(latest?.annualDebtRepayment)}</strong></div>
+           <div style="margin-bottom:8px">現在の年間返済元本（合計）：<strong style="font-size:17px;color:var(--text)">${fmtYen(latest?.annualDebtRepayment)}</strong></div>
            <form method="post" action="/finance/reset-loan" onsubmit="return confirm('年間返済元本を0に戻します（借入残高・利息＝決算書の値はそのまま）。よろしいですか？')">
              <button type="submit" style="width:100%;background:#f97316;color:#fff;border:none;border-radius:8px;padding:11px;font-size:14px;font-weight:700;cursor:pointer">🔄 年間返済元本をリセット（0に戻す）</button>
            </form>
            <div style="font-size:11px;color:var(--text2);margin-top:6px">※ 入れ間違えたら、これで0に戻して1件ずつ入れ直してください</div>
          </div>`
-      : '';
+      : d.type === 'account_breakdown'
+        ? `<div style="margin-top:12px;text-align:left;border-top:1px solid var(--border);padding-top:10px">${curValRow('現在の借入残高（有利子負債）', latest?.interestBearingDebt)}</div>`
+        : d.type === 'fixed_asset'
+          ? `<div style="margin-top:12px;text-align:left;border-top:1px solid var(--border);padding-top:10px">${curValRow('現在の減価償却費', latest?.depreciation)}</div>`
+          : '';
     return `
     <div>
       <form method="post" action="/finance/import-doc" enctype="multipart/form-data" class="doc-card${highlight ? ' doc-card--need' : ''}">
@@ -64,7 +71,7 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
         ${loanMode}
         <button type="submit" class="btn-primary btn-sm" style="width:100%;margin-top:10px">${isLoan ? 'この借入を取り込む（合算）' : 'この書類を取り込む'}</button>
       </form>
-      ${loanFooter}
+      ${footer}
     </div>`;
   };
 
