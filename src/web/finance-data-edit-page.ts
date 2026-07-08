@@ -29,7 +29,6 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
     account_breakdown: needDebt,
     fixed_asset: needDep,
   };
-  const missingLabels = [needRepay ? '年間返済元本' : '', needDebt ? '有利子負債' : '', needDep ? '減価償却費' : ''].filter(Boolean);
 
   // --- 不足書類の取り込みパネル ---
   const fmtYen = (v: number | null | undefined) =>
@@ -38,8 +37,9 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
     const isLoan = d.type === 'loan_repayment';
     const loanMode = isLoan
       ? `<div style="margin-top:8px;font-size:12px;text-align:left">
-           <label style="display:block;margin-bottom:3px"><input type="radio" name="mode" value="replace" checked> この書類に全借入がまとまっている（上書き）</label>
-           <label style="display:block"><input type="radio" name="mode" value="add"> 借入を1件ずつ追加していく（加算）</label>
+           <label style="display:block;margin-bottom:3px"><input type="radio" name="mode" value="replace" checked> 全借入をまとめて取り込む（上書き）</label>
+           <label style="display:block"><input type="radio" name="mode" value="add"> 借入を1件ずつ追加（加算）</label>
+           <div style="font-size:11px;color:var(--text2);margin-top:6px;line-height:1.6">1つの借入が複数ページの時は<strong>全ファイルをまとめて選択</strong>（AIが1件として合計）。借入が複数なら全部まとめて選び「上書き」で1回でOK。1件ずつ入れたい時は「リセット→加算」。</div>
          </div>`
       : '';
     const loanFooter = isLoan
@@ -72,19 +72,12 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
   const docPanel = latest
     ? `
     <div class="card" style="margin-bottom:20px">
-      <div class="card-header"><h3>書類の取り込み</h3></div>
+      <div class="card-header"><h3>補助書類の取り込み（任意）</h3></div>
       <div class="card-body">
-        <div class="doc-first">
-          <div><strong>まず「決算書（BS/PL）」を取り込むのが基本です。</strong>売上・資産・借入残高・減価償却費など、分析に必要な数値の大半が自動で埋まります。数字がおかしい・借入が0のときは、決算書を取り込み直してください。</div>
-          <a href="/?upload=1" class="btn-primary btn-sm" style="margin-top:10px;display:inline-block;text-decoration:none">決算書を取り込む／取り込み直す</a>
-        </div>
-        ${missingLabels.length
-          ? `<div class="doc-info">✓ 今のデータで分析は動きます（借入残高なども取り込み済み）。次は<strong>任意</strong>です — 入れると精度が上がります：<strong>${missingLabels.join(' / ')}</strong>。<span style="color:var(--text2)">（年間返済元本＝返済能力の精度、減価償却費＝月次だと0が普通で影響小）</span> 必要なら下記の該当書類（オレンジ枠）でどうぞ。</div>`
-          : `<div class="doc-ok">✓ 主要項目は揃っています。補助書類が必要な場合のみ下記からどうぞ。</div>`}
+        <div class="doc-info">決算書を取り込めば分析は動きます。下記は<strong>精度を上げたい時だけ</strong>の任意項目です。決算書を入れ直すなら <a href="/?upload=1" style="font-weight:700">こちら</a>。</div>
         <div class="doc-grid">
           ${DOCS.map((d) => docCard(d, !!docRelevant[d.type])).join('')}
         </div>
-        <p style="font-size:12px;color:var(--text2);margin-top:10px">補助書類の内容は<strong>最新期（${latest.year}年${latest.month}月）</strong>に反映されます。AIが必要項目だけを抽出します。</p>
       </div>
     </div>`
     : '';
