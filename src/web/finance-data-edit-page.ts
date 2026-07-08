@@ -79,7 +79,7 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
           <a href="/?upload=1" class="btn-primary btn-sm" style="margin-top:10px;display:inline-block;text-decoration:none">決算書を取り込む／取り込み直す</a>
         </div>
         ${missingLabels.length
-          ? `<div class="doc-warn">決算書で埋まっていない項目があります：<strong>${missingLabels.join(' / ')}</strong>。下記の該当書類（オレンジ枠）で補えます。<strong>年間返済元本は決算書に無い</strong>ため、これだけは取り込みが必要です。</div>`
+          ? `<div class="doc-info">✓ 今のデータで分析は動きます（借入残高なども取り込み済み）。次は<strong>任意</strong>です — 入れると精度が上がります：<strong>${missingLabels.join(' / ')}</strong>。<span style="color:var(--text2)">（年間返済元本＝返済能力の精度、減価償却費＝月次だと0が普通で影響小）</span> 必要なら下記の該当書類（オレンジ枠）でどうぞ。</div>`
           : `<div class="doc-ok">✓ 主要項目は揃っています。補助書類が必要な場合のみ下記からどうぞ。</div>`}
         <div class="doc-grid">
           ${DOCS.map((d) => docCard(d, !!docRelevant[d.type])).join('')}
@@ -120,6 +120,7 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
     .doc-warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px;line-height:1.6}
     .doc-ok{background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px}
     .doc-first{background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;border-radius:10px;padding:14px 16px;margin-bottom:14px;font-size:13px;line-height:1.7}
+    .doc-info{background:#f0f9ff;border:1px solid #bae6fd;color:#075985;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px;line-height:1.6}
   </style>
   <a href="/agent/finance" style="display:inline-flex;align-items:center;gap:4px;margin-bottom:14px;color:var(--primary);font-weight:700;text-decoration:none;font-size:14px">← 財務分析AIに戻る</a>
   ${body}
