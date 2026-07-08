@@ -1267,7 +1267,7 @@ function updateLocaBenchmark(){
     { key:'revenueGrowth', label:'売上増加率', unit:'%', simVal:simVals.revenueGrowth, reverse:false },
     { key:'operatingMargin', label:'営業利益率', unit:'%', simVal:simVals.operatingMargin, reverse:false },
     { key:'laborProductivity', label:'労働生産性', unit:'千円', simVal:simVals.laborProductivity, reverse:false },
-    { key:'ebitdaRatio', label:'EBITDA有利子負債倍率', unit:'倍', simVal:null, reverse:true },
+    { key:'ebitdaRatio', label:'EBITDA有利子負債倍率', unit:'倍', simVal:simVals.ebitdaRatio, reverse:true },
     { key:'workingCapitalTurnover', label:'営業運転資本回転期間', unit:'ヶ月', simVal:null, reverse:true },
     { key:'equityRatio', label:'自己資本比率', unit:'%', simVal:simVals.equityRatio, reverse:false },
   ];
@@ -1404,7 +1404,7 @@ function renderBankRating(d){
 
 function getSimAnnualValues(){
   // 現在のシミュレーション結果から年間指標を算出
-  var totalRev=0, totalProfit=0, emp=1;
+  var totalRev=0, totalProfit=0, totalDepr=0, emp=1;
   for(var i=0;i<baseData.length;i++){
     var b = baseData[i];
     var bRev = b.revenue||0;
@@ -1417,6 +1417,7 @@ function getSimAnnualValues(){
     var profit = rev - cogs - fixed - varCost - depr;
     totalRev += rev;
     totalProfit += profit;
+    totalDepr += depr;
     emp = Math.max(1, simParams.employeeCount);
   }
   // ベースの年間売上
@@ -1427,12 +1428,17 @@ function getSimAnnualValues(){
   // 自己資本比率（簡易: 最終月のnetAssets/totalAssets）
   var lastB = baseData[baseData.length-1];
   var eqRatio = (lastB.totalAssets>0 && lastB.netAssets>0) ? (lastB.netAssets/lastB.totalAssets*100) : 0;
+  // EBITDA有利子負債倍率 = 有利子負債 /（営業利益＋減価償却）。EBITDAが0以下なら算出不可(null)。
+  var ebitda = totalProfit + totalDepr;
+  var debt = lastB.debt || 0;
+  var ebitdaRatio = (ebitda > 0) ? Math.round(debt/ebitda*10)/10 : null;
 
   return {
     revenueGrowth: Math.round(revenueGrowth*10)/10,
     operatingMargin: Math.round(margin*10)/10,
     laborProductivity: Math.round(productivity*10)/10,
     equityRatio: Math.round(eqRatio*10)/10,
+    ebitdaRatio: ebitdaRatio,
   };
 }
 
