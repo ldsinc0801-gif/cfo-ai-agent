@@ -167,7 +167,7 @@ export class ChatService {
     const history = await this.getHistory(tenantId, userId);
 
     const analyses = tenantId ? await analysisStore.list(tenantId) : [];
-    const latestAnalysis = analyses.length > 0 ? await analysisStore.get(analyses[0].id) : null;
+    const latestAnalysis = (tenantId && analyses.length > 0) ? await analysisStore.get(tenantId, analyses[0].id) : null;
 
     // freeeContextは引数で受け取る（シングルトン状態廃止）
     if (freeeContext !== undefined) this.freeeContext = freeeContext;

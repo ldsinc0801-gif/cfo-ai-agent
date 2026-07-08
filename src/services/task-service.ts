@@ -65,14 +65,16 @@ class TaskService {
     return (data || []).map(mapTask);
   }
 
-  async get(id: string): Promise<Task | null> {
+  async get(tenantId: TenantId, id: string): Promise<Task | null> {
     if (!isSupabaseAvailable()) return null;
-    const { data, error } = await getSupabase().from('tasks').select('*').eq('id', id).single();
+    // テナントスコープ必須（他テナントのタスクIDを指定して読めないように）
+    const { data, error } = await getSupabase().from('tasks').select('*')
+      .eq('id', id).eq('tenant_id', tenantId).single();
     if (error) return null;
     return mapTask(data);
   }
 
-  async update(id: string, updates: Partial<Pick<Task, 'title' | 'description' | 'priority' | 'status' | 'category' | 'dueDate'>>): Promise<Task | null> {
+  async update(tenantId: TenantId, id: string, updates: Partial<Pick<Task, 'title' | 'description' | 'priority' | 'status' | 'category' | 'dueDate'>>): Promise<Task | null> {
     if (!isSupabaseAvailable()) return null;
     const dbUpdates: any = { updated_at: new Date().toISOString() };
     if (updates.title !== undefined) dbUpdates.title = updates.title;
@@ -83,14 +85,16 @@ class TaskService {
     if (updates.dueDate !== undefined) dbUpdates.due_date = updates.dueDate;
     if (updates.status === 'done') dbUpdates.completed_at = new Date().toISOString();
 
-    const { data, error } = await getSupabase().from('tasks').update(dbUpdates).eq('id', id).select().single();
+    const { data, error } = await getSupabase().from('tasks').update(dbUpdates)
+      .eq('id', id).eq('tenant_id', tenantId).select().single();
     if (error) { logger.warn('タスク更新失敗:', error.message); return null; }
     return mapTask(data);
   }
 
-  async delete(id: string): Promise<boolean> {
+  async delete(tenantId: TenantId, id: string): Promise<boolean> {
     if (!isSupabaseAvailable()) return false;
-    const { error } = await getSupabase().from('tasks').delete().eq('id', id);
+    const { error } = await getSupabase().from('tasks').delete()
+      .eq('id', id).eq('tenant_id', tenantId);
     return !error;
   }
 

@@ -161,7 +161,9 @@ export class SecretaryService {
     const tid = tenantId;
     if (isSupabaseAvailable() && tid) {
       try {
-        const { data } = await getSupabase().from('secretary_templates').select('*').eq('id', id).single();
+        // テナントスコープ必須（他テナントのテンプレートIDを指定して読めないように）
+        const { data } = await getSupabase().from('secretary_templates').select('*')
+          .eq('id', id).eq('tenant_id', tid).single();
         if (data) return { id: data.id, name: data.name, type: data.type, templateFile: data.template_file, fields: data.fields || [], createdAt: data.created_at };
       } catch { /* not found */ }
     }
@@ -510,10 +512,10 @@ export class SecretaryService {
     if (fs.existsSync(dir)) {
       fs.rmSync(dir, { recursive: true });
     }
-    // DB削除
+    // DB削除（テナントスコープ必須）
     if (isSupabaseAvailable()) {
       try {
-        await getSupabase().from('secretary_templates').delete().eq('id', id);
+        await getSupabase().from('secretary_templates').delete().eq('id', id).eq('tenant_id', tenantId);
       } catch (e) { logger.warn('テンプレートDB削除失敗:', e); }
     }
     // Storage削除
@@ -1268,7 +1270,9 @@ body { font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Noto Sans JP', sa
   async getDocument(tenantId: TenantId, docId: string): Promise<GeneratedDocument | null> {
     if (isSupabaseAvailable() && tenantId) {
       try {
-        const { data } = await getSupabase().from('secretary_documents').select('*').eq('id', docId).single();
+        // テナントスコープ必須（他テナントの生成書類IDを指定してPDFを読めないように）
+        const { data } = await getSupabase().from('secretary_documents').select('*')
+          .eq('id', docId).eq('tenant_id', tenantId).single();
         if (data) return { id: data.id, templateId: data.template_id, templateName: data.template_name, type: data.type, data: data.data, pdfPath: data.storage_path || '', createdAt: data.created_at };
       } catch { /* not found */ }
     }
@@ -1285,7 +1289,7 @@ body { font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Noto Sans JP', sa
           await getSupabaseAdmin()!.storage.from(STORAGE_BUCKET).remove([storagePath]);
         } catch { /* ignore */ }
       }
-      await getSupabase().from('secretary_documents').delete().eq('id', id);
+      await getSupabase().from('secretary_documents').delete().eq('id', id).eq('tenant_id', tenantId);
     }
   }
 

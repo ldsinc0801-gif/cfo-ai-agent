@@ -657,6 +657,15 @@ app.post('/api/tenant/invite', express.json(), requireRole('admin'), async (req,
 app.post('/api/tenant/members/:userId/reset-password', requireRole('financial_admin'), async (req, res) => {
   try {
     const userId = req.params.userId as string;
+    // 対象ユーザーが「自分の担当テナントのメンバー」であることを検証する。
+    // これが無いと、財務管理者が他テナントのユーザーや超管理者のパスワードを
+    // リセットして乗っ取れてしまう（アカウント乗っ取りの穴）。超管理者のみ例外。
+    if (!req.session.user?.isSuperAdmin) {
+      const scopeTenant = getActiveTenantId(req);
+      if (!scopeTenant) { res.status(400).json({ error: 'テナントが選択されていません' }); return; }
+      const targetRole = await authService.getUserRoleInTenant(userId, scopeTenant);
+      if (!targetRole) { res.status(403).json({ error: 'このユーザーのパスワードを変更する権限がありません' }); return; }
+    }
     const newPassword = generateInitialPassword();
     const ph = await hashPassword(newPassword);
     await authService.resetPassword(userId, ph);
@@ -1845,7 +1854,8 @@ app.get('/agent/finance/history', async (req, res) => {
 
 // 保存済み分析の詳細表示
 app.get('/agent/finance/history/:id', async (req, res) => {
-  const analysis = await analysisStore.get(req.params.id);
+  const histTid = getActiveTenantId(req);
+  const analysis = histTid ? await analysisStore.get(histTid, req.params.id) : null;
   if (!analysis) {
     res.status(404).send('分析結果が見つかりません');
     return;
@@ -1863,14 +1873,16 @@ app.get('/agent/finance/history/:id', async (req, res) => {
 
 // 分析結果の削除
 app.post('/agent/finance/history/:id/delete', async (req, res) => {
-  await analysisStore.delete(req.params.id);
+  const t = getActiveTenantId(req);
+  if (t) await analysisStore.delete(t, req.params.id);
   res.redirect('/agent/finance/history');
 });
 
 app.post('/agent/finance/history/delete-all', async (req, res) => {
-  const all = await analysisStore.list(getActiveTenantId(req)!);
+  const delAllTid = getActiveTenantId(req)!;
+  const all = await analysisStore.list(delAllTid);
   for (const a of all) {
-    await analysisStore.delete(a.id);
+    await analysisStore.delete(delAllTid, a.id);
   }
   logger.info(`分析履歴を全件削除: ${all.length}件`);
   res.redirect('/agent/finance/history');
@@ -1878,7 +1890,8 @@ app.post('/agent/finance/history/delete-all', async (req, res) => {
 
 // 分析結果のJSONダウンロード
 app.get('/agent/finance/history/:id/json', async (req, res) => {
-  const analysis = await analysisStore.get(req.params.id);
+  const jsonTid = getActiveTenantId(req);
+  const analysis = jsonTid ? await analysisStore.get(jsonTid, req.params.id) : null;
   if (!analysis) {
     res.status(404).json({ error: 'not found' });
     return;
@@ -3784,8 +3797,10 @@ app.post('/tasks/add', express.urlencoded({ extended: true }), async (req, res) 
 });
 
 app.post('/tasks/:id/status', express.urlencoded({ extended: true }), async (req, res) => {
-  const task = await taskService.get(req.params.id);
-  await taskService.update(req.params.id, { status: req.body.status });
+  const stTid = getActiveTenantId(req);
+  if (!stTid) { res.redirect('/tasks'); return; }
+  const task = await taskService.get(stTid, req.params.id);
+  await taskService.update(stTid, req.params.id, { status: req.body.status });
 
   // Google Tasks連携: 完了時に同期
   const gtid = getActiveTenantId(req);
@@ -3810,7 +3825,9 @@ app.post('/tasks/:id/status', express.urlencoded({ extended: true }), async (req
 });
 
 app.post('/tasks/:id/edit', express.urlencoded({ extended: true }), async (req, res) => {
-  await taskService.update(req.params.id, {
+  const edTid = getActiveTenantId(req);
+  if (!edTid) { res.redirect('/tasks'); return; }
+  await taskService.update(edTid, req.params.id, {
     title: req.body.title,
     description: req.body.description,
     priority: req.body.priority,
@@ -3820,8 +3837,9 @@ app.post('/tasks/:id/edit', express.urlencoded({ extended: true }), async (req, 
   res.redirect('/tasks');
 });
 
-app.post('/tasks/:id/delete', async (_req, res) => {
-  await taskService.delete(_req.params.id);
+app.post('/tasks/:id/delete', async (req, res) => {
+  const delTid = getActiveTenantId(req);
+  if (delTid) await taskService.delete(delTid, req.params.id);
   res.redirect('/tasks');
 });
 
@@ -3908,9 +3926,10 @@ app.post('/tasks/sync-google', express.urlencoded({ extended: true }), async (re
     const existingGoogleTasks = await googleTasksClient.listTasks(listId);
     const existingTitles = new Set(existingGoogleTasks.map(t => t.title));
 
+    const syncTid = getActiveTenantId(req);
     let syncCount = 0;
     for (const id of taskIds) {
-      const task = await taskService.get(id);
+      const task = syncTid ? await taskService.get(syncTid, id) : null;
       if (!task) continue;
 
       const catLabel = ({ finance: '【財務】', accounting: '【会計】', cashflow: '【資金繰り】', plan: '【事業計画】', general: '' } as Record<string, string>)[task.category] || '';
@@ -3937,14 +3956,24 @@ app.post('/tasks/sync-google', express.urlencoded({ extended: true }), async (re
 });
 
 // === 秘書AI連携API ===
+// /api/* はグローバル認証ガードの対象外なので、各ルートでログイン+テナントを個別に確認する。
+function apiTenant(req: express.Request, res: express.Response): TenantId | null {
+  if (!req.session?.user) { res.status(401).json({ error: 'ログインが必要です' }); return null; }
+  const t = getActiveTenantId(req);
+  if (!t) { res.status(400).json({ error: 'テナントが選択されていません' }); return null; }
+  return t;
+}
+
 // タスク一覧（秘書AIが取得）
 app.get('/api/tasks', async (req, res) => {
-  res.json(await taskService.exportForAssistant(getActiveTenantId(req)!));
+  const t = apiTenant(req, res); if (!t) return;
+  res.json(await taskService.exportForAssistant(t));
 });
 
 // タスク追加（秘書AIが追加）
 app.post('/api/tasks', express.json(), async (req, res) => {
-  const task = await taskService.add(getActiveTenantId(req)!, {
+  const t = apiTenant(req, res); if (!t) return;
+  const task = await taskService.add(t, {
     title: req.body.title,
     description: req.body.description || '',
     priority: req.body.priority || 'medium',
@@ -3957,15 +3986,17 @@ app.post('/api/tasks', express.json(), async (req, res) => {
 
 // タスク更新（秘書AIがステータス変更）
 app.patch('/api/tasks/:id', express.json(), async (req, res) => {
-  const task = await taskService.update(req.params.id, req.body);
+  const t = apiTenant(req, res); if (!t) return;
+  const task = await taskService.update(t, req.params.id, req.body);
   if (!task) { res.status(404).json({ error: 'not found' }); return; }
   res.json(task);
 });
 
 // 会社情報（秘書AIが参照）
 app.get('/api/company', async (req, res) => {
-  const memory = await chatService.getMemory(getActiveTenantId(req) || undefined);
-  const analyses = await analysisStore.list(getActiveTenantId(req)!);
+  const t = apiTenant(req, res); if (!t) return;
+  const memory = await chatService.getMemory(t);
+  const analyses = await analysisStore.list(t);
   res.json({ company: memory, latestAnalyses: analyses.slice(0, 5) });
 });
 

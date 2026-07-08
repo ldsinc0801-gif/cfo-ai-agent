@@ -50,9 +50,11 @@ export class AnalysisStore {
     return id;
   }
 
-  async get(id: string): Promise<SavedAnalysis | null> {
+  async get(tenantId: TenantId, id: string): Promise<SavedAnalysis | null> {
     if (!isSupabaseAvailable()) return null;
-    const { data, error } = await getSupabase().from('financial_analyses').select('*').eq('id', id).single();
+    // テナントスコープ必須（他テナントの分析IDを指定して読めないように）
+    const { data, error } = await getSupabase().from('financial_analyses').select('*')
+      .eq('id', id).eq('tenant_id', tenantId).single();
     if (error || !data) return null;
     return {
       id: data.id, createdAt: data.created_at, fileName: data.file_name, source: data.source,
@@ -74,9 +76,10 @@ export class AnalysisStore {
     }));
   }
 
-  async delete(id: string): Promise<boolean> {
+  async delete(tenantId: TenantId, id: string): Promise<boolean> {
     if (!isSupabaseAvailable()) return false;
-    const { error } = await getSupabase().from('financial_analyses').delete().eq('id', id);
+    const { error } = await getSupabase().from('financial_analyses').delete()
+      .eq('id', id).eq('tenant_id', tenantId);
     if (!error) logger.info(`分析結果を削除しました: ${id}`);
     return !error;
   }
