@@ -65,6 +65,9 @@ declare module 'express-session' {
     activeTenantRole?: string;
     /** 会計AIで選択中の対象会計年度（決算月期末年） */
     activeFiscalYear?: number;
+    /** メンバーシップ再検証のキャッシュ（除名の即時反映用） */
+    membershipCheckedAt?: number;
+    membershipCheckedFor?: string;
   }
 }
 
@@ -315,7 +318,7 @@ app.post('/logout', (req, res) => {
 });
 
 // 認証ミドルウェア（上記ルート以外に適用）
-app.use((req, res, next) => {
+app.use(async (req, res, next) => {
   // サイドバー用にユーザー情報をセット（isSuperAdmin, tenantRole含む）
   setCurrentUser(req.session.user ? {
     ...req.session.user,
@@ -335,11 +338,37 @@ app.use((req, res, next) => {
     res.redirect('/login');
     return;
   }
-  // 初回パスワード変更が強制される場合
-  if (p !== '/auth/change-password') {
-    // ユーザーのmustChangePasswordフラグはログイン時にセッションに反映済み
-    // パスワード変更後はリダイレクトされるので、ここでは通過を許可
+
+  // 除名の即時反映: アクティブテナントのメンバーシップをリクエスト毎に再検証する。
+  // 除名されていれば、その場でセッションのテナントを解除しデータを見せない（最大20秒キャッシュ）。
+  // 超管理者・デモテナントは対象外。
+  try {
+    const u = req.session.user;
+    const activeT = req.session.activeTenantId;
+    if (!u.isSuperAdmin && activeT && activeT !== 'demo-tenant') {
+      const now = Date.now();
+      const fresh = req.session.membershipCheckedFor === activeT
+        && (now - (req.session.membershipCheckedAt || 0) < 20000);
+      if (!fresh) {
+        const role = await authService.getUserRoleInTenant(u.id, asTenantId(activeT));
+        if (!role) {
+          // 除名済み → テナントアクセスを解除
+          logger.warn(`メンバー除名を検知しアクセス解除: ${u.email} / tenant ${activeT}`);
+          req.session.activeTenantId = undefined;
+          req.session.activeTenantRole = '';
+          req.session.membershipCheckedFor = undefined;
+          setCurrentUser({ ...u, picture: '', tenantRole: '' });
+        } else {
+          req.session.activeTenantRole = role;
+          req.session.membershipCheckedAt = now;
+          req.session.membershipCheckedFor = activeT;
+        }
+      }
+    }
+  } catch (e) {
+    logger.warn('メンバーシップ再検証に失敗:', e instanceof Error ? e.message : e);
   }
+
   next();
 });
 
