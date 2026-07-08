@@ -1234,10 +1234,15 @@ app.get('/report/pdf', async (req, res) => {
 // 事業計画AIエージェント
 app.get('/plan', async (req, res) => {
   try {
+    const isDemo = req.session.user?.id === 'demo-user';
     const planTid = getActiveTenantId(req);
-    const trend = await buildTrendData(undefined, undefined, 6, req.session.user?.id === 'demo-user', planTid || undefined);
+    const trend = await buildTrendData(undefined, undefined, 6, isDemo, planTid || undefined);
     const files = getUploadedFiles();
-    const fiscalMonth = planTid ? (await repo.getTenantFiscalMonth(asTenantId(planTid))) ?? 3 : 3;
+    // デモは仮想テナント(demo-tenant)なので決算月クエリを叩かない(無効UUIDで例外→500になる)
+    let fiscalMonth = 3;
+    if (!isDemo && planTid) {
+      try { fiscalMonth = (await repo.getTenantFiscalMonth(asTenantId(planTid))) ?? 3; } catch { fiscalMonth = 3; }
+    }
     res.send(renderPlanHTML(trend, files, fiscalMonth));
   } catch (error) {
     logger.error('事業計画ページエラー', error);
@@ -2638,12 +2643,28 @@ app.get('/agent/funding', async (req, res) => {
   let metrics = null;
   let forecast = null;
   try {
-    const tid = getActiveTenantId(req);
-    if (tid) {
-      const snapshots = await repo.getAllMonthlyActuals(asTenantId(tid));
-      metrics = computeImportedMetrics(snapshots);
-      forecast = forecastCashflow(snapshots);
+    const demo = getDemoProfile();
+    let snapshots: MonthlySnapshot[] = [];
+    if (demo) {
+      // デモ: 月次推移(cashAndDeposits等)を使い、最新月に借入・減価償却等を補完
+      snapshots = (demo.trendMonths || []).slice();
+      if (snapshots.length && demo.ratingInput) {
+        const ri = demo.ratingInput;
+        snapshots[snapshots.length - 1] = {
+          ...snapshots[snapshots.length - 1],
+          interestBearingDebt: ri.interestBearingDebt,
+          depreciation: ri.depreciation,
+          netIncome: ri.netIncome,
+          interestExpense: ri.interestExpense,
+          annualDebtRepayment: ri.annualDebtRepayment,
+        };
+      }
+    } else {
+      const tid = getActiveTenantId(req);
+      if (tid) snapshots = await repo.getAllMonthlyActuals(asTenantId(tid));
     }
+    metrics = computeImportedMetrics(snapshots);
+    forecast = forecastCashflow(snapshots);
   } catch (e) {
     logger.error('資金調達: 取込指標/資金繰り予測の計算に失敗', e);
   }
