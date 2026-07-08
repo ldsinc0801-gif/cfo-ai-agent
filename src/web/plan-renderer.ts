@@ -1423,11 +1423,12 @@ function getSimAnnualValues(){
   var ebitda = totalProfit + totalDepr;
   var debt = lastB.debt || 0;
   var ebitdaRatio = (ebitda > 0) ? Math.round(debt/ebitda*10)/10 : null;
-  // 営業運転資本回転期間(月) = (売上債権＋棚卸資産−仕入債務) / 月商。内訳が無ければ算出不可(null)。
+  // 営業運転資本回転期間(月) = (売上債権＋棚卸資産−仕入債務) / 月商。
+  // 売掛金・在庫・買掛金が全て0でも「運転資本0＝0.0ヶ月」は正しい結果（即日仕入即日売上の卸売等）。
+  // 売上が無い時だけ算出不可(null)。
   var workingCapital = (lastB.ar||0) + (lastB.inv||0) - (lastB.ap||0);
-  var hasWC = (lastB.ar||0) > 0 || (lastB.inv||0) > 0 || (lastB.ap||0) > 0;
   var monthlyRev = totalRev/12;
-  var wcTurnover = (hasWC && monthlyRev > 0) ? Math.round(workingCapital/monthlyRev*10)/10 : null;
+  var wcTurnover = (monthlyRev > 0) ? Math.round(workingCapital/monthlyRev*10)/10 : null;
 
   return {
     revenueGrowth: Math.round(revenueGrowth*10)/10,
