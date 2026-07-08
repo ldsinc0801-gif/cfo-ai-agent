@@ -117,6 +117,9 @@ export function renderPlanHTML(
         employees: kpi.employeeCount || 1,
         depreciation: m.depreciation ?? 0,
         debt: m.interestBearingDebt ?? 0,
+        ar: m.accountsReceivable ?? 0,
+        inv: m.inventory ?? 0,
+        ap: m.accountsPayable ?? 0,
         totalAssets: m.totalAssets,
         netAssets: m.netAssets,
       }))
@@ -1268,7 +1271,7 @@ function updateLocaBenchmark(){
     { key:'operatingMargin', label:'営業利益率', unit:'%', simVal:simVals.operatingMargin, reverse:false },
     { key:'laborProductivity', label:'労働生産性', unit:'千円', simVal:simVals.laborProductivity, reverse:false },
     { key:'ebitdaRatio', label:'EBITDA有利子負債倍率', unit:'倍', simVal:simVals.ebitdaRatio, reverse:true },
-    { key:'workingCapitalTurnover', label:'営業運転資本回転期間', unit:'ヶ月', simVal:null, reverse:true },
+    { key:'workingCapitalTurnover', label:'営業運転資本回転期間', unit:'ヶ月', simVal:simVals.workingCapitalTurnover, reverse:true },
     { key:'equityRatio', label:'自己資本比率', unit:'%', simVal:simVals.equityRatio, reverse:false },
   ];
 
@@ -1432,6 +1435,11 @@ function getSimAnnualValues(){
   var ebitda = totalProfit + totalDepr;
   var debt = lastB.debt || 0;
   var ebitdaRatio = (ebitda > 0) ? Math.round(debt/ebitda*10)/10 : null;
+  // 営業運転資本回転期間(月) = (売上債権＋棚卸資産−仕入債務) / 月商。内訳が無ければ算出不可(null)。
+  var workingCapital = (lastB.ar||0) + (lastB.inv||0) - (lastB.ap||0);
+  var hasWC = (lastB.ar||0) > 0 || (lastB.inv||0) > 0 || (lastB.ap||0) > 0;
+  var monthlyRev = totalRev/12;
+  var wcTurnover = (hasWC && monthlyRev > 0) ? Math.round(workingCapital/monthlyRev*10)/10 : null;
 
   return {
     revenueGrowth: Math.round(revenueGrowth*10)/10,
@@ -1439,6 +1447,7 @@ function getSimAnnualValues(){
     laborProductivity: Math.round(productivity*10)/10,
     equityRatio: Math.round(eqRatio*10)/10,
     ebitdaRatio: ebitdaRatio,
+    workingCapitalTurnover: wcTurnover,
   };
 }
 

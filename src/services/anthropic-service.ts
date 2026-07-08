@@ -209,6 +209,9 @@ ${additionalJson}
   "netAssets": 純資産,
   "interestBearingDebt": 有利子負債（当期＝期末。短期借入金＋長期借入金＋社債等。無ければ0）,
   "openingInterestBearingDebt": 前期末＝期首の有利子負債（BSの前期列。無ければnull）,
+  "accountsReceivable": 売上債権＝受取手形＋売掛金＋電子記録債権（無ければnull）,
+  "inventory": 棚卸資産＝商品＋製品＋仕掛品＋原材料＋貯蔵品（無ければnull）,
+  "accountsPayable": 仕入債務＝支払手形＋買掛金＋電子記録債務（無ければnull）,
   "netIncome": 当期純利益,
   "depreciation": 減価償却費,
   "interestExpense": 支払利息,
@@ -250,6 +253,9 @@ JSONのみ返してください。`;
       netAssets: p.netAssets ?? 0,
       interestBearingDebt: p.interestBearingDebt ?? 0,
       openingInterestBearingDebt: p.openingInterestBearingDebt ?? null,
+      accountsReceivable: p.accountsReceivable ?? null,
+      inventory: p.inventory ?? null,
+      accountsPayable: p.accountsPayable ?? null,
       netIncome: p.netIncome ?? 0,
       depreciation: p.depreciation ?? 0,
       interestExpense: p.interestExpense ?? 0,
@@ -293,7 +299,8 @@ JSONのみ返してください。`;
       "sgaExpenses": ..., "operatingIncome": ..., "ordinaryIncome": ...,
       "cashAndDeposits": ..., "currentAssets": ..., "currentLiabilities": ...,
       "totalAssets": ..., "netAssets": ...,
-      "interestBearingDebt": 有利子負債, "netIncome": 当期純利益, "depreciation": 減価償却費, "interestExpense": 支払利息
+      "interestBearingDebt": 有利子負債, "netIncome": 当期純利益, "depreciation": 減価償却費, "interestExpense": 支払利息,
+      "accountsReceivable": 売上債権(受取手形+売掛金+電子記録債権), "inventory": 棚卸資産(商品+製品+仕掛品+原材料+貯蔵品), "accountsPayable": 仕入債務(支払手形+買掛金+電子記録債務)
     }
   ],
   "extractionNotes": ["注意点"]
@@ -335,6 +342,9 @@ JSONのみ返してください。`;
       netIncome: s.netIncome ?? 0,
       depreciation: s.depreciation ?? 0,
       interestExpense: s.interestExpense ?? 0,
+      accountsReceivable: s.accountsReceivable ?? null,
+      inventory: s.inventory ?? null,
+      accountsPayable: s.accountsPayable ?? null,
     }));
     snapshots.sort((a, b) => (a.year * 100 + a.month) - (b.year * 100 + b.month));
     return { snapshots, extractionNotes: p.extractionNotes || [] };

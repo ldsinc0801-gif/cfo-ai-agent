@@ -20,6 +20,10 @@ export interface MonthlySnapshot {
   depreciation?: number;        // 減価償却費
   interestExpense?: number;     // 支払利息
   annualDebtRepayment?: number | null; // 年間返済元本（手入力。未入力は null）
+  // 営業運転資本の内訳（残高試算表から。営業運転資本＝売上債権＋棚卸資産−仕入債務）
+  accountsReceivable?: number | null; // 売上債権（受取手形＋売掛金＋電子記録債権）
+  inventory?: number | null;          // 棚卸資産（商品＋製品＋仕掛品＋原材料＋貯蔵品）
+  accountsPayable?: number | null;    // 仕入債務（支払手形＋買掛金＋電子記録債務）
 }
 
 /** 月次目標データ */
