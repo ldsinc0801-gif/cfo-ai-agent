@@ -459,6 +459,58 @@ export async function upsertTenantProfile(tenantId: TenantId, p: TenantProfile):
   logger.info(`会社情報を更新: ${tenantId}`);
 }
 
+// ========== 借入明細（借入先ごとの内訳） ==========
+
+export interface LoanDetail {
+  id: string;
+  lender: string;              // 借入先（例: 熊本銀行, 日本政策金融公庫）
+  annualRepayment: number;     // 年間返済元本
+  balance: number | null;      // 借入残高
+  interest: number | null;     // 年間支払利息
+  note: string | null;
+}
+
+export async function listLoanDetails(tenantId: TenantId): Promise<LoanDetail[]> {
+  const { data, error } = await getSupabase()
+    .from('loan_details')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .order('created_at', { ascending: true });
+  if (error) throw new Error(`借入明細の取得に失敗: ${error.message}`);
+  return (data || []).map((r: any) => ({
+    id: r.id,
+    lender: r.lender ?? '借入先',
+    annualRepayment: Number(r.annual_repayment ?? 0),
+    balance: r.balance == null ? null : Number(r.balance),
+    interest: r.interest == null ? null : Number(r.interest),
+    note: r.note ?? null,
+  }));
+}
+
+export async function addLoanDetail(tenantId: TenantId, d: Omit<LoanDetail, 'id'>): Promise<void> {
+  const { error } = await getSupabase().from('loan_details').insert({
+    tenant_id: tenantId,
+    lender: d.lender || '借入先',
+    annual_repayment: d.annualRepayment ?? 0,
+    balance: d.balance,
+    interest: d.interest,
+    note: d.note,
+  });
+  if (error) throw new Error(`借入明細の追加に失敗: ${error.message}`);
+}
+
+export async function deleteLoanDetail(tenantId: TenantId, id: string): Promise<void> {
+  const { error } = await getSupabase()
+    .from('loan_details').delete().eq('tenant_id', tenantId).eq('id', id);
+  if (error) throw new Error(`借入明細の削除に失敗: ${error.message}`);
+}
+
+export async function clearLoanDetails(tenantId: TenantId): Promise<void> {
+  const { error } = await getSupabase()
+    .from('loan_details').delete().eq('tenant_id', tenantId);
+  if (error) throw new Error(`借入明細のリセットに失敗: ${error.message}`);
+}
+
 // ========== テナント設定 ==========
 
 /** テナントの決算月（1-12）を取得。未設定なら null。 */

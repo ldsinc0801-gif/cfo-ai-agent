@@ -344,30 +344,30 @@ JSONのみ返してください。`;
   async extractSupplementaryDoc(
     parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }>,
     docType: 'loan_repayment' | 'fixed_asset' | 'account_breakdown',
-  ): Promise<{ fields: Record<string, number>; notes: string[] }> {
+  ): Promise<{ fields: Record<string, number>; lender?: string; notes: string[] }> {
     if (!this.ai) throw new Error('Gemini APIが初期化されていません');
     const spec = {
       loan_repayment: {
-        name: '借入金の返済計画表（借入金一覧・返済予定表）',
-        json: '{ "annualDebtRepayment": 全借入の年間返済元本の合計, "interestBearingDebt": 全借入の残高の合計(有利子負債), "interestExpense": 全借入の年間支払利息の合計, "notes": ["補足や推定"] }',
+        name: '借入金の返済予定表（1件の借入）',
+        json: '{ "lender": "借入先の金融機関名(例: 熊本銀行, 日本政策金融公庫, ○○リース)。読み取れなければ空文字", "annualDebtRepayment": この借入の年間返済元本(元金のみ), "interestBearingDebt": この借入の残高, "interestExpense": この借入の年間支払利息, "notes": ["補足や推定"] }',
+        hint: '添付は「1件の借入」の返済予定表です（複数ページに跨ることがある）。借入先名（金融機関名）と、その借入の年間返済元本（12回分の元金合計。利息は含めない）・残高・年間支払利息を読み取る。同一借入の小計や繰越を二重に加算しないこと。',
       },
       fixed_asset: {
         name: '固定資産台帳',
         json: '{ "depreciation": 当期の減価償却費合計, "notes": ["補足や推定"] }',
+        hint: '当期の減価償却費の合計額を読み取る。',
       },
       account_breakdown: {
         name: '勘定科目内訳明細書',
         json: '{ "interestBearingDebt": 借入金合計(短期借入金+長期借入金+社債+リース債務), "notes": ["補足や推定"] }',
+        hint: '借入金の内訳から、全借入の残高合計を読み取る。',
       },
     }[docType];
 
     const prompt = `添付は「${spec.name}」です（写真・PDF・CSV等）。ここから指定項目だけを読み取り、JSONで返してください。
 【ルール】
 - 数値は円単位の整数。該当が無ければ null。金額は必ず0以上。
-- **借入が複数ある場合は、全ての借入を合算した合計値**を返す（1つだけにしない）。
-- 年間返済元本は「元本」のみ（利息は含めない）。
-- 資料が複数枚/複数ファイルに分かれている場合も、全体を合算する。
-- **ただし同一の借入がページを跨ぐ場合は1件として扱い、小計や繰越を二重に加算しないこと**。異なる借入だけを合算する。
+- ${spec.hint}
 【出力JSON】
 ${spec.json}
 JSONのみ返してください。`;
@@ -389,7 +389,8 @@ JSONのみ返してください。`;
       const v = p[k];
       if (typeof v === 'number' && Number.isFinite(v) && v >= 0) fields[k] = v;
     }
-    return { fields, notes: Array.isArray(p.notes) ? p.notes : [] };
+    const lender = typeof p.lender === 'string' ? p.lender.trim() : '';
+    return { fields, lender, notes: Array.isArray(p.notes) ? p.notes : [] };
   }
 
   /** 業種を踏まえた深掘り質問を生成する。 */

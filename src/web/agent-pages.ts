@@ -228,8 +228,41 @@ export function renderAccountingAgentHTML(): string {
 /**
  * 資金調達AIエージェントページ
  */
-export function renderFundingAgentHTML(metrics?: ImportedMetrics | null, forecast?: CashflowForecast | null): string {
+export function renderFundingAgentHTML(
+  metrics?: ImportedMetrics | null,
+  forecast?: CashflowForecast | null,
+  loanDetails: { id: string; lender: string; annualRepayment: number; balance: number | null; interest: number | null }[] = [],
+): string {
   const fmtYen = (n: number) => (n < 0 ? '-' : '') + '¥' + new Intl.NumberFormat('ja-JP').format(Math.abs(Math.round(n)));
+  const esc = (s: string) =>
+    String(s).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c] as string));
+  const loanCard = loanDetails.length === 0 ? '' : `
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3>借入先別の明細</h3><span class="card-sub">どこから・いくら借りて・年いくら返すか</span></div>
+      <div class="card-body">
+        <table style="width:100%;font-size:13px;border-collapse:collapse">
+          <thead><tr>
+            <th style="text-align:left;padding:8px 4px;border-bottom:2px solid var(--border)">借入先</th>
+            <th style="text-align:right;padding:8px 4px;border-bottom:2px solid var(--border)">借入残高</th>
+            <th style="text-align:right;padding:8px 4px;border-bottom:2px solid var(--border)">年間返済元本</th>
+            <th style="text-align:right;padding:8px 4px;border-bottom:2px solid var(--border)">年間利息</th>
+          </tr></thead>
+          <tbody>${loanDetails.map((d) => `<tr>
+            <td style="padding:8px 4px;border-bottom:1px solid var(--border)"><strong>${esc(d.lender)}</strong></td>
+            <td style="text-align:right;padding:8px 4px;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums">${d.balance != null ? fmtYen(d.balance) : '—'}</td>
+            <td style="text-align:right;padding:8px 4px;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums">${fmtYen(d.annualRepayment)}</td>
+            <td style="text-align:right;padding:8px 4px;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums">${d.interest != null ? fmtYen(d.interest) : '—'}</td>
+          </tr>`).join('')}
+          <tr style="font-weight:800">
+            <td style="padding:8px 4px">合計</td>
+            <td style="text-align:right;padding:8px 4px;font-variant-numeric:tabular-nums">${fmtYen(loanDetails.reduce((a, d) => a + (d.balance || 0), 0))}</td>
+            <td style="text-align:right;padding:8px 4px;font-variant-numeric:tabular-nums">${fmtYen(loanDetails.reduce((a, d) => a + (d.annualRepayment || 0), 0))}</td>
+            <td style="text-align:right;padding:8px 4px;font-variant-numeric:tabular-nums">${fmtYen(loanDetails.reduce((a, d) => a + (d.interest || 0), 0))}</td>
+          </tr></tbody>
+        </table>
+        <p style="font-size:11px;color:var(--text2);margin-top:8px">※ 借入先の集中度・政策金融/民間の別は融資審査で重視されます。編集は<a href="/finance/data-edit" style="color:var(--primary)">財務データの取込</a>から。</p>
+      </div>
+    </div>`;
   const forecastCard = !forecast ? '' : `
     <div class="card" style="margin-bottom:20px">
       <div class="card-header"><h3>資金繰り予測（簡易）</h3><span class="card-sub">現預金の月次推移から算出</span></div>
@@ -255,6 +288,7 @@ export function renderFundingAgentHTML(metrics?: ImportedMetrics | null, forecas
     active: 'funding',
     title: '資金調達AIエージェント',
     bodyHTML: `
+    ${loanCard}
     ${forecastCard}
     <div class="welcome-banner" style="background:linear-gradient(135deg,#1b7f8e 0%,#8dd0da 100%)">
       <h2>資金調達AIエージェント</h2>

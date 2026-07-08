@@ -2688,6 +2688,15 @@ async function getDeepDiveContext(req: express.Request): Promise<{ industry: str
       if (m) {
         context = `自己資本比率 ${m.equityRatio ?? '-'}% / 経常利益率 ${m.ordinaryMargin ?? '-'}% / 現預金月商倍率 ${m.cashMonthsRatio ?? '-'}か月 / 債務償還年数 ${m.debtRepaymentYears ?? '-'}年 / 借入依存度 ${m.interestDependency ?? '-'}%`;
       }
+      // 借入先の内訳（集中度・政策金融/民間の別は融資審査で重要）
+      const loans = await repo.listLoanDetails(asTenantId(tid));
+      if (loans.length) {
+        const fmt = (n: number) => new Intl.NumberFormat('ja-JP').format(Math.round(n));
+        const loanStr = loans
+          .map((l) => `${l.lender}(残高${l.balance != null ? '¥' + fmt(l.balance) : '不明'}・年間返済¥${fmt(l.annualRepayment)})`)
+          .join('、');
+        context += ` / 借入先: ${loanStr}`;
+      }
     } catch (e) {
       logger.warn('深掘りコンテキスト取得失敗:', e);
     }
@@ -2725,6 +2734,7 @@ app.post('/api/finance/deep-dive/analyze', express.json(), async (req, res) => {
 app.get('/agent/funding', async (req, res) => {
   let metrics = null;
   let forecast = null;
+  let loanDetails: import('../repositories/supabase-repository.js').LoanDetail[] = [];
   try {
     const demo = getDemoProfile();
     let snapshots: MonthlySnapshot[] = [];
@@ -2742,28 +2752,34 @@ app.get('/agent/funding', async (req, res) => {
           annualDebtRepayment: ri.annualDebtRepayment,
         };
       }
+      loanDetails = (((demo as unknown as Record<string, unknown>).loanDetails as typeof loanDetails) || []);
     } else {
       const tid = getActiveTenantId(req);
-      if (tid) snapshots = await repo.getAllMonthlyActuals(asTenantId(tid));
+      if (tid) {
+        snapshots = await repo.getAllMonthlyActuals(asTenantId(tid));
+        loanDetails = await repo.listLoanDetails(asTenantId(tid));
+      }
     }
     metrics = computeImportedMetrics(snapshots);
     forecast = forecastCashflow(snapshots);
   } catch (e) {
     logger.error('資金調達: 取込指標/資金繰り予測の計算に失敗', e);
   }
-  res.send(renderFundingAgentHTML(metrics, forecast));
+  res.send(renderFundingAgentHTML(metrics, forecast, loanDetails));
 });
 
 // 財務データの確認・修正（取込値の手修正 + 年間返済元本の手入力）
 app.get('/finance/data-edit', async (req, res) => {
   const tid = getActiveTenantId(req);
   const snapshots = tid ? await repo.getAllMonthlyActuals(asTenantId(tid)) : [];
+  const loanDetails = tid ? await repo.listLoanDetails(asTenantId(tid)) : [];
   const q = req.query;
   const docLabels: Record<string, string> = {
     loan_repayment: '借入金の返済計画表', fixed_asset: '固定資産台帳', account_breakdown: '勘定科目内訳書',
   };
+  const escTiny = (s: string) => s.replace(/[<>&"']/g, '');
   let notice: string | undefined;
-  if (q.saved) notice = `✓ ${String(q.saved).replace(/[<>&"']/g, '')} を保存しました`;
+  if (q.saved) notice = `✓ ${escTiny(String(q.saved))} を保存しました`;
   else if (q.imported) {
     const label = docLabels[String(q.imported)] || '書類';
     const yen = (v: unknown) => (v !== '' && v != null ? '¥' + new Intl.NumberFormat('ja-JP').format(Number(v)) : '—');
@@ -2771,8 +2787,8 @@ app.get('/finance/data-edit', async (req, res) => {
     if (hasVal) {
       let detail: string;
       if (q.imported === 'loan_repayment') {
-        const modeLabel = q.mode === 'add' ? '（1件分を加算）' : '';
-        detail = `<br>今回の抽出: 年間返済元本 ${yen(q.x_repay)} ${modeLabel}<br><strong>現在の合計: 年間返済元本 ${yen(q.t_val)}</strong>（実際の返済予定表と合っているかご確認ください）`;
+        const lenderLabel = q.lender ? `「${escTiny(String(q.lender))}」` : 'この借入';
+        detail = `<br>${lenderLabel} を追加（年間返済元本 ${yen(q.x_repay)}）<br><strong>借入合計の年間返済元本: ${yen(q.t_val)}</strong>（下の借入明細をご確認ください）`;
       } else if (q.imported === 'account_breakdown') {
         detail = `<br><strong>借入残高（有利子負債）: ${yen(q.t_val)}</strong> を反映しました`;
       } else {
@@ -2782,11 +2798,12 @@ app.get('/finance/data-edit', async (req, res) => {
     } else {
       notice = `「${label}」を読み取りましたが、該当する数値が見つかりませんでした。別の書類か、写真の鮮明さをご確認ください`;
     }
-  } else if (q.resetloan) notice = '年間返済元本を空に戻しました。加算モードのまま、借入を1件ずつ入れ直せます（借入残高・利息は決算書の値のまま保持）。';
+  } else if (q.resetloan) notice = '借入明細を全て消去しました。借入を1件ずつ入れ直せます（借入残高・利息は決算書の値のまま保持）。';
+  else if (q.deletedloan) notice = '借入明細を1件削除し、年間返済元本の合計を再計算しました。';
   else if (q.err === 'ai') notice = '⚠ AI(Vertex)が未設定のため書類を読み取れません';
   else if (q.err === 'nofile') notice = '⚠ ファイルが選択されていません';
   else if (q.err) notice = '⚠ 取り込みに失敗しました。ファイルを確認してください';
-  res.send(renderFinanceDataEditHTML(snapshots, notice));
+  res.send(renderFinanceDataEditHTML(snapshots, notice, loanDetails));
 });
 
 app.post('/finance/data-edit', express.urlencoded({ extended: true }), async (req, res) => {
@@ -2837,23 +2854,31 @@ app.post('/finance/import-doc', upload.array('files', 30), async (req, res) => {
     const latest = snapshots[snapshots.length - 1];
 
     const parts = await buildDocParts(files);
-    const { fields } = await anthropicService.extractSupplementaryDoc(
+    const { fields, lender } = await anthropicService.extractSupplementaryDoc(
       parts, docType as 'loan_repayment' | 'fixed_asset' | 'account_breakdown',
     );
 
     // 各補助書類は「決算書で埋まらない項目」だけを反映する。
-    //  - 借入金返済計画表 → 年間返済元本のみ（借入残高/利息は決算書から取得済み。二重計上を防ぐ）
+    //  - 借入金返済計画表 → 借入明細(借入先ごと)を1件追加し、年間返済元本の合計を反映
     //  - 勘定科目内訳書   → 有利子負債（借入残高）の補完のみ
     //  - 固定資産台帳     → 減価償却費の補完のみ
-    // 返済計画表は常に加算（借入を1件ずつ足す運用に統一）。上書きモードは廃止。
-    const add = docType === 'loan_repayment';
-    const curRepay = Number(latest.annualDebtRepayment ?? 0);
     let merged: MonthlySnapshot;
     let mainVal: number | null | undefined;
+    let lenderUsed = '';
     if (docType === 'loan_repayment') {
-      const repay = fields.annualDebtRepayment;
-      merged = { ...latest, annualDebtRepayment: repay === undefined ? latest.annualDebtRepayment : (add ? curRepay + repay : repay) };
-      mainVal = merged.annualDebtRepayment;
+      // 借入を1件ずつ「借入明細」に追加。借入先は手入力を最優先、無ければAI自動判定。
+      lenderUsed = (String(req.body?.lender || '').trim() || lender || '借入先').slice(0, 60);
+      await repo.addLoanDetail(asTenantId(tid), {
+        lender: lenderUsed,
+        annualRepayment: fields.annualDebtRepayment ?? 0,
+        balance: fields.interestBearingDebt ?? null,
+        interest: fields.interestExpense ?? null,
+        note: null,
+      });
+      const details = await repo.listLoanDetails(asTenantId(tid));
+      const sumRepay = details.reduce((a, d) => a + (d.annualRepayment || 0), 0);
+      merged = { ...latest, annualDebtRepayment: sumRepay };
+      mainVal = sumRepay;
     } else if (docType === 'account_breakdown') {
       merged = { ...latest, ...(fields.interestBearingDebt === undefined ? {} : { interestBearingDebt: fields.interestBearingDebt }) };
       mainVal = merged.interestBearingDebt;
@@ -2863,10 +2888,11 @@ app.post('/finance/import-doc', upload.array('files', 30), async (req, res) => {
     }
     await repo.upsertMonthlyActual(asTenantId(tid), merged);
     clearCache();
-    logger.info(`補助書類取込(${docType}, ${add ? '加算' : '上書き'})`);
+    logger.info(`補助書類取込(${docType})${lenderUsed ? ` 借入先=${lenderUsed}` : ''}`);
     // 検算用に「今回抽出した値」と「反映後の合計」を通知に載せる
     const q = new URLSearchParams({
-      imported: docType, mode: add ? 'add' : 'replace',
+      imported: docType,
+      lender: lenderUsed,
       x_repay: String(fields.annualDebtRepayment ?? ''), t_val: String(mainVal ?? ''),
     });
     res.redirect(`/finance/data-edit?${q.toString()}`);
@@ -2876,11 +2902,12 @@ app.post('/finance/import-doc', upload.array('files', 30), async (req, res) => {
   }
 });
 
-// 借入データ(有利子負債・年間返済元本・支払利息)を0にリセット（1件ずつ加算をやり直す用）
+// 借入明細を全消去し、年間返済元本を空に戻す（1件ずつ取り込みをやり直す用）
 app.post('/finance/reset-loan', express.urlencoded({ extended: true }), async (req, res) => {
   try {
     const tid = getActiveTenantId(req);
     if (!tid) { res.redirect('/finance/data-edit'); return; }
+    await repo.clearLoanDetails(asTenantId(tid));
     const snapshots = await repo.getAllMonthlyActuals(asTenantId(tid));
     if (snapshots.length) {
       const latest = snapshots[snapshots.length - 1];
@@ -2888,9 +2915,33 @@ app.post('/finance/reset-loan', express.urlencoded({ extended: true }), async (r
       await repo.upsertMonthlyActual(asTenantId(tid), { ...latest, annualDebtRepayment: null });
       clearCache();
     }
-    res.redirect('/finance/data-edit?resetloan=1&mode=add');
+    res.redirect('/finance/data-edit?resetloan=1');
   } catch (e) {
     logger.error('借入リセットエラー', e);
+    res.redirect('/finance/data-edit');
+  }
+});
+
+// 借入明細を1件だけ削除し、年間返済元本の合計を再計算
+app.post('/finance/delete-loan', express.urlencoded({ extended: true }), async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.redirect('/finance/data-edit'); return; }
+    const id = String(req.body?.id || '');
+    if (id) await repo.deleteLoanDetail(asTenantId(tid), id);
+    const details = await repo.listLoanDetails(asTenantId(tid));
+    const sumRepay = details.reduce((a, d) => a + (d.annualRepayment || 0), 0);
+    const snapshots = await repo.getAllMonthlyActuals(asTenantId(tid));
+    if (snapshots.length) {
+      const latest = snapshots[snapshots.length - 1];
+      await repo.upsertMonthlyActual(asTenantId(tid), {
+        ...latest, annualDebtRepayment: details.length ? sumRepay : null,
+      });
+      clearCache();
+    }
+    res.redirect('/finance/data-edit?deletedloan=1');
+  } catch (e) {
+    logger.error('借入明細削除エラー', e);
     res.redirect('/finance/data-edit');
   }
 });
