@@ -1287,10 +1287,15 @@ app.get('/plan', async (req, res) => {
     const files = getUploadedFiles();
     // デモは仮想テナント(demo-tenant)なので決算月クエリを叩かない(無効UUIDで例外→500になる)
     let fiscalMonth = 3;
+    let profileHint: { industry?: string | null; employeeCount?: string | null } = {};
     if (!isDemo && planTid) {
       try { fiscalMonth = (await repo.getTenantFiscalMonth(asTenantId(planTid))) ?? 3; } catch { fiscalMonth = 3; }
+      try {
+        const prof = await repo.getTenantProfile(asTenantId(planTid));
+        profileHint = { industry: prof.industry, employeeCount: prof.employeeCount };
+      } catch { /* 会社情報が無ければヒント無し */ }
     }
-    res.send(renderPlanHTML(trend, files, fiscalMonth));
+    res.send(renderPlanHTML(trend, files, fiscalMonth, profileHint));
   } catch (error) {
     logger.error('事業計画ページエラー', error);
     res.status(500).send('ページの生成に失敗しました');

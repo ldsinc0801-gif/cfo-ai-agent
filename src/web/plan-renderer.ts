@@ -69,7 +69,12 @@ function calcActualKpi(months: MonthlySnapshot[], kpi: AnnualKpiTarget) {
 /**
  * 事業計画AIエージェントページのHTMLを生成する
  */
-export function renderPlanHTML(trend: TrendData, uploadedFiles: string[], fiscalYearEndMonth: number = 3): string {
+export function renderPlanHTML(
+  trend: TrendData,
+  uploadedFiles: string[],
+  fiscalYearEndMonth: number = 3,
+  profileHint: { industry?: string | null; employeeCount?: string | null } = {},
+): string {
   const targets = trend.targets;
   const kpi = loadAnnualKpi();
   const actual = calcActualKpi(trend.months, kpi);
@@ -99,8 +104,8 @@ export function renderPlanHTML(trend: TrendData, uploadedFiles: string[], fiscal
         fixed: m.sgaExpenses,
         variable: 0,
         employees: kpi.employeeCount || 1,
-        depreciation: 0,
-        debt: 0,
+        depreciation: m.depreciation ?? 0,
+        debt: m.interestBearingDebt ?? 0,
         totalAssets: m.totalAssets,
         netAssets: m.netAssets,
       }))
@@ -128,6 +133,8 @@ export function renderPlanHTML(trend: TrendData, uploadedFiles: string[], fiscal
 var FREEE_BASE_DATA = ${JSON.stringify(simBaseMonths)};
 var KPI_TARGET = ${JSON.stringify(simKpiTarget)};
 var LOCABEN = ${JSON.stringify(locabenData)};
+// 会社情報からのロカベン自動選択ヒント（業種・従業員数）
+var PROFILE_HINT = ${JSON.stringify({ industry: profileHint.industry || '', employeeCount: profileHint.employeeCount || '' })};
 </script>
 <style>${SHARED_CSS}${PLAN_CSS}</style>
 </head>
@@ -912,10 +919,10 @@ function switchSimMode(mode){
   } else {
     baseData = actualBaseData;
     if(FREEE_BASE_DATA && FREEE_BASE_DATA.length > 0){
-      document.getElementById('simDataSource').textContent = 'freee実績データ（直近12ヶ月）';
+      document.getElementById('simDataSource').textContent = '取込実績データ（直近' + FREEE_BASE_DATA.length + 'ヶ月）';
       document.getElementById('simDataSource').style.color = '#10b981';
     } else {
-      document.getElementById('simDataSource').textContent = 'デモデータ（freee未連携）';
+      document.getElementById('simDataSource').textContent = 'デモデータ（実績未取込）';
       document.getElementById('simDataSource').style.color = '#f59e0b';
     }
   }
@@ -1127,6 +1134,44 @@ function initLocaben(){
     opt.textContent = cat.major.replace(/^\d+_/,'');
     sel.appendChild(opt);
   });
+  autoSelectLocaben(); // 会社情報の業種・規模から初期選択（手動編集も可）
+}
+
+// 会社情報(業種・従業員数)からロカベンの業種・事業規模を自動選択する。
+// マッチしない場合は未選択のまま（ユーザーが手動で選べる）。
+function autoSelectLocaben(){
+  try {
+    if(typeof PROFILE_HINT === 'undefined' || !PROFILE_HINT) return;
+    var strip = function(s){ return String(s).replace(/^\d+_/,''); };
+    // --- 事業規模: 従業員数から推定（5人以下=小規模、それ以外=中規模）---
+    var empNum = parseInt(String(PROFILE_HINT.employeeCount||'').replace(/[^0-9]/g,''),10);
+    if(!isNaN(empNum)){
+      var scaleSel = document.getElementById('locaScale');
+      if(scaleSel) scaleSel.value = empNum <= 5 ? '小規模事業者' : '中規模事業者';
+    }
+    // --- 業種: 会社情報の業種テキストに最も具体的に一致する小分類を探す ---
+    var ind = String(PROFILE_HINT.industry||'').trim();
+    if(!ind || !LOCABEN.categories) return;
+    var best=null, bestLen=0, majorCat=null, majLen=0;
+    LOCABEN.categories.forEach(function(c){
+      var mlbl=strip(c.major);
+      if(mlbl.length>=2 && ind.indexOf(mlbl)>=0 && mlbl.length>majLen){ majorCat=c; majLen=mlbl.length; }
+      c.minors.forEach(function(m){
+        var lbl=strip(m);
+        if(lbl.length>=2 && ind.indexOf(lbl)>=0 && lbl.length>bestLen){ best={major:c.major,minor:m}; bestLen=lbl.length; }
+      });
+    });
+    if(best){
+      document.getElementById('locaMajor').value = best.major;
+      updateLocaMinor();
+      document.getElementById('locaMinor').value = best.minor;
+      updateLocaBenchmark();
+    } else if(majorCat){
+      // 小分類まで特定できない時は大分類だけ選択（小分類が1つなら自動確定）
+      document.getElementById('locaMajor').value = majorCat.major;
+      updateLocaMinor();
+    }
+  } catch(e){ /* 自動選択失敗時は手動選択に任せる */ }
 }
 
 function updateLocaMinor(){
