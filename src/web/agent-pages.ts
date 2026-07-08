@@ -1,5 +1,6 @@
 import { agentPageShell } from './shared.js';
 import type { ImportedMetrics } from '../domain/finance/imported-metrics.js';
+import type { CashflowForecast } from '../domain/finance/cashflow-forecast.js';
 
 /**
  * 取り込みデータから算出した銀行評価の主要指標カード。
@@ -227,11 +228,34 @@ export function renderAccountingAgentHTML(): string {
 /**
  * 資金調達AIエージェントページ
  */
-export function renderFundingAgentHTML(metrics?: ImportedMetrics | null): string {
+export function renderFundingAgentHTML(metrics?: ImportedMetrics | null, forecast?: CashflowForecast | null): string {
+  const fmtYen = (n: number) => (n < 0 ? '-' : '') + '¥' + new Intl.NumberFormat('ja-JP').format(Math.abs(Math.round(n)));
+  const forecastCard = !forecast ? '' : `
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3>資金繰り予測（簡易）</h3><span class="card-sub">現預金の月次推移から算出</span></div>
+      <div class="card-body">
+        ${!forecast.hasEnoughData
+          ? `<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:8px;padding:12px 14px;font-size:13px;line-height:1.6">月次推移データが不足しています。ダッシュボードで<strong>月次推移試算表</strong>を取り込むと、先6か月の資金繰りを予測できます。</div>`
+          : `
+          <div style="display:flex;gap:32px;flex-wrap:wrap;margin-bottom:14px">
+            <div><div style="font-size:12px;color:var(--text2)">現在の現預金</div><div style="font-size:22px;font-weight:800;font-variant-numeric:tabular-nums">${fmtYen(forecast.currentCash)}</div></div>
+            <div><div style="font-size:12px;color:var(--text2)">月次純増減（平均）</div><div style="font-size:22px;font-weight:800;font-variant-numeric:tabular-nums;color:${forecast.monthlyNetCF >= 0 ? '#16a34a' : '#dc2626'}">${forecast.monthlyNetCF >= 0 ? '+' : ''}${fmtYen(forecast.monthlyNetCF)}</div></div>
+          </div>
+          ${forecast.shortage
+            ? `<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:8px;padding:12px 14px;font-size:13px;line-height:1.6">⚠ <strong>${forecast.shortage.label}</strong> 頃に資金ショートの見込み（残高 ${fmtYen(forecast.shortage.balance)}）。早めの資金調達を検討してください。</div>`
+            : `<div style="background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:8px;padding:12px 14px;font-size:13px">✓ 6か月先まで資金ショートの見込みはありません。</div>`}
+          <table style="width:100%;margin-top:14px;font-size:13px;border-collapse:collapse">
+            <thead><tr><th style="text-align:left;padding:6px 4px;border-bottom:1px solid var(--border)">月</th><th style="text-align:right;padding:6px 4px;border-bottom:1px solid var(--border)">現預金残高（見込み）</th></tr></thead>
+            <tbody>${forecast.projection.map((p) => `<tr><td style="padding:6px 4px">${p.label}</td><td style="text-align:right;padding:6px 4px;font-variant-numeric:tabular-nums;${p.balance < 0 ? 'color:#dc2626;font-weight:700' : ''}">${fmtYen(p.balance)}</td></tr>`).join('')}</tbody>
+          </table>
+          <p style="font-size:11px;color:var(--text2);margin-top:8px">※ 直近の現預金増減ペースが続くと仮定した簡易予測です。返済計画・大口入出金の予定は反映されません。</p>`}
+      </div>
+    </div>`;
   return agentPageShell({
     active: 'funding',
     title: '資金調達AIエージェント',
     bodyHTML: `
+    ${forecastCard}
     <div class="welcome-banner" style="background:linear-gradient(135deg,#1b7f8e 0%,#8dd0da 100%)">
       <h2>資金調達AIエージェント</h2>
       <p>資金繰りの見通し、融資可能性の診断、金融機関向け資料の自動生成を行います。銀行目線での自社評価を可視化し、最適な資金調達戦略を提案します。</p>

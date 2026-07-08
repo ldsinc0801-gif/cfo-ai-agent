@@ -19,6 +19,7 @@ import { renderPlanHTML } from './plan-renderer.js';
 import { renderFinanceAgentHTML, renderAccountingAgentHTML, renderFundingAgentHTML } from './agent-pages.js';
 import { computeImportedMetrics } from '../domain/finance/imported-metrics.js';
 import { buildRatingInputFromSnapshots } from '../domain/finance/imported-rating.js';
+import { forecastCashflow } from '../domain/finance/cashflow-forecast.js';
 import { renderFinanceDataEditHTML } from './finance-data-edit-page.js';
 import type { MonthlySnapshot } from '../types/trend.js';
 import { renderAccountingPageHTML } from './accounting-page.js';
@@ -2633,16 +2634,18 @@ app.post('/agent/accounting/batch/:id/send-freee', express.urlencoded({ extended
 // 資金調達AIエージェント
 app.get('/agent/funding', async (req, res) => {
   let metrics = null;
+  let forecast = null;
   try {
     const tid = getActiveTenantId(req);
     if (tid) {
       const snapshots = await repo.getAllMonthlyActuals(asTenantId(tid));
       metrics = computeImportedMetrics(snapshots);
+      forecast = forecastCashflow(snapshots);
     }
   } catch (e) {
-    logger.error('資金調達: 取込指標の計算に失敗', e);
+    logger.error('資金調達: 取込指標/資金繰り予測の計算に失敗', e);
   }
-  res.send(renderFundingAgentHTML(metrics));
+  res.send(renderFundingAgentHTML(metrics, forecast));
 });
 
 // 財務データの確認・修正（取込値の手修正 + 年間返済元本の手入力）
