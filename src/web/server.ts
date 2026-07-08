@@ -19,6 +19,7 @@ import { renderPlanHTML } from './plan-renderer.js';
 import { renderFinanceAgentHTML, renderAccountingAgentHTML, renderFundingAgentHTML } from './agent-pages.js';
 import { computeImportedMetrics } from '../domain/finance/imported-metrics.js';
 import { buildRatingInputFromSnapshots } from '../domain/finance/imported-rating.js';
+import { applySimParamsToSnapshots } from '../domain/finance/plan-simulation.js';
 import { forecastCashflow } from '../domain/finance/cashflow-forecast.js';
 import { renderFinanceDataEditHTML } from './finance-data-edit-page.js';
 import type { MonthlySnapshot } from '../types/trend.js';
@@ -1321,6 +1322,66 @@ app.post('/api/plan/locaben', express.json(), async (req, res) => {
     });
     res.json({ success: true });
   } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 経営シミュレーターの銀行格付を、財務分析AIと同じ13指標モデルで再計算する。
+// スライダー値を受け取り、最新スナップショットに調整を反映して calculateBankRating を回す。
+app.post('/api/plan/rating', express.json(), async (req, res) => {
+  if (!req.session.user) { res.status(401).json({ error: 'ログインが必要です' }); return; }
+  try {
+    const isDemo = req.session.user?.id === 'demo-user';
+    let snapshots: MonthlySnapshot[] = [];
+    if (isDemo) {
+      const demo = demoForReq(req);
+      snapshots = (demo?.trendMonths || []).slice();
+      if (snapshots.length && demo?.ratingInput) {
+        const ri = demo.ratingInput;
+        snapshots[snapshots.length - 1] = {
+          ...snapshots[snapshots.length - 1],
+          interestBearingDebt: ri.interestBearingDebt, depreciation: ri.depreciation,
+          netIncome: ri.netIncome, interestExpense: ri.interestExpense,
+        };
+      }
+    } else {
+      const tid = getActiveTenantId(req);
+      if (tid) snapshots = await repo.getAllMonthlyActuals(asTenantId(tid));
+    }
+    if (!snapshots.length) { res.json({ available: false }); return; }
+
+    const b = req.body || {};
+    const params = {
+      revenueGrowth: Number(b.revenueGrowth) || 0,
+      cogsRatio: Number(b.cogsRatio) || 0,
+      fixedCostChange: Number(b.fixedCostChange) || 0,
+      employeeChange: Number(b.employeeChange) || 0,
+      investment: Number(b.investment) || 0,
+      repayment: Number(b.repayment) || 0,
+    };
+    const modified = applySimParamsToSnapshots(snapshots, params);
+    const input = buildRatingInputFromSnapshots(modified);
+    if (!input) { res.json({ available: false }); return; }
+    const rating = calculateBankRating(input);
+    res.json({
+      available: true,
+      totalScore: rating.totalScore,
+      maxScore: rating.maxScore,
+      rank: rating.rank,
+      rankLabel: rating.rankLabel,
+      categories: {
+        stability: { score: rating.stabilityScore, max: rating.stabilityMax },
+        profitability: { score: rating.profitabilityScore, max: rating.profitabilityMax },
+        growth: { score: rating.growthScore, max: rating.growthMax },
+        repayment: { score: rating.repaymentScore, max: rating.repaymentMax },
+      },
+      metrics: rating.metrics.map((m) => ({
+        name: m.name, category: m.category, value: m.value, unit: m.unit,
+        score: m.score, max: m.maxScore, level: m.level,
+      })),
+    });
+  } catch (e: any) {
+    logger.error('シミュレーター格付の再計算エラー', e);
     res.status(500).json({ error: e.message });
   }
 });

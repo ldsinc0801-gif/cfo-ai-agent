@@ -657,7 +657,7 @@ ${(kpi.customKpis || []).filter(ck => ck.scope === 'monthly').map(ck =>
         </div>
         <div class="card-body">
           <div id="bankRatingResult">
-            <p style="color:var(--text2);font-size:13px">シミュレーション結果から銀行格付を簡易算出します。スライダーを調整すると自動更新されます。</p>
+            <p style="color:var(--text2);font-size:13px">財務分析AIと同じ13指標モデルで銀行格付を算出します（現状は財務分析AIと一致）。スライダーを調整すると自動で再計算されます。</p>
           </div>
         </div>
       </div>
@@ -1318,136 +1318,70 @@ function updateLocaBenchmark(){
 }
 
 // --- 銀行格付シミュレーション（129点満点ベース）---
+// 銀行格付は財務分析AIと同じ13指標モデル(サーバー計算)に一本化。
+// スライダー操作をデバウンスしてサーバーへ送り、返ってきた結果を描画する。
+var _bankRatingTimer = null;
 function updateBankRating(){
-  var sv = getSimAnnualValues();
   var container = document.getElementById('bankRatingResult');
   if(!container) return;
+  if(_bankRatingTimer) clearTimeout(_bankRatingTimer);
+  _bankRatingTimer = setTimeout(fetchBankRating, 300);
+}
 
-  // freee実績からBS情報を取得（あれば）
-  var lastB = baseData[baseData.length-1] || {};
-  var totalAssets = lastB.totalAssets || 0;
-  var netAssets = lastB.netAssets || 0;
-  var debt = lastB.debt || 0;
-  var totalRev = 0, totalProfit = 0;
-  for(var i=0;i<baseData.length;i++){
-    var b=baseData[i];
-    var rev=Math.round((b.revenue||0)*(1+simParams.revenueGrowth/100));
-    var cogs=Math.round(rev*simParams.cogsRatio/100);
-    var fixed=Math.round((b.fixed||0)*(1+simParams.fixedCostChange/100));
-    var varR=(b.revenue>0&&b.variable>0)?b.variable/b.revenue:0;
-    var varC=Math.round(rev*varR);
-    var depr=(b.depreciation||0)+Math.round(simParams.investment*10000/60);
-    totalRev+=rev; totalProfit+=(rev-cogs-fixed-varC-depr);
+function fetchBankRating(){
+  var container = document.getElementById('bankRatingResult');
+  if(!container) return;
+  var body = {
+    revenueGrowth: simParams.revenueGrowth,
+    cogsRatio: simParams.cogsRatio,
+    fixedCostChange: simParams.fixedCostChange,
+    employeeChange: simParams.employeeChange,
+    investment: simParams.investment,
+    repayment: simParams.repayment,
+  };
+  fetch('/api/plan/rating', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','X-CSRF-Token':PLAN_CSRF},
+    body: JSON.stringify(body),
+  }).then(function(r){return r.json();}).then(renderBankRating).catch(function(){
+    container.innerHTML = '<p style="color:#9ca3af">格付の再計算に失敗しました。再度お試しください。</p>';
+  });
+}
+
+function renderBankRating(d){
+  var container = document.getElementById('bankRatingResult');
+  if(!container) return;
+  if(!d || !d.available){
+    container.innerHTML = '<p style="color:#9ca3af">決算書・試算表を取り込むと、財務分析AIと同じ基準で銀行格付を再計算します。</p>';
+    return;
   }
-  var cf = totalProfit + baseData.reduce(function(s,d){return s+(d.depreciation||0)},0);
-
-  // 13指標のうちシミュレーションで算出可能なものを評価
-  var metrics = [];
-
-  // 1. 自己資本比率（/10点）
-  var eqR = totalAssets>0 ? netAssets/totalAssets*100 : 0;
-  if(eqR>=60) metrics.push({name:'自己資本比率',val:eqR.toFixed(1)+'%',score:10,max:10,lv:'excellent'});
-  else if(eqR>=40) metrics.push({name:'自己資本比率',val:eqR.toFixed(1)+'%',score:8,max:10,lv:'good'});
-  else if(eqR>=20) metrics.push({name:'自己資本比率',val:eqR.toFixed(1)+'%',score:6,max:10,lv:'fair'});
-  else if(eqR>=10) metrics.push({name:'自己資本比率',val:eqR.toFixed(1)+'%',score:3,max:10,lv:'warning'});
-  else metrics.push({name:'自己資本比率',val:eqR.toFixed(1)+'%',score:1,max:10,lv:'danger'});
-
-  // 2. ギアリング比率（/10点）
-  var gear = netAssets>0 ? debt/netAssets*100 : 999;
-  if(gear<=30) metrics.push({name:'ギアリング比率',val:gear.toFixed(0)+'%',score:10,max:10,lv:'excellent'});
-  else if(gear<=50) metrics.push({name:'ギアリング比率',val:gear.toFixed(0)+'%',score:8,max:10,lv:'good'});
-  else if(gear<=100) metrics.push({name:'ギアリング比率',val:gear.toFixed(0)+'%',score:6,max:10,lv:'fair'});
-  else if(gear<=250) metrics.push({name:'ギアリング比率',val:gear.toFixed(0)+'%',score:3,max:10,lv:'warning'});
-  else metrics.push({name:'ギアリング比率',val:gear.toFixed(0)+'%',score:1,max:10,lv:'danger'});
-
-  // 3. 売上高経常利益率（/7点）→営業利益率で代用
-  var pm = sv.operatingMargin;
-  if(pm>=10) metrics.push({name:'売上高利益率',val:pm.toFixed(1)+'%',score:7,max:7,lv:'excellent'});
-  else if(pm>=5) metrics.push({name:'売上高利益率',val:pm.toFixed(1)+'%',score:5,max:7,lv:'good'});
-  else if(pm>=2) metrics.push({name:'売上高利益率',val:pm.toFixed(1)+'%',score:3,max:7,lv:'fair'});
-  else if(pm>=0) metrics.push({name:'売上高利益率',val:pm.toFixed(1)+'%',score:1,max:7,lv:'warning'});
-  else metrics.push({name:'売上高利益率',val:pm.toFixed(1)+'%',score:0,max:7,lv:'danger'});
-
-  // 4. ROA（/7点）
-  var roa = totalAssets>0 ? totalProfit/totalAssets*100 : 0;
-  if(roa>=10) metrics.push({name:'ROA',val:roa.toFixed(1)+'%',score:7,max:7,lv:'excellent'});
-  else if(roa>=5) metrics.push({name:'ROA',val:roa.toFixed(1)+'%',score:5,max:7,lv:'good'});
-  else if(roa>=2) metrics.push({name:'ROA',val:roa.toFixed(1)+'%',score:3,max:7,lv:'fair'});
-  else if(roa>=0) metrics.push({name:'ROA',val:roa.toFixed(1)+'%',score:1,max:7,lv:'warning'});
-  else metrics.push({name:'ROA',val:roa.toFixed(1)+'%',score:0,max:7,lv:'danger'});
-
-  // 5. 自己資本額（/15点）
-  if(netAssets>=500000000) metrics.push({name:'自己資本額',val:fMan(netAssets),score:15,max:15,lv:'excellent'});
-  else if(netAssets>=100000000) metrics.push({name:'自己資本額',val:fMan(netAssets),score:12,max:15,lv:'good'});
-  else if(netAssets>=30000000) metrics.push({name:'自己資本額',val:fMan(netAssets),score:9,max:15,lv:'good'});
-  else if(netAssets>=10000000) metrics.push({name:'自己資本額',val:fMan(netAssets),score:6,max:15,lv:'fair'});
-  else if(netAssets>0) metrics.push({name:'自己資本額',val:fMan(netAssets),score:3,max:15,lv:'warning'});
-  else metrics.push({name:'自己資本額',val:fMan(netAssets),score:0,max:15,lv:'danger'});
-
-  // 6. 売上高（/8点）
-  if(totalRev>=1000000000) metrics.push({name:'売上高',val:fMan(totalRev),score:8,max:8,lv:'excellent'});
-  else if(totalRev>=500000000) metrics.push({name:'売上高',val:fMan(totalRev),score:7,max:8,lv:'good'});
-  else if(totalRev>=100000000) metrics.push({name:'売上高',val:fMan(totalRev),score:5,max:8,lv:'good'});
-  else if(totalRev>=50000000) metrics.push({name:'売上高',val:fMan(totalRev),score:3,max:8,lv:'fair'});
-  else metrics.push({name:'売上高',val:fMan(totalRev),score:1,max:8,lv:'warning'});
-
-  // 7. 債務償還年数（/10点）
-  var debtYrs = cf>0 ? debt/cf : null;
-  if(debtYrs===null) metrics.push({name:'債務償還年数',val:'算出不可',score:0,max:10,lv:'danger'});
-  else if(debtYrs<=3) metrics.push({name:'債務償還年数',val:debtYrs.toFixed(1)+'年',score:10,max:10,lv:'excellent'});
-  else if(debtYrs<=5) metrics.push({name:'債務償還年数',val:debtYrs.toFixed(1)+'年',score:8,max:10,lv:'good'});
-  else if(debtYrs<=10) metrics.push({name:'債務償還年数',val:debtYrs.toFixed(1)+'年',score:5,max:10,lv:'fair'});
-  else if(debtYrs<=20) metrics.push({name:'債務償還年数',val:debtYrs.toFixed(1)+'年',score:2,max:10,lv:'warning'});
-  else metrics.push({name:'債務償還年数',val:debtYrs.toFixed(1)+'年',score:0,max:10,lv:'danger'});
-
-  // 8. CF額（/20点）
-  if(cf>=50000000) metrics.push({name:'キャッシュフロー額',val:fMan(cf),score:20,max:20,lv:'excellent'});
-  else if(cf>=20000000) metrics.push({name:'キャッシュフロー額',val:fMan(cf),score:16,max:20,lv:'good'});
-  else if(cf>=10000000) metrics.push({name:'キャッシュフロー額',val:fMan(cf),score:12,max:20,lv:'good'});
-  else if(cf>=5000000) metrics.push({name:'キャッシュフロー額',val:fMan(cf),score:8,max:20,lv:'fair'});
-  else if(cf>0) metrics.push({name:'キャッシュフロー額',val:fMan(cf),score:4,max:20,lv:'warning'});
-  else metrics.push({name:'キャッシュフロー額',val:fMan(cf),score:0,max:20,lv:'danger'});
-
-  // スコア集計
-  var totalScore = metrics.reduce(function(s,m){return s+m.score},0);
-  var maxScore = metrics.reduce(function(s,m){return s+m.max},0);
-  var fullMax = 129;
-
-  // 算出可能な指標からの推定（全129点に換算）
-  var estimatedTotal = maxScore>0 ? Math.round(totalScore / maxScore * fullMax) : 0;
-
-  var rank, rankLabel, rankColor;
-  if(estimatedTotal>=100){rank='A';rankLabel='優良（正常先）';rankColor='#10b981';}
-  else if(estimatedTotal>=80){rank='B';rankLabel='良好（正常先）';rankColor='#3b82f6';}
-  else if(estimatedTotal>=60){rank='C';rankLabel='普通（要注意先予備）';rankColor='#f59e0b';}
-  else if(estimatedTotal>=40){rank='D';rankLabel='要注意（要管理先）';rankColor='#f97316';}
-  else{rank='E';rankLabel='危険（破綻懸念先）';rankColor='#ef4444';}
-
+  var rankColors = {A:'#10b981',B:'#3b82f6',C:'#f59e0b',D:'#f97316',E:'#ef4444'};
   var levelColors = {excellent:'#10b981',good:'#3b82f6',fair:'#f59e0b',warning:'#f97316',danger:'#ef4444'};
+  var rankColor = rankColors[d.rank] || '#6b7280';
 
   var html = '<div class="bank-rating-header">';
-  html += '<div class="bank-rank-circle" style="border-color:'+rankColor+';color:'+rankColor+'">'+rank+'</div>';
-  html += '<div class="bank-rank-info"><div class="bank-rank-label" style="color:'+rankColor+'">'+rankLabel+'</div>';
-  html += '<div class="bank-rank-score">推定スコア: '+estimatedTotal+' / '+fullMax+'点</div>';
-  html += '<div class="bank-rank-note">※シミュレーション値からの簡易算出（'+metrics.length+'/13指標）</div></div></div>';
+  html += '<div class="bank-rank-circle" style="border-color:'+rankColor+';color:'+rankColor+'">'+d.rank+'</div>';
+  html += '<div class="bank-rank-info"><div class="bank-rank-label" style="color:'+rankColor+'">'+d.rankLabel+'</div>';
+  html += '<div class="bank-rank-score">スコア: '+d.totalScore+' / '+d.maxScore+'点</div>';
+  html += '<div class="bank-rank-note">財務分析AIと同じ13指標モデルで算出（スライダー反映）</div></div></div>';
 
-  // カテゴリ別
-  var cats = [
-    {label:'安全性',items:metrics.filter(function(m){return m.name==='自己資本比率'||m.name==='ギアリング比率'})},
-    {label:'収益性',items:metrics.filter(function(m){return m.name==='売上高利益率'||m.name==='ROA'})},
-    {label:'規模・成長性',items:metrics.filter(function(m){return m.name==='自己資本額'||m.name==='売上高'})},
-    {label:'返済能力',items:metrics.filter(function(m){return m.name==='債務償還年数'||m.name==='キャッシュフロー額'})},
-  ];
-
+  var catMap = {stability:'安全性',profitability:'収益性',growth:'規模・成長性',repayment:'返済能力'};
+  var order = ['stability','profitability','growth','repayment'];
   html += '<div class="bank-metrics-grid">';
-  cats.forEach(function(cat){
-    html += '<div class="bank-cat"><div class="bank-cat-label">'+cat.label+'</div>';
-    cat.items.forEach(function(m){
-      var c = levelColors[m.lv];
+  order.forEach(function(key){
+    var items = (d.metrics||[]).filter(function(m){return m.category===key;});
+    if(!items.length) return;
+    html += '<div class="bank-cat"><div class="bank-cat-label">'+catMap[key]+'</div>';
+    items.forEach(function(m){
+      var c = levelColors[m.level] || '#6b7280';
       var pct = m.max>0 ? Math.round(m.score/m.max*100) : 0;
+      var valStr;
+      if(m.value===null||m.value===undefined) valStr='—';
+      else if(m.unit==='円') valStr=fMan(m.value);
+      else valStr=(Math.round(m.value*10)/10)+(m.unit||'');
       html += '<div class="bank-metric-row">';
       html += '<span class="bank-metric-name">'+m.name+'</span>';
-      html += '<span class="bank-metric-val">'+m.val+'</span>';
+      html += '<span class="bank-metric-val">'+valStr+'</span>';
       html += '<div class="bank-metric-bar"><div class="bank-metric-fill" style="width:'+pct+'%;background:'+c+'"></div></div>';
       html += '<span class="bank-metric-score" style="color:'+c+'">'+m.score+'/'+m.max+'</span>';
       html += '</div>';
@@ -1455,7 +1389,6 @@ function updateBankRating(){
     html += '</div>';
   });
   html += '</div>';
-
   container.innerHTML = html;
 }
 
