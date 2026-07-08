@@ -14,29 +14,33 @@ import type { TenantId } from '../types/auth.js';
 // ========== 月次実績 ==========
 
 export async function upsertMonthlyActual(tenantId: TenantId, data: MonthlySnapshot): Promise<void> {
+  const row: Record<string, unknown> = {
+    tenant_id: tenantId,
+    year: data.year,
+    month: data.month,
+    revenue: data.revenue,
+    cost_of_sales: data.costOfSales,
+    gross_profit: data.grossProfit,
+    sga_expenses: data.sgaExpenses,
+    operating_income: data.operatingIncome,
+    ordinary_income: data.ordinaryIncome,
+    cash_and_deposits: data.cashAndDeposits,
+    current_assets: data.currentAssets,
+    current_liabilities: data.currentLiabilities,
+    total_assets: data.totalAssets,
+    net_assets: data.netAssets,
+    interest_bearing_debt: data.interestBearingDebt ?? 0,
+    net_income: data.netIncome ?? 0,
+    depreciation: data.depreciation ?? 0,
+    interest_expense: data.interestExpense ?? 0,
+  };
+  // 年間返済元本は「明示的に指定された時だけ」書き込む。未指定(決算書の再取込等)は
+  // 既存値を保持し、返済計画表で入れた手入力値が消えないようにする。
+  if (data.annualDebtRepayment !== undefined) row.annual_debt_repayment = data.annualDebtRepayment;
+
   const { error } = await getSupabase()
     .from('monthly_actuals')
-    .upsert({
-      tenant_id: tenantId,
-      year: data.year,
-      month: data.month,
-      revenue: data.revenue,
-      cost_of_sales: data.costOfSales,
-      gross_profit: data.grossProfit,
-      sga_expenses: data.sgaExpenses,
-      operating_income: data.operatingIncome,
-      ordinary_income: data.ordinaryIncome,
-      cash_and_deposits: data.cashAndDeposits,
-      current_assets: data.currentAssets,
-      current_liabilities: data.currentLiabilities,
-      total_assets: data.totalAssets,
-      net_assets: data.netAssets,
-      interest_bearing_debt: data.interestBearingDebt ?? 0,
-      net_income: data.netIncome ?? 0,
-      depreciation: data.depreciation ?? 0,
-      interest_expense: data.interestExpense ?? 0,
-      annual_debt_repayment: data.annualDebtRepayment ?? null,
-    }, { onConflict: 'tenant_id,year,month' });
+    .upsert(row, { onConflict: 'tenant_id,year,month' });
 
   if (error) throw new Error(`月次実績の保存に失敗: ${error.message}`);
   logger.info(`月次実績を保存: ${data.year}年${data.month}月`);
