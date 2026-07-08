@@ -295,7 +295,37 @@ export function renderFundingAgentHTML(
       <p>資金繰りの見通し、融資可能性の診断、金融機関向け資料の自動生成を行います。銀行目線での自社評価を可視化し、最適な資金調達戦略を提案します。</p>
     </div>
 
-    <div class="feature-grid">
+    <div class="grid-2">
+      ${metrics ? renderBankMetricsCard(metrics) : `
+      <div class="card">
+        <div class="card-header"><h3>現在の銀行評価</h3></div>
+        <div class="card-body">
+          <div class="status-card" style="border:none;padding:16px">
+            <div class="status-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg></div>
+            <div class="status-title">取り込みデータがありません</div>
+            <div class="status-desc">ダッシュボードで決算書・試算表を取り込むと、自己資本比率・流動比率・現預金月商倍率などの主要指標をここに表示します。</div>
+            <a href="/" class="btn-primary" style="margin-top:16px">ダッシュボードで取り込む</a>
+          </div>
+        </div>
+      </div>`}
+      <div class="card">
+        <div class="card-header"><h3>資金調達ステータス</h3></div>
+        <div class="card-body">
+          <table>
+            <thead><tr><th>項目</th><th>ステータス</th></tr></thead>
+            <tbody>
+              <tr><td>現預金月商倍率</td><td>${metrics && metrics.cashMonthsRatio !== null ? metrics.cashMonthsRatio.toFixed(1) + 'か月' : '未取込'}</td></tr>
+              <tr><td>自己資本比率</td><td>${metrics && metrics.equityRatio !== null ? metrics.equityRatio.toFixed(1) + '%' : '未取込'}</td></tr>
+              <tr><td>直近の資金調達</td><td>未登録</td></tr>
+              <tr><td>返済予定</td><td>未登録</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:24px;font-size:13px;color:var(--text2);font-weight:700">この先の対応予定</div>
+    <div class="feature-grid" style="margin-top:8px">
       <div class="feature-card">
         <div class="feature-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
         <div class="feature-text">
@@ -342,35 +372,6 @@ export function renderFundingAgentHTML(
           <h4>資金アラート</h4>
           <p>現預金が一定水準を下回った際のアラート、大口入出金の予定通知を行います。</p>
           <span class="pill pill--sm pill--coming">開発予定</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="grid-2">
-      ${metrics ? renderBankMetricsCard(metrics) : `
-      <div class="card">
-        <div class="card-header"><h3>現在の銀行評価</h3></div>
-        <div class="card-body">
-          <div class="status-card" style="border:none;padding:16px">
-            <div class="status-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg></div>
-            <div class="status-title">取り込みデータがありません</div>
-            <div class="status-desc">ダッシュボードで決算書・試算表を取り込むと、自己資本比率・流動比率・現預金月商倍率などの主要指標をここに表示します。</div>
-            <a href="/" class="btn-primary" style="margin-top:16px">ダッシュボードで取り込む</a>
-          </div>
-        </div>
-      </div>`}
-      <div class="card">
-        <div class="card-header"><h3>資金調達ステータス</h3></div>
-        <div class="card-body">
-          <table>
-            <thead><tr><th>項目</th><th>ステータス</th></tr></thead>
-            <tbody>
-              <tr><td>現預金月商倍率</td><td>${metrics && metrics.cashMonthsRatio !== null ? metrics.cashMonthsRatio.toFixed(1) + 'か月' : '未取込'}</td></tr>
-              <tr><td>自己資本比率</td><td>${metrics && metrics.equityRatio !== null ? metrics.equityRatio.toFixed(1) + '%' : '未取込'}</td></tr>
-              <tr><td>直近の資金調達</td><td>未登録</td></tr>
-              <tr><td>返済予定</td><td>未登録</td></tr>
-            </tbody>
-          </table>
         </div>
       </div>
     </div>`,

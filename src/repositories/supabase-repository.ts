@@ -395,6 +395,10 @@ export interface TenantProfile {
   industry: string | null;
   employeeCount: string | null;
   notes: string | null;
+  // ロカベン6指標で選択した業種・規模（保存して次回復元）。会社情報フォームでは扱わないため任意。
+  locabenMajor?: string | null;
+  locabenMinor?: string | null;
+  locabenScale?: string | null;
 }
 
 const EMPTY_PROFILE: TenantProfile = {
@@ -403,6 +407,7 @@ const EMPTY_PROFILE: TenantProfile = {
   invoiceRegistered: false, invoiceNumber: null, invoiceRegisteredDate: null,
   capital: null, industry: null,
   employeeCount: null, notes: null,
+  locabenMajor: null, locabenMinor: null, locabenScale: null,
 };
 
 /** テナントの会社情報を取得（未登録なら全項目 null のオブジェクト） */
@@ -431,7 +436,27 @@ export async function getTenantProfile(tenantId: TenantId): Promise<TenantProfil
     industry: data.industry,
     employeeCount: data.employee_count,
     notes: data.notes,
+    locabenMajor: data.locaben_major ?? null,
+    locabenMinor: data.locaben_minor ?? null,
+    locabenScale: data.locaben_scale ?? null,
   };
+}
+
+/** ロカベン6指標で選んだ業種・規模だけを保存（他の会社情報は変更しない）。 */
+export async function updateLocabenSelection(
+  tenantId: TenantId,
+  sel: { major: string | null; minor: string | null; scale: string | null },
+): Promise<void> {
+  const { error } = await getSupabase()
+    .from('tenant_profile')
+    .upsert({
+      tenant_id: tenantId,
+      locaben_major: sel.major,
+      locaben_minor: sel.minor,
+      locaben_scale: sel.scale,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'tenant_id' });
+  if (error) throw new Error(`ロカベン選択の保存に失敗: ${error.message}`);
 }
 
 export async function upsertTenantProfile(tenantId: TenantId, p: TenantProfile): Promise<void> {

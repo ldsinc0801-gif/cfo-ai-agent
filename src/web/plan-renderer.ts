@@ -73,7 +73,11 @@ export function renderPlanHTML(
   trend: TrendData,
   uploadedFiles: string[],
   fiscalYearEndMonth: number = 3,
-  profileHint: { industry?: string | null; employeeCount?: string | null } = {},
+  profileHint: {
+    industry?: string | null; employeeCount?: string | null;
+    locabenMajor?: string | null; locabenMinor?: string | null; locabenScale?: string | null;
+  } = {},
+  csrfToken: string = '',
 ): string {
   const targets = trend.targets;
   const kpi = loadAnnualKpi();
@@ -135,6 +139,10 @@ var KPI_TARGET = ${JSON.stringify(simKpiTarget)};
 var LOCABEN = ${JSON.stringify(locabenData)};
 // 会社情報からのロカベン自動選択ヒント（業種・従業員数）
 var PROFILE_HINT = ${JSON.stringify({ industry: profileHint.industry || '', employeeCount: profileHint.employeeCount || '' })};
+// 前回保存したロカベン選択（あればこれを最優先で復元）
+var SAVED_LOCABEN = ${JSON.stringify({ major: profileHint.locabenMajor || '', minor: profileHint.locabenMinor || '', scale: profileHint.locabenScale || '' })};
+var PLAN_CSRF = ${JSON.stringify(csrfToken)};
+var locabenReady = false;
 </script>
 <style>${SHARED_CSS}${PLAN_CSS}</style>
 </head>
@@ -1134,7 +1142,43 @@ function initLocaben(){
     opt.textContent = cat.major.replace(/^\d+_/,'');
     sel.appendChild(opt);
   });
-  autoSelectLocaben(); // 会社情報の業種・規模から初期選択（手動編集も可）
+  // 前回保存した選択があれば復元、無ければ会社情報から自動選択（どちらも手動編集可）
+  if(SAVED_LOCABEN && SAVED_LOCABEN.major){
+    applySavedLocaben();
+  } else {
+    autoSelectLocaben();
+  }
+  locabenReady = true; // これ以降のユーザー操作で保存する
+}
+
+// 前回保存した業種・規模を復元
+function applySavedLocaben(){
+  try {
+    if(SAVED_LOCABEN.scale){ var ss=document.getElementById('locaScale'); if(ss) ss.value=SAVED_LOCABEN.scale; }
+    if(SAVED_LOCABEN.major){
+      document.getElementById('locaMajor').value = SAVED_LOCABEN.major;
+      updateLocaMinor();
+      if(SAVED_LOCABEN.minor){ document.getElementById('locaMinor').value = SAVED_LOCABEN.minor; }
+      updateLocaBenchmark();
+    }
+  } catch(e){ /* 復元失敗時は手動選択に任せる */ }
+}
+
+// 選択した業種・規模をサーバーに保存（次回復元用）
+function saveLocaben(){
+  if(!locabenReady) return; // 初期化中の自動選択では保存しない
+  try {
+    var body = {
+      major: document.getElementById('locaMajor').value,
+      minor: document.getElementById('locaMinor').value,
+      scale: document.getElementById('locaScale').value,
+    };
+    fetch('/api/plan/locaben', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-CSRF-Token':PLAN_CSRF},
+      body: JSON.stringify(body),
+    }).catch(function(){});
+  } catch(e){}
 }
 
 // 会社情報(業種・従業員数)からロカベンの業種・事業規模を自動選択する。
@@ -1192,12 +1236,14 @@ function updateLocaMinor(){
     sel.value = cat.minors[0];
     updateLocaBenchmark();
   }
+  saveLocaben();
 }
 
 function updateLocaBenchmark(){
   var minor = document.getElementById('locaMinor').value;
   var scale = document.getElementById('locaScale').value;
   var container = document.getElementById('locabenResult');
+  saveLocaben(); // 業種・規模の変更を保存（次回復元）
   if(!minor || !scale){ container.innerHTML=''; return; }
 
   var bkey = minor + '_' + scale;

@@ -1287,18 +1287,41 @@ app.get('/plan', async (req, res) => {
     const files = getUploadedFiles();
     // デモは仮想テナント(demo-tenant)なので決算月クエリを叩かない(無効UUIDで例外→500になる)
     let fiscalMonth = 3;
-    let profileHint: { industry?: string | null; employeeCount?: string | null } = {};
+    let profileHint: {
+      industry?: string | null; employeeCount?: string | null;
+      locabenMajor?: string | null; locabenMinor?: string | null; locabenScale?: string | null;
+    } = {};
     if (!isDemo && planTid) {
       try { fiscalMonth = (await repo.getTenantFiscalMonth(asTenantId(planTid))) ?? 3; } catch { fiscalMonth = 3; }
       try {
         const prof = await repo.getTenantProfile(asTenantId(planTid));
-        profileHint = { industry: prof.industry, employeeCount: prof.employeeCount };
+        profileHint = {
+          industry: prof.industry, employeeCount: prof.employeeCount,
+          locabenMajor: prof.locabenMajor, locabenMinor: prof.locabenMinor, locabenScale: prof.locabenScale,
+        };
       } catch { /* 会社情報が無ければヒント無し */ }
     }
-    res.send(renderPlanHTML(trend, files, fiscalMonth, profileHint));
+    res.send(renderPlanHTML(trend, files, fiscalMonth, profileHint, req.session.csrfToken || ''));
   } catch (error) {
     logger.error('事業計画ページエラー', error);
     res.status(500).send('ページの生成に失敗しました');
+  }
+});
+
+// ロカベン6指標で選んだ業種・規模を保存（次回復元用）
+app.post('/api/plan/locaben', express.json(), async (req, res) => {
+  if (!req.session.user) { res.status(401).json({ error: 'ログインが必要です' }); return; }
+  const t = getActiveTenantId(req);
+  if (!t) { res.status(400).json({ error: 'テナントが選択されていません' }); return; }
+  try {
+    await repo.updateLocabenSelection(t, {
+      major: String(req.body?.major || '') || null,
+      minor: String(req.body?.minor || '') || null,
+      scale: String(req.body?.scale || '') || null,
+    });
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
   }
 });
 
