@@ -2663,6 +2663,60 @@ app.post('/agent/accounting/batch/:id/send-freee', express.urlencoded({ extended
 });
 
 // 資金調達AIエージェント
+// 深掘り質問の文脈（業種＋主要指標）をデモ/実データから取得
+async function getDeepDiveContext(req: express.Request): Promise<{ industry: string; context: string }> {
+  const demo = getDemoProfile();
+  if (demo) {
+    return {
+      industry: (demo as any).industry || '',
+      context: `売上 約${Math.round(((demo as any).revenue || 0) / 10000)}万円、銀行格付 ${demo.rating?.rank || '-'}（${demo.rating?.totalScore || '-'}/${demo.rating?.maxScore || 129}点）`,
+    };
+  }
+  const tid = getActiveTenantId(req);
+  let industry = '';
+  let context = '財務データが不足しています';
+  if (tid) {
+    try {
+      const profile = await repo.getTenantProfile(asTenantId(tid));
+      industry = profile.industry || '';
+      const m = computeImportedMetrics(await repo.getAllMonthlyActuals(asTenantId(tid)));
+      if (m) {
+        context = `自己資本比率 ${m.equityRatio ?? '-'}% / 経常利益率 ${m.ordinaryMargin ?? '-'}% / 現預金月商倍率 ${m.cashMonthsRatio ?? '-'}か月 / 債務償還年数 ${m.debtRepaymentYears ?? '-'}年 / 借入依存度 ${m.interestDependency ?? '-'}%`;
+      }
+    } catch (e) {
+      logger.warn('深掘りコンテキスト取得失敗:', e);
+    }
+  }
+  return { industry, context };
+}
+
+app.get('/api/finance/deep-dive/questions', async (req, res) => {
+  try {
+    const { industry, context } = await getDeepDiveContext(req);
+    const questions = anthropicService.isAvailable()
+      ? await anthropicService.generateDeepDiveQuestions(industry, context)
+      : [];
+    res.json({ questions, industry });
+  } catch (e) {
+    logger.error('深掘り質問APIエラー', e);
+    res.json({ questions: [] });
+  }
+});
+
+app.post('/api/finance/deep-dive/analyze', express.json(), async (req, res) => {
+  try {
+    const qa = Array.isArray(req.body?.qa) ? req.body.qa : [];
+    const { industry, context } = await getDeepDiveContext(req);
+    const insights = anthropicService.isAvailable()
+      ? await anthropicService.analyzeDeepDiveAnswers(industry, qa, context)
+      : 'AI(Vertex)が未設定のため分析できません。';
+    res.json({ insights });
+  } catch (e) {
+    logger.error('深掘り分析APIエラー', e);
+    res.status(500).json({ insights: '分析に失敗しました。' });
+  }
+});
+
 app.get('/agent/funding', async (req, res) => {
   let metrics = null;
   let forecast = null;

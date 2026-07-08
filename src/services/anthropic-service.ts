@@ -388,6 +388,72 @@ JSONのみ返してください。`;
     return { fields, notes: Array.isArray(p.notes) ? p.notes : [] };
   }
 
+  /** 業種を踏まえた深掘り質問を生成する。 */
+  async generateDeepDiveQuestions(industry: string, financialContext: string): Promise<string[]> {
+    if (!this.ai) return [];
+    const prompt = `あなたは中小企業の財務・銀行融資に詳しいコンサルタントです。
+業種「${industry || '不明'}」の企業について、銀行融資・経営改善の観点で経営者に確認すべき「深掘り質問」を5つ作成してください。
+
+【この企業の財務状況】
+${financialContext}
+
+【ルール】
+- 必ず業種特有のリスク・商習慣を踏まえる（例: 青果卸売なら「産地・仕入先の集中リスク」「鮮度劣化による廃棄ロス率」「取引先への与信・回収サイト」など）。
+- 返済力・収益安定性・リスクに関わる、銀行が気にする論点にする。
+- 各質問は具体的で1文。汎用的すぎる質問は避ける。
+
+【出力JSON】
+{ "questions": ["質問1", "質問2", "質問3", "質問4", "質問5"] }
+JSONのみ返してください。`;
+    try {
+      const response = await this.ai.models.generateContent({ model: config.ai.geminiModel, contents: prompt });
+      const text = response.text || '';
+      this.recordUsage(response, '深掘り質問生成');
+      const jsonStr = text.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1] || text;
+      const m = jsonStr.match(/\{[\s\S]*\}/);
+      if (!m) return [];
+      const p = JSON.parse(m[0]);
+      return Array.isArray(p.questions) ? p.questions.filter((q: unknown) => typeof q === 'string').slice(0, 6) : [];
+    } catch (e) {
+      logger.warn('深掘り質問生成に失敗:', e);
+      return [];
+    }
+  }
+
+  /** 深掘り質問への回答を踏まえて追加の所見・改善策を返す。 */
+  async analyzeDeepDiveAnswers(
+    industry: string,
+    qa: { question: string; answer: string }[],
+    financialContext: string,
+  ): Promise<string> {
+    if (!this.ai) return '';
+    const answered = qa.filter((x) => (x.answer || '').trim());
+    if (answered.length === 0) return '回答が入力されていません。質問に回答してから送信してください。';
+    const qaText = qa
+      .map((x, i) => `Q${i + 1}: ${x.question}\nA${i + 1}: ${(x.answer || '').trim() || '(未回答)'}`)
+      .join('\n\n');
+    const prompt = `あなたは中小企業の財務・銀行融資に詳しいコンサルタントです。業種「${industry || '不明'}」の企業。
+
+【財務状況】
+${financialContext}
+
+【深掘り質問への経営者の回答】
+${qaText}
+
+上記の回答を踏まえて、次を日本語のMarkdownで簡潔に示してください（各セクション3点以内、経営者向けの平易な言葉で）:
+## 追加で見えたリスク・強み
+## 具体的な改善策（銀行評価の向上につながるもの）
+## 銀行に説明する際のポイント`;
+    try {
+      const response = await this.ai.models.generateContent({ model: config.ai.geminiModel, contents: prompt });
+      this.recordUsage(response, '深掘り回答分析');
+      return response.text || '';
+    } catch (e) {
+      logger.warn('深掘り回答分析に失敗:', e);
+      return '分析に失敗しました。時間をおいて再度お試しください。';
+    }
+  }
+
   async extractTextFromPDF(pdfBuffer: Buffer, fileName: string): Promise<string> {
     if (!this.ai) throw new Error('Gemini APIが初期化されていません');
 

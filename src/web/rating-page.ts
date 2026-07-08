@@ -796,15 +796,43 @@ ${rating.executiveSummary.map(s => `    <li>${esc(s)}</li>`).join('\n')}
   </ul>
 </div>
 
-<!-- Section 8: 深掘り質問 -->
+<!-- Section 8: 深掘り質問（業種別・回答可） -->
 <div class="card">
-  <div class="card-header"><h3>深掘り質問</h3></div>
+  <div class="card-header"><h3>深掘り質問（業種別）</h3></div>
   <div class="card-body">
-    <ul class="questions-list">
-${rating.deepDiveQuestions.map(q => `      <li>${esc(q)}</li>`).join('\n')}
-    </ul>
+    <div id="ddLoading" style="font-size:13px;color:var(--text2)">業種を踏まえた質問を生成中…</div>
+    <div id="ddList"></div>
+    <button type="button" id="ddSubmit" class="btn-primary" style="display:none;margin-top:8px">回答をAIに送って所見をもらう</button>
+    <div id="ddInsights" style="margin-top:16px"></div>
   </div>
 </div>
+<script>
+(function(){
+  var esc=function(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});};
+  var loading=document.getElementById('ddLoading');
+  var list=document.getElementById('ddList');
+  var submit=document.getElementById('ddSubmit');
+  var insights=document.getElementById('ddInsights');
+  if(!loading) return;
+  fetch('/api/finance/deep-dive/questions').then(function(r){return r.json();}).then(function(d){
+    var qs=(d&&d.questions)||[];
+    if(!qs.length){ loading.textContent='（質問を生成できませんでした。会社情報で業種を登録すると業種別の質問が出ます）'; return; }
+    loading.style.display='none';
+    list.innerHTML=qs.map(function(q,i){return '<div style="margin-bottom:14px"><div style="font-weight:600;font-size:13px;margin-bottom:6px">'+(i+1)+'. '+esc(q)+'</div><textarea data-q="'+esc(q)+'" rows="2" placeholder="回答を入力（任意）" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;resize:vertical"></textarea></div>';}).join('');
+    submit.style.display='';
+  }).catch(function(){ loading.textContent='（質問の取得に失敗しました）'; });
+  submit.addEventListener('click',function(){
+    var qa=[].map.call(list.querySelectorAll('textarea'),function(t){return {question:t.getAttribute('data-q'),answer:t.value};});
+    submit.disabled=true; submit.textContent='AIが分析中…';
+    fetch('/api/finance/deep-dive/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qa:qa})}).then(function(r){return r.json();}).then(function(d){
+      var text=(d&&d.insights)||'';
+      var html=esc(text).replace(/^## (.*)$/gm,'<h4 style="margin:12px 0 6px;font-size:14px">$1</h4>').replace(/^[-*] (.*)$/gm,'<li>$1</li>').replace(/\\n/g,'<br>');
+      insights.innerHTML='<div style="background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:14px 16px;font-size:13px;line-height:1.7">'+html+'</div>';
+      submit.disabled=false; submit.textContent='回答をAIに送って所見をもらう';
+    }).catch(function(){ insights.textContent='分析に失敗しました。'; submit.disabled=false; submit.textContent='回答をAIに送って所見をもらう'; });
+  });
+})();
+</script>
 
 <!-- Radar Chart Script -->
 <script>
