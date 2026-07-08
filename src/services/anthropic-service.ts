@@ -189,6 +189,7 @@ ${additionalJson}
 - 経常利益が無ければ営業利益で代用。
 - 売上高・売上原価・販管費・各資産・有利子負債は必ず0以上の正の数。マイナスで読み取れたら符号の取り違えなので見直すこと。
 - 有利子負債は BS の「短期借入金＋長期借入金＋社債＋リース債務」等の合計。借入があるのに0にしない。
+- 決算書BSに「前期／当期」の2列がある場合、当期列＝期末を interestBearingDebt に、前期列＝期首を openingInterestBearingDebt に入れる。前期列が無ければ openingInterestBearingDebt は null。
 
 【出力JSON】
 {
@@ -204,7 +205,8 @@ ${additionalJson}
   "currentLiabilities": 流動負債,
   "totalAssets": 総資産,
   "netAssets": 純資産,
-  "interestBearingDebt": 有利子負債（短期借入金＋長期借入金＋社債等。無ければ0）,
+  "interestBearingDebt": 有利子負債（当期＝期末。短期借入金＋長期借入金＋社債等。無ければ0）,
+  "openingInterestBearingDebt": 前期末＝期首の有利子負債（BSの前期列。無ければnull）,
   "netIncome": 当期純利益,
   "depreciation": 減価償却費,
   "interestExpense": 支払利息,
@@ -245,6 +247,7 @@ JSONのみ返してください。`;
       totalAssets: p.totalAssets ?? 0,
       netAssets: p.netAssets ?? 0,
       interestBearingDebt: p.interestBearingDebt ?? 0,
+      openingInterestBearingDebt: p.openingInterestBearingDebt ?? null,
       netIncome: p.netIncome ?? 0,
       depreciation: p.depreciation ?? 0,
       interestExpense: p.interestExpense ?? 0,

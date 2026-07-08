@@ -1,5 +1,6 @@
 import type { MonthlySnapshot } from '../../types/trend.js';
 import type { RatingInput } from '../../types/bank-rating.js';
+import { effectiveAnnualDebtRepayment } from './imported-metrics.js';
 
 /**
  * ダッシュボード取込データ(monthly_actuals)から完全な RatingInput を組み立てる。
@@ -46,8 +47,8 @@ export function buildRatingInputFromSnapshots(snapshots: MonthlySnapshot[]): Rat
     // 前期
     prevOrdinaryIncome: prev ? prev.ordinaryIncome || 0 : null,
     prevTotalAssets: prev ? prev.totalAssets || 0 : null,
-    // 返済（決算書に無いため手入力。未入力なら null）
-    annualDebtRepayment: latest.annualDebtRepayment ?? null,
+    // 返済元本：返済計画表の手入力値を優先、無ければ期首−期末で概算
+    annualDebtRepayment: effectiveAnnualDebtRepayment(snapshots),
     // 収益フロー履歴（最大3期の経常利益符号、古い順）
     profitFlowHistory: snapshots.slice(-3).map((s) => signOf(s.ordinaryIncome || 0)),
   };

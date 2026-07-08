@@ -1,11 +1,16 @@
 import { agentPageShell } from './shared.js';
 import type { MonthlySnapshot } from '../types/trend.js';
+import {
+  openingInterestBearingDebt,
+  effectiveAnnualDebtRepayment,
+  annualDebtRepaymentSource,
+} from '../domain/finance/imported-metrics.js';
 
 // 補助書類（決算書で埋まらない/読めなかった時の補完）。基本は決算書(BS/PL)で足りる。
 const DOCS: { type: string; icon: string; label: string; desc: string }[] = [
   {
     type: 'loan_repayment', icon: '📄', label: '借入金の返済計画表',
-    desc: '決算書に無い「年間返済元本（1年で返す元金）」だけを読み取ります',
+    desc: '年間返済元本を正確に読み取ります（期首・期末残高は決算書から自動。差額でも概算表示）',
   },
   {
     type: 'account_breakdown', icon: '📑', label: '勘定科目内訳書',
@@ -20,12 +25,16 @@ const DOCS: { type: string; icon: string; label: string; desc: string }[] = [
 /** 財務データの確認・修正ページ。不足書類の取込 + 期ごとの手修正。 */
 export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?: string): string {
   const latest = snapshots.length ? snapshots[snapshots.length - 1] : null;
+  // 借入金：期首→期末残高（決算書BSより）と年間返済元本（実績 or 期首−期末の概算）
+  const openingDebt = openingInterestBearingDebt(snapshots);
+  const endingDebt = latest?.interestBearingDebt ?? null;
+  const effRepay = effectiveAnnualDebtRepayment(snapshots);
+  const repaySource = annualDebtRepaymentSource(snapshots);
   // 決算書で埋まらない項目の検知
-  const needRepay = !!latest && latest.annualDebtRepayment == null; // 年間返済元本(決算書に無い)
   const needDebt = !!latest && (latest.interestBearingDebt ?? 0) === 0; // 有利子負債
   const needDep = !!latest && (latest.depreciation ?? 0) === 0; // 減価償却費
   const docRelevant: Record<string, boolean> = {
-    loan_repayment: needRepay,
+    loan_repayment: repaySource === 'none',
     account_breakdown: needDebt,
     fixed_asset: needDep,
   };
@@ -43,13 +52,19 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
     // 各カードに「今そのカードから取り込まれている値」を表示（返済計画表はリセット付き）
     const curValRow = (label: string, val: number | null | undefined) =>
       `<div style="font-size:13px">${label}：<strong style="font-size:16px;color:var(--text)">${fmtYen(val)}</strong></div>`;
+    const repayBadge = repaySource === 'actual'
+      ? '<span style="font-size:11px;color:#166534;background:#dcfce7;border-radius:4px;padding:1px 6px;margin-left:6px">返済計画表より</span>'
+      : repaySource === 'estimated'
+        ? '<span style="font-size:11px;color:#92400e;background:#fef3c7;border-radius:4px;padding:1px 6px;margin-left:6px">期首−期末で概算</span>'
+        : '';
     const footer = isLoan
       ? `<div style="margin-top:12px;text-align:left;border-top:1px solid var(--border);padding-top:10px">
-           <div style="margin-bottom:8px">現在の年間返済元本（合計）：<strong style="font-size:17px;color:var(--text)">${fmtYen(latest?.annualDebtRepayment)}</strong></div>
-           <form method="post" action="/finance/reset-loan" onsubmit="return confirm('年間返済元本を0に戻します（借入残高・利息＝決算書の値はそのまま）。よろしいですか？')">
-             <button type="submit" style="width:100%;background:#f97316;color:#fff;border:none;border-radius:8px;padding:11px;font-size:14px;font-weight:700;cursor:pointer">🔄 年間返済元本をリセット（0に戻す）</button>
+           <div style="font-size:12px;color:var(--text2);margin-bottom:4px">期首借入金残高 <strong style="color:var(--text)">${fmtYen(openingDebt)}</strong> → 期末借入金残高 <strong style="color:var(--text)">${fmtYen(endingDebt)}</strong> <span style="color:#94a3b8">（決算書より自動）</span></div>
+           <div style="margin-bottom:8px">年間返済元本：<strong style="font-size:17px;color:var(--text)">${fmtYen(effRepay)}</strong>${repayBadge}</div>
+           <form method="post" action="/finance/reset-loan" onsubmit="return confirm('返済計画表から入れた年間返済元本を0に戻します（決算書由来の残高・利息はそのまま。概算値に戻ります）。よろしいですか？')">
+             <button type="submit" style="width:100%;background:#f97316;color:#fff;border:none;border-radius:8px;padding:11px;font-size:14px;font-weight:700;cursor:pointer">🔄 返済計画表の入力をリセット</button>
            </form>
-           <div style="font-size:11px;color:var(--text2);margin-top:6px">※ 入れ間違えたら、これで0に戻して1件ずつ入れ直してください</div>
+           <div style="font-size:11px;color:var(--text2);margin-top:6px">※ 返済計画表を取り込むと、概算より正確な年間返済元本で上書きされます</div>
          </div>`
       : d.type === 'account_breakdown'
         ? `<div style="margin-top:12px;text-align:left;border-top:1px solid var(--border);padding-top:10px">${curValRow('現在の借入残高（有利子負債）', latest?.interestBearingDebt)}</div>`

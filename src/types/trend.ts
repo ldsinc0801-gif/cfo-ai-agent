@@ -14,7 +14,8 @@ export interface MonthlySnapshot {
   totalAssets: number;
   netAssets: number;
   // 銀行評価用の追加項目（migration-016。取込で埋まらない場合は 0）
-  interestBearingDebt?: number; // 有利子負債
+  interestBearingDebt?: number; // 有利子負債（期末残高）
+  openingInterestBearingDebt?: number | null; // 期首有利子負債（前期末残高。BS前期列から。無ければnull）
   netIncome?: number;           // 当期純利益
   depreciation?: number;        // 減価償却費
   interestExpense?: number;     // 支払利息
