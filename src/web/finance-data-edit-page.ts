@@ -26,19 +26,42 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
   const missing = latest ? DOCS.filter((d) => d.needs(latest)) : [];
 
   // --- 不足書類の取り込みパネル ---
-  const docCard = (d: (typeof DOCS)[number], highlight: boolean) => `
-    <form method="post" action="/finance/import-doc" enctype="multipart/form-data" class="doc-card${highlight ? ' doc-card--need' : ''}">
-      <input type="hidden" name="docType" value="${d.type}">
-      <label class="doc-dropzone">
-        <input type="file" name="files" accept=".pdf,.csv,.xlsx,.txt,image/*" multiple>
-        <div class="doc-icon">${d.icon}</div>
-        <div class="doc-title">${d.label}</div>
-        <div class="doc-desc">${d.desc}</div>
-        <div class="doc-hint">写真・PDF・CSV可／クリック・ドラッグ&ドロップ・複数選択可</div>
-        <div class="doc-files"></div>
-      </label>
-      <button type="submit" class="btn-primary btn-sm" style="width:100%;margin-top:10px">この書類を取り込む</button>
-    </form>`;
+  const fmtYen = (v: number | null | undefined) =>
+    v == null ? '—' : '¥' + new Intl.NumberFormat('ja-JP').format(Math.round(v));
+  const docCard = (d: (typeof DOCS)[number], highlight: boolean) => {
+    const isLoan = d.type === 'loan_repayment';
+    const loanMode = isLoan
+      ? `<div style="margin-top:8px;font-size:12px;text-align:left">
+           <label style="display:block;margin-bottom:3px"><input type="radio" name="mode" value="replace" checked> この書類に全借入がまとまっている（上書き）</label>
+           <label style="display:block"><input type="radio" name="mode" value="add"> 借入を1件ずつ追加していく（加算）</label>
+         </div>`
+      : '';
+    const loanFooter = isLoan
+      ? `<div style="margin-top:8px;font-size:11px;color:var(--text2);text-align:left">
+           現在の合計：借入残高 <strong>${fmtYen(latest?.interestBearingDebt)}</strong> ／ 年間返済元本 <strong>${fmtYen(latest?.annualDebtRepayment)}</strong>
+           <form method="post" action="/finance/reset-loan" style="display:inline;margin-left:6px" onsubmit="return confirm('借入データ(有利子負債・年間返済元本・支払利息)を0に戻します。よろしいですか？')">
+             <button type="submit" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:11px;text-decoration:underline;padding:0">借入をリセット</button>
+           </form>
+         </div>`
+      : '';
+    return `
+    <div>
+      <form method="post" action="/finance/import-doc" enctype="multipart/form-data" class="doc-card${highlight ? ' doc-card--need' : ''}">
+        <input type="hidden" name="docType" value="${d.type}">
+        <label class="doc-dropzone">
+          <input type="file" name="files" accept=".pdf,.csv,.xlsx,.txt,image/*" multiple>
+          <div class="doc-icon">${d.icon}</div>
+          <div class="doc-title">${d.label}</div>
+          <div class="doc-desc">${d.desc}</div>
+          <div class="doc-hint">写真・PDF・CSV可／複数選択・ドラッグ&ドロップ可</div>
+          <div class="doc-files"></div>
+        </label>
+        ${loanMode}
+        <button type="submit" class="btn-primary btn-sm" style="width:100%;margin-top:10px">この書類を取り込む</button>
+      </form>
+      ${loanFooter}
+    </div>`;
+  };
 
   const docPanel = latest
     ? `
