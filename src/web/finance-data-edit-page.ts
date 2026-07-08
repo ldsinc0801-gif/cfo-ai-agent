@@ -1,25 +1,6 @@
 import { agentPageShell } from './shared.js';
 import type { MonthlySnapshot } from '../types/trend.js';
 
-const FIELDS: { key: keyof MonthlySnapshot; label: string }[] = [
-  { key: 'revenue', label: '売上高' },
-  { key: 'costOfSales', label: '売上原価' },
-  { key: 'grossProfit', label: '売上総利益' },
-  { key: 'sgaExpenses', label: '販管費' },
-  { key: 'operatingIncome', label: '営業利益' },
-  { key: 'ordinaryIncome', label: '経常利益' },
-  { key: 'netIncome', label: '当期純利益' },
-  { key: 'depreciation', label: '減価償却費' },
-  { key: 'interestExpense', label: '支払利息' },
-  { key: 'totalAssets', label: '総資産' },
-  { key: 'currentAssets', label: '流動資産' },
-  { key: 'cashAndDeposits', label: '現預金' },
-  { key: 'currentLiabilities', label: '流動負債' },
-  { key: 'interestBearingDebt', label: '有利子負債(借入金残高)' },
-  { key: 'netAssets', label: '純資産' },
-  { key: 'annualDebtRepayment', label: '年間返済元本 ※手入力' },
-];
-
 // 決算書に載らない補助書類 → 抽出項目
 const DOCS: { type: string; icon: string; label: string; desc: string; needs: (s: MonthlySnapshot) => boolean }[] = [
   {
@@ -75,44 +56,6 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
     </div>`
     : '';
 
-  // --- 期ごとの手修正カード ---
-  const anomalyBadge = (s: MonthlySnapshot): string => {
-    const issues: string[] = [];
-    if (s.revenue < 0) issues.push('売上高がマイナス');
-    if (s.netAssets < 0) issues.push('純資産がマイナス(債務超過)');
-    if (s.totalAssets <= 0) issues.push('総資産が0以下');
-    return issues.length
-      ? `<span style="font-size:11px;color:#b91c1c;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:2px 8px;margin-left:8px">⚠ ${issues.join(' / ')}</span>`
-      : '';
-  };
-
-  const cards = snapshots
-    .slice()
-    .reverse()
-    .map((s) => {
-      const inputs = FIELDS.map((f) => {
-        const v = (s as unknown as Record<string, number | null | undefined>)[f.key as string];
-        const val = v === null || v === undefined ? '' : String(v);
-        return `<label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text2)">
-          ${f.label}
-          <input type="number" step="any" name="${String(f.key)}" value="${val}" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-variant-numeric:tabular-nums">
-        </label>`;
-      }).join('');
-      return `
-      <form method="post" action="/finance/data-edit" class="card" style="margin-bottom:16px">
-        <input type="hidden" name="year" value="${s.year}">
-        <input type="hidden" name="month" value="${s.month}">
-        <div class="card-header">
-          <h3>${s.year}年${s.month}月${anomalyBadge(s)}</h3>
-          <button type="submit" class="btn-primary btn-sm">この期を保存</button>
-        </div>
-        <div class="card-body">
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px">${inputs}</div>
-        </div>
-      </form>`;
-    })
-    .join('');
-
   const noticeBanner = notice
     ? `<div style="background:#ecf6f8;border:1px solid #a8d8e0;color:#1b7f8e;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:14px">${notice}</div>`
     : '';
@@ -122,13 +65,11 @@ export function renderFinanceDataEditHTML(snapshots: MonthlySnapshot[], notice?:
       ? `<div class="welcome-banner"><h2>財務データの確認・修正</h2><p>取り込みデータがありません。ダッシュボードで決算書・試算表を取り込んでください。</p></div>
          <div class="card"><div class="card-body"><a href="/" class="btn-primary">ダッシュボードで取り込む</a></div></div>`
       : `<div class="welcome-banner">
-           <h2>財務データの確認・修正</h2>
-           <p>不足している書類は下の「書類の取り込み」から入れれば自動で数値が埋まります。AIが決算書から読み取った数値に誤りがあれば、下の期別カードで直接修正できます。修正・取込は財務分析AI・資金調達AI・事業計画AIに即反映されます。</p>
+           <h2>分析に必要な書類の取り込み</h2>
+           <p>決算書(BS/PL)に載っていない書類を、種類ごとに取り込むと、AIが必要な項目だけを読み取って財務分析AI・資金調達AI・事業計画AIに反映します。</p>
          </div>
          ${noticeBanner}
-         ${docPanel}
-         <h3 style="margin:20px 0 12px;font-size:15px">期別データ（詳細な手修正）</h3>
-         ${cards}`;
+         ${docPanel}`;
 
   return agentPageShell({ active: 'finance', title: '財務データの確認・修正', bodyHTML: `<style>
     .doc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
