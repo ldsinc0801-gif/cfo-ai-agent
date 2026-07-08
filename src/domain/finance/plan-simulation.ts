@@ -10,7 +10,6 @@ export interface SimParams {
   repayment: number;       // 年間借入返済 万円
 }
 
-const PER_HEAD_COST = 4_000_000; // 1人あたり年間人件費の概算（人員増減の固定費影響）
 const INVEST_USEFUL_YEARS = 5;   // 新規設備投資の想定耐用年数（減価償却の概算）
 
 /**
@@ -25,9 +24,15 @@ export function applySimParamsToSnapshots(snapshots: MonthlySnapshot[], p: SimPa
   if (!snapshots || snapshots.length === 0) return snapshots;
   const latest = snapshots[snapshots.length - 1];
 
-  // 全スライダーが中立（原価率も実績とほぼ同じ）なら、実績そのまま＝財務分析AIと完全一致させる
+  // 年間借入返済スライダーは「現状の年間返済元本」を初期値とする絶対値なので、
+  // 現状からの差分（追加返済）だけを負債に反映する（＝現状維持なら財務分析AIと一致）。
+  const actualRepayYen = latest.annualDebtRepayment || 0;
+  const actualRepayMan = actualRepayYen / 10000;
+
+  // 全スライダーが現状維持（原価率も実績・返済も現状）なら、実績そのまま＝財務分析AIと完全一致
   const baselineCogsRatio = (latest.revenue || 0) > 0 ? (latest.costOfSales || 0) / (latest.revenue || 1) * 100 : 0;
-  const neutral = !p.revenueGrowth && !p.fixedCostChange && !p.employeeChange && !p.investment && !p.repayment
+  const neutral = !p.revenueGrowth && !p.fixedCostChange && !p.employeeChange && !p.investment
+    && Math.abs((p.repayment || 0) - actualRepayMan) < 1
     && Math.abs((p.cogsRatio || 0) - baselineCogsRatio) < 1.0;
   if (neutral) return snapshots;
 
@@ -47,7 +52,9 @@ export function applySimParamsToSnapshots(snapshots: MonthlySnapshot[], p: SimPa
   const netIncome = ordinaryIncome - (baseOrd - baseNet);
 
   const depreciation = Math.max(0, Math.round((latest.depreciation || 0) + (p.investment || 0) * 10000 / INVEST_USEFUL_YEARS));
-  const interestBearingDebt = Math.max(0, (latest.interestBearingDebt || 0) - (p.repayment || 0) * 10000);
+  // 現状の返済元本を超える「追加返済分」だけ負債を減らす（現状維持なら負債は据え置き＝財務分析AI一致）
+  const extraRepayYen = (p.repayment || 0) * 10000 - actualRepayYen;
+  const interestBearingDebt = Math.max(0, (latest.interestBearingDebt || 0) - extraRepayYen);
   const totalAssets = Math.max(1, (latest.totalAssets || 0) + (p.investment || 0) * 10000);
   const netAssets = (latest.netAssets || 0) + (netIncome - baseNet); // 利益の増減を純資産に反映
 

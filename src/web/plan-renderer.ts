@@ -1,5 +1,6 @@
 import type { TrendData, MonthlyTarget, MonthlySnapshot } from '../types/trend.js';
 import { renderSidebar, SHARED_CSS } from './shared.js';
+import { effectiveAnnualDebtRepayment } from '../domain/finance/imported-metrics.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -83,6 +84,12 @@ export function renderPlanHTML(
   const kpi = loadAnnualKpi();
   const actual = calcActualKpi(trend.months, kpi);
 
+  // シナリオ調整の「現状値」（スライダーの初期値＝現状維持）
+  const currentHeadcount = Math.max(1, kpi.employeeCount || 1);
+  const actualRepaymentMan = Math.max(0, Math.round((effectiveAnnualDebtRepayment(trend.months) ?? 0) / 10000));
+  const headcountMax = Math.max(20, currentHeadcount * 3);
+  const repayMax = Math.max(1000, Math.ceil(actualRepaymentMan * 3 / 100) * 100);
+
   // 会社情報の決算月に合わせた「◯◯年{決算月}月期」の選択肢（当年±2）
   const endMonth = fiscalYearEndMonth >= 1 && fiscalYearEndMonth <= 12 ? fiscalYearEndMonth : 3;
   const fyBase = new Date().getFullYear();
@@ -143,6 +150,9 @@ var PROFILE_HINT = ${JSON.stringify({ industry: profileHint.industry || '', empl
 var SAVED_LOCABEN = ${JSON.stringify({ major: profileHint.locabenMajor || '', minor: profileHint.locabenMinor || '', scale: profileHint.locabenScale || '' })};
 var PLAN_CSRF = ${JSON.stringify(csrfToken)};
 var locabenReady = false;
+// シナリオの「現状値」（人員＝現在の人数、年間借入返済＝現状の年間返済元本）
+var CURRENT_HEADCOUNT = ${currentHeadcount};
+var CURRENT_REPAYMENT_MAN = ${actualRepaymentMan};
 </script>
 <style>${SHARED_CSS}${PLAN_CSS}</style>
 </head>
@@ -577,9 +587,9 @@ ${(kpi.customKpis || []).filter(ck => ck.scope === 'monthly').map(ck =>
               <div class="sim-slider-range"><span>-30%</span><span>+30%</span></div>
             </div>
             <div class="sim-slider">
-              <div class="sim-slider-header"><span>人員増減</span><span class="sim-slider-val" id="val-employeeChange">0</span><span>人</span></div>
-              <input type="range" id="sl-employeeChange" min="-3" max="10" step="1" value="0" oninput="updateSimParam('employeeChange',this.value)">
-              <div class="sim-slider-range"><span>-3人</span><span>+10人</span></div>
+              <div class="sim-slider-header"><span>人員（現状${currentHeadcount}人）</span><span class="sim-slider-val" id="val-employeeCount">${currentHeadcount}</span><span>人</span></div>
+              <input type="range" id="sl-employeeCount" min="0" max="${headcountMax}" step="1" value="${currentHeadcount}" oninput="updateSimParam('employeeCount',this.value)">
+              <div class="sim-slider-range"><span>0人</span><span>${headcountMax}人</span></div>
             </div>
             <div class="sim-slider">
               <div class="sim-slider-header"><span>新規設備投資</span><span class="sim-slider-val" id="val-investment">0</span><span>万</span></div>
@@ -587,9 +597,9 @@ ${(kpi.customKpis || []).filter(ck => ck.scope === 'monthly').map(ck =>
               <div class="sim-slider-range"><span>0万</span><span>3000万</span></div>
             </div>
             <div class="sim-slider">
-              <div class="sim-slider-header"><span>年間借入返済</span><span class="sim-slider-val" id="val-repayment">0</span><span>万</span></div>
-              <input type="range" id="sl-repayment" min="0" max="500" step="10" value="0" oninput="updateSimParam('repayment',this.value)">
-              <div class="sim-slider-range"><span>0万</span><span>500万</span></div>
+              <div class="sim-slider-header"><span>年間借入返済（現状${actualRepaymentMan}万）</span><span class="sim-slider-val" id="val-repayment">${actualRepaymentMan}</span><span>万</span></div>
+              <input type="range" id="sl-repayment" min="0" max="${repayMax}" step="10" value="${actualRepaymentMan}" oninput="updateSimParam('repayment',this.value)">
+              <div class="sim-slider-range"><span>0万</span><span>${repayMax}万</span></div>
             </div>
           </div>
         </div>
@@ -949,7 +959,7 @@ function switchSimMode(mode){
 // --- Simulator ---
 var simInitialized = false;
 var simChart = null;
-var simParams = { revenueGrowth:0, cogsRatio:45, fixedCostChange:0, employeeChange:0, investment:0, repayment:0 };
+var simParams = { revenueGrowth:0, cogsRatio:45, fixedCostChange:0, employeeCount:CURRENT_HEADCOUNT, investment:0, repayment:CURRENT_REPAYMENT_MAN };
 var baseData = [];
 var actualBaseData = [];  // freee実績ベース
 var planBaseData = [];    // KPI計画ベース
@@ -1063,7 +1073,7 @@ function runSimulation(){
     var fixed = Math.round(bFixed * (1 + simParams.fixedCostChange/100));
     var varRatio = (bRev > 0 && bVar > 0) ? (bVar / bRev) : 0;
     var varCost = Math.round(rev * varRatio);
-    var emp = Math.max(1, (b.employees || 1) + simParams.employeeChange);
+    var emp = Math.max(1, simParams.employeeCount);
     var addDepr = Math.round(simParams.investment * 10000 / 60);
     var depr = bDepr + addDepr;
     var gross = rev - cogs;
@@ -1335,7 +1345,7 @@ function fetchBankRating(){
     revenueGrowth: simParams.revenueGrowth,
     cogsRatio: simParams.cogsRatio,
     fixedCostChange: simParams.fixedCostChange,
-    employeeChange: simParams.employeeChange,
+    employeeChange: simParams.employeeCount - CURRENT_HEADCOUNT,
     investment: simParams.investment,
     repayment: simParams.repayment,
   };
@@ -1407,7 +1417,7 @@ function getSimAnnualValues(){
     var profit = rev - cogs - fixed - varCost - depr;
     totalRev += rev;
     totalProfit += profit;
-    emp = Math.max(1, (b.employees||1) + simParams.employeeChange);
+    emp = Math.max(1, simParams.employeeCount);
   }
   // ベースの年間売上
   var baseTotalRev = baseData.reduce(function(s,d){return s+(d.revenue||0)},0);
@@ -1437,7 +1447,7 @@ function applySimToKpi(){
     var cogs = Math.round(rev * simParams.cogsRatio/100);
     var fixed = Math.round(b.fixed * (1 + simParams.fixedCostChange/100));
     var varCost = Math.round(rev * (b.variable / b.revenue || 0));
-    var emp = Math.max(1, b.employees + simParams.employeeChange);
+    var emp = Math.max(1, simParams.employeeCount);
     var addDepr = Math.round(simParams.investment * 10000 / 60);
     var depr = b.depreciation + addDepr;
     var profit = rev - cogs - fixed - varCost - depr;
@@ -1470,13 +1480,17 @@ function applySimToKpi(){
 }
 
 function resetSimParams(){
-  simParams = { revenueGrowth:0, cogsRatio:45, fixedCostChange:0, employeeChange:0, investment:0, repayment:0 };
+  // リセット＝現状維持（動きゼロ）。全スライダーを現状値に戻す（＝スコアは財務分析AIと一致）。
+  var tRev=0, tCogs=0;
+  for(var i=0;i<baseData.length;i++){ tRev+=(baseData[i].revenue||0); tCogs+=(baseData[i].cogs||0); }
+  var cRatio = (tRev>0 && tCogs>0) ? Math.round(tCogs/tRev*100) : 45;
+  simParams = { revenueGrowth:0, cogsRatio:cRatio, fixedCostChange:0, employeeCount:CURRENT_HEADCOUNT, investment:0, repayment:CURRENT_REPAYMENT_MAN };
   document.getElementById('sl-revenueGrowth').value=0; document.getElementById('val-revenueGrowth').textContent='0';
-  document.getElementById('sl-cogsRatio').value=45; document.getElementById('val-cogsRatio').textContent='45';
+  document.getElementById('sl-cogsRatio').value=cRatio; document.getElementById('val-cogsRatio').textContent=cRatio;
   document.getElementById('sl-fixedCostChange').value=0; document.getElementById('val-fixedCostChange').textContent='0';
-  document.getElementById('sl-employeeChange').value=0; document.getElementById('val-employeeChange').textContent='0';
+  document.getElementById('sl-employeeCount').value=CURRENT_HEADCOUNT; document.getElementById('val-employeeCount').textContent=CURRENT_HEADCOUNT;
   document.getElementById('sl-investment').value=0; document.getElementById('val-investment').textContent='0';
-  document.getElementById('sl-repayment').value=0; document.getElementById('val-repayment').textContent='0';
+  document.getElementById('sl-repayment').value=CURRENT_REPAYMENT_MAN; document.getElementById('val-repayment').textContent=CURRENT_REPAYMENT_MAN;
   runSimulation();
 }
 
