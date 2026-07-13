@@ -35,7 +35,23 @@ export function calculateBankRating(input: RatingInput): BankRatingResult {
   const growthMetrics = metrics.filter(m => m.category === 'growth');
   const repaymentMetrics = metrics.filter(m => m.category === 'repayment');
 
-  const rank = scoreToRank(totalScore);
+  // 定量スコアからのランク。ただし銀行実務の「実態評価」を反映してキャップをかける。
+  let rank = scoreToRank(totalScore);
+  const overrideNotes: string[] = [];
+  if (input.netAssets < 0) {
+    // 実質債務超過先は原則「要注意先」以下。直近も経常赤字なら「破綻懸念先」相当。
+    // 有効な経営改善計画があれば要管理先(要注意先)に留まりうるが、本ツールは保守的に評価する。
+    const cap = input.ordinaryIncome < 0 ? 'E' : 'D';
+    const capped = applyRankCap(rank, cap);
+    if (capped.rank !== rank.rank) {
+      overrideNotes.push(
+        input.ordinaryIncome < 0
+          ? `債務超過かつ経常赤字のため、定量スコア(${totalScore}点)に関わらず「破綻懸念先」相当に評価しました（実態評価）。`
+          : `債務超過のため、定量スコア(${totalScore}点)に関わらず「要注意先」以下に評価しました（実態評価）。`,
+      );
+      rank = capped;
+    }
+  }
 
   return {
     totalScore,
@@ -53,7 +69,7 @@ export function calculateBankRating(input: RatingInput): BankRatingResult {
     repaymentMax: sumMax(repaymentMetrics),
     positives: generatePositives(metrics),
     negatives: generateNegatives(metrics),
-    cautions: generateCautions(metrics),
+    cautions: [...overrideNotes, ...generateCautions(metrics)],
     actions: generateActions(metrics, input),
     executiveSummary: generateSummary(totalScore, rank.label, metrics, input),
     deepDiveQuestions: generateQuestions(metrics, input),
@@ -343,7 +359,8 @@ function scoreProfitFlow(history: ('positive' | 'negative' | 'zero')[]): { score
 }
 
 function scoreGrowthRate(v: number | null): { score: number; level: MetricLevel } {
-  if (v === null) return { score: 3, level: 'fair' };
+  // 前期実績が無く成長性を評価できない場合は加点しない（銀行は評価不能分を加点しない）
+  if (v === null) return { score: 0, level: 'warning' };
   if (v >= 130) return { score: 10, level: 'excellent' };
   if (v >= 110) return { score: 8, level: 'good' };
   if (v >= 105) return { score: 6, level: 'fair' };
@@ -400,6 +417,20 @@ function scoreCashFlowAmount(v: number): { score: number; level: MetricLevel } {
 // =========================================================================
 // ランク判定
 // =========================================================================
+
+/** ランクの序列（良い順）。キャップ適用に使う。 */
+const RANK_ORDER: RatingRank[] = ['A', 'B', 'C', 'D', 'E'];
+const RANK_LABELS: Record<RatingRank, string> = {
+  A: '優良（正常先）', B: '良好（正常先）', C: '普通（要注意先予備）',
+  D: '要注意（要管理先）', E: '危険（破綻懸念先）',
+};
+
+/** rank を cap より良くならないように制限する（例: cap='E' なら必ずE）。 */
+function applyRankCap(rank: { rank: RatingRank; label: string }, cap: RatingRank): { rank: RatingRank; label: string } {
+  const capped = Math.max(RANK_ORDER.indexOf(rank.rank), RANK_ORDER.indexOf(cap));
+  const r = RANK_ORDER[capped];
+  return { rank: r, label: RANK_LABELS[r] };
+}
 
 function scoreToRank(total: number): { rank: RatingRank; label: string } {
   if (total >= 100) return { rank: 'A', label: '優良（正常先）' };

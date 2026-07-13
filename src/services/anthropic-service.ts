@@ -320,7 +320,7 @@ JSONのみ返してください。`;
     "sgaExpenses": 期間残高の販管費計, "operatingIncome": 期間残高の営業利益, "ordinaryIncome": 期間残高の経常利益,
     "netIncome": 期間残高の当期純利益, "depreciation": 期間残高の減価償却費, "interestExpense": 期間残高の支払利息,
     "cashAndDeposits": 期末の現金預金, "currentAssets": 期末の流動資産, "currentLiabilities": 期末の流動負債,
-    "totalAssets": 期末の総資産, "netAssets": 期末の純資産, "interestBearingDebt": 期末の有利子負債,
+    "totalAssets": 期末の総資産(資産の部合計), "netAssets": **純資産の部合計の期末残高（総資産−負債合計と必ず一致させる。債務超過ならマイナス）**, "interestBearingDebt": **有利子負債の期末残高＝短期借入金＋長期借入金＋社債＋リース債務の合計（役員借入金も含む。買掛金・未払金は含めない）**,
     "accountsReceivable": 期末の売上債権, "inventory": 期末の棚卸資産, "accountsPayable": 期末の仕入債務,
     "sgaBreakdown": [ { "name": "役員報酬", "amount": 220000 }, { "name": "外注費", "amount": 7134216 } ],
     "plLines": [ { "category": "売上高", "name": "売上高", "amount": 196867630, "beforeAdjustment": 196867630 }, { "category": "販売管理費", "name": "減価償却費", "amount": 1751032, "beforeAdjustment": 0 } ],
