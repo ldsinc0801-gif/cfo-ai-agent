@@ -274,41 +274,49 @@ JSONのみ返してください。`;
    */
   async extractMonthlyTrend(documentText: string, fileName: string): Promise<{
     snapshots: import('../types/trend.js').MonthlySnapshot[];
-    annualSgaBreakdown: import('../types/trend.js').SgaBreakdownItem[];
-    fiscalYearEnd: { year: number; month: number } | null;
+    annual: import('../types/trend.js').AnnualStatement | null;
     extractionNotes: string[];
   }> {
     if (!this.ai) throw new Error('Gemini APIが初期化されていません');
 
-    const prompt = `以下の月次推移試算表から、月ごとのPL/BSを配列形式でJSONで返してください。
+    const prompt = `以下の月次推移試算表（損益計算書・貸借対照表）から、(A)各月度のPL/BSの配列 と (B)年間の確定値（期間残高）をJSONで返してください。
 
-【ルール】
-- 各月の数値は円単位の整数。不明な項目は null（数値が0なら0）。
-- **各「月度」列のみを月として抽出する。「期間残高」「期末残高」「合計」「決算仕訳合計」列は月ではないので snapshots に含めない**（これらは年間集計なので月として扱わない）。
-- PLは各「月度」列＝その月の発生額。BS残高列は各月末残高。
-- 売上総利益が無ければ 売上高 - 売上原価 で計算。
-- 経常利益が無ければ営業利益で代用。
-- 各月の利益（営業・経常・当期純利益）は赤字ならマイナスのまま採用してよい。
-- 売上高・売上原価・販管費・各資産・有利子負債は0以上。これらがマイナスなら符号の取り違えなので見直す。有利子負債は借入金＋社債等の合計で、借入があるのに0にしない。
-- 月の並びは古い順（昇順）にソート。
-- **販管費（販売費及び一般管理費）の科目別内訳**を annualSgaBreakdown に出力する。**必ず「期間残高」列（＝年間の確定値）の金額**を使う（各月度ではなく右端の期間残高列）。役員報酬・法定福利費・外注費・広告宣伝費・地代家賃・減価償却費など、販管費セクションに並ぶ各勘定科目を1行ずつ。合計行（販売費及び一般管理費 計）は含めない。金額0の科目は除外。
-- fiscalYearEnd は会計期間の期末年月（月別推移の最後の月度＝期末月）。
+【最重要：期間残高列を正とする】
+- 月次推移表には各「月度」列の右に **「決算仕訳合計」列** と **「期間残高」列（BSは「期末残高」）** がある。
+- **決算整理仕訳（減価償却費など）は月度列に現れず「決算仕訳合計」列にだけ入る**。したがって「各月度の合計」は年間値と一致しない。
+- **年間値(annual)は必ず右端の「期間残高（PL）／期末残高（BS）」列の金額をそのまま採用する**（月度の合算で代用しない）。
+- BSの期末残高も同様に、4月度など特定月の列ではなく「期末残高／期間残高」列を使う。
+
+【(A) snapshots（各月度・推移グラフ用）】
+- **各「月度」列のみ**を月として抽出。「期間残高」「期末残高」「決算仕訳合計」列は snapshots に含めない。
+- PLは各月度＝その月の発生額。BSは各月末残高。売上総利益が無ければ売上高-売上原価。経常利益が無ければ営業利益で代用。
+- 利益（営業・経常・純利益）は赤字ならマイナスのまま。売上・原価・販管費・資産・有利子負債は0以上。月の並びは古い順。
+
+【(B) annual（期間残高＝年間確定値）】
+- PL各科目は期間残高列。BS各科目は期末残高列。
+- 利益は赤字ならマイナスのまま採用（この会社が赤字/債務超過ならマイナスで正しい）。
+- sgaBreakdown＝販売費及び一般管理費の科目別内訳。**期間残高列**の金額で、役員報酬・法定福利費・外注費・広告宣伝費・地代家賃・減価償却費など各科目を1行ずつ。合計行（販売管理費 計）は含めない。金額0は除外。
+- fiscalYearEndYear/Month＝会計期間の期末年月（最後の月度＝期末月）。
 
 【出力JSON】
 {
   "snapshots": [
-    {
-      "year": 2025, "month": 10,
-      "revenue": ..., "costOfSales": ..., "grossProfit": ...,
+    { "year": 2025, "month": 10, "revenue": ..., "costOfSales": ..., "grossProfit": ...,
       "sgaExpenses": ..., "operatingIncome": ..., "ordinaryIncome": ...,
-      "cashAndDeposits": ..., "currentAssets": ..., "currentLiabilities": ...,
-      "totalAssets": ..., "netAssets": ...,
-      "interestBearingDebt": 有利子負債, "netIncome": 当期純利益, "depreciation": 減価償却費, "interestExpense": 支払利息,
-      "accountsReceivable": 売上債権(受取手形+売掛金+電子記録債権), "inventory": 棚卸資産(商品+製品+仕掛品+原材料+貯蔵品), "accountsPayable": 仕入債務(支払手形+買掛金+電子記録債務)
-    }
+      "cashAndDeposits": ..., "currentAssets": ..., "currentLiabilities": ..., "totalAssets": ..., "netAssets": ...,
+      "interestBearingDebt": ..., "netIncome": ..., "depreciation": ..., "interestExpense": ...,
+      "accountsReceivable": ..., "inventory": ..., "accountsPayable": ... }
   ],
-  "annualSgaBreakdown": [ { "name": "役員報酬", "amount": 12000000 }, { "name": "地代家賃", "amount": 3600000 } ],
-  "fiscalYearEnd": { "year": 2026, "month": 4 },
+  "annual": {
+    "fiscalYearEndYear": 2026, "fiscalYearEndMonth": 4,
+    "revenue": 期間残高の売上高, "costOfSales": 期間残高の売上原価, "grossProfit": 期間残高の売上総利益,
+    "sgaExpenses": 期間残高の販管費計, "operatingIncome": 期間残高の営業利益, "ordinaryIncome": 期間残高の経常利益,
+    "netIncome": 期間残高の当期純利益, "depreciation": 期間残高の減価償却費, "interestExpense": 期間残高の支払利息,
+    "cashAndDeposits": 期末の現金預金, "currentAssets": 期末の流動資産, "currentLiabilities": 期末の流動負債,
+    "totalAssets": 期末の総資産, "netAssets": 期末の純資産, "interestBearingDebt": 期末の有利子負債,
+    "accountsReceivable": 期末の売上債権, "inventory": 期末の棚卸資産, "accountsPayable": 期末の仕入債務,
+    "sgaBreakdown": [ { "name": "役員報酬", "amount": 220000 }, { "name": "外注費", "amount": 7134216 } ]
+  },
   "extractionNotes": ["注意点"]
 }
 
@@ -354,23 +362,53 @@ JSONのみ返してください。`;
     }));
     snapshots.sort((a, b) => (a.year * 100 + a.month) - (b.year * 100 + b.month));
 
-    // 販管費の科目別内訳（期間残高＝年間値）
-    const annualSgaBreakdown: import('../types/trend.js').SgaBreakdownItem[] = Array.isArray(p.annualSgaBreakdown)
-      ? p.annualSgaBreakdown
-          .map((it: any) => ({ name: String(it?.name ?? '').trim(), amount: Number(it?.amount) || 0 }))
-          .filter((it: any) => it.name && it.amount !== 0)
-      : [];
-
-    // 期末年月：AIの明示値を優先、無ければ最新スナップショットの年月
-    let fiscalYearEnd: { year: number; month: number } | null = null;
-    if (p.fiscalYearEnd && typeof p.fiscalYearEnd.year === 'number' && typeof p.fiscalYearEnd.month === 'number') {
-      fiscalYearEnd = { year: p.fiscalYearEnd.year, month: p.fiscalYearEnd.month };
-    } else if (snapshots.length > 0) {
-      const last = snapshots[snapshots.length - 1];
-      fiscalYearEnd = { year: last.year, month: last.month };
+    // 年間確定値（期間残高）を組み立てる
+    const notes: string[] = Array.isArray(p.extractionNotes) ? [...p.extractionNotes] : [];
+    let annual: import('../types/trend.js').AnnualStatement | null = null;
+    const a = p.annual;
+    if (a && typeof a === 'object') {
+      const last = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
+      const feYear = Number(a.fiscalYearEndYear) || last?.year || new Date().getFullYear();
+      const feMonth = Number(a.fiscalYearEndMonth) || last?.month || 1;
+      const sgaBreakdown: import('../types/trend.js').SgaBreakdownItem[] = Array.isArray(a.sgaBreakdown)
+        ? a.sgaBreakdown
+            .map((it: any) => ({ name: String(it?.name ?? '').trim(), amount: Number(it?.amount) || 0 }))
+            .filter((it: any) => it.name && it.amount !== 0)
+        : [];
+      annual = {
+        fiscalYearEndYear: feYear,
+        fiscalYearEndMonth: feMonth,
+        revenue: Number(a.revenue) || 0,
+        costOfSales: Number(a.costOfSales) || 0,
+        grossProfit: a.grossProfit != null ? Number(a.grossProfit) : (Number(a.revenue) || 0) - (Number(a.costOfSales) || 0),
+        sgaExpenses: Number(a.sgaExpenses) || 0,
+        operatingIncome: Number(a.operatingIncome) || 0,
+        ordinaryIncome: a.ordinaryIncome != null ? Number(a.ordinaryIncome) : (Number(a.operatingIncome) || 0),
+        netIncome: Number(a.netIncome) || 0,
+        depreciation: Number(a.depreciation) || 0,
+        interestExpense: Number(a.interestExpense) || 0,
+        cashAndDeposits: Number(a.cashAndDeposits) || 0,
+        currentAssets: Number(a.currentAssets) || 0,
+        currentLiabilities: Number(a.currentLiabilities) || 0,
+        totalAssets: Number(a.totalAssets) || 0,
+        netAssets: Number(a.netAssets) || 0,
+        accountsReceivable: a.accountsReceivable != null ? Number(a.accountsReceivable) : null,
+        inventory: a.inventory != null ? Number(a.inventory) : null,
+        accountsPayable: a.accountsPayable != null ? Number(a.accountsPayable) : null,
+        interestBearingDebt: Number(a.interestBearingDebt) || 0,
+        sgaBreakdown,
+      };
+      // 検算：期間残高の販管費計と内訳合計が乖離していたら注意喚起（自動補正はしない）
+      const breakdownSum = sgaBreakdown.reduce((s, it) => s + it.amount, 0);
+      if (annual.sgaExpenses > 0 && breakdownSum > 0) {
+        const diff = Math.abs(breakdownSum - annual.sgaExpenses);
+        if (diff > annual.sgaExpenses * 0.02) {
+          notes.push(`⚠ 販管費内訳の合計(${breakdownSum.toLocaleString()})が販管費計(${annual.sgaExpenses.toLocaleString()})と一致しません。取込結果をご確認ください。`);
+        }
+      }
     }
 
-    return { snapshots, annualSgaBreakdown, fiscalYearEnd, extractionNotes: p.extractionNotes || [] };
+    return { snapshots, annual, extractionNotes: notes };
   }
 
   /**

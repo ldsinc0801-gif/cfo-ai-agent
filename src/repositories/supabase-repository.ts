@@ -470,14 +470,11 @@ export async function saveTenantAnnualKpi(tenantId: TenantId, kpi: Record<string
   if (error) throw new Error(`年間KPIの保存に失敗: ${error.message}`);
 }
 
-/**
- * 販管費の科目別内訳（会計年度→内訳配列）を取得。無ければ null。
- * fiscalYear を渡すとその年度分のみ、省略すると全年度マップを返す。
- */
-export async function getSgaBreakdown(
-  tenantId: TenantId,
-  fiscalYear?: number,
-): Promise<import('../types/trend.js').SgaBreakdownItem[] | Record<string, import('../types/trend.js').SgaBreakdownItem[]> | null> {
+// 年間決算書（期間残高）は tenant_profile.sga_breakdown 列に
+// { "<期末年>": AnnualStatement, ... } の形で保存する（migration-025 で追加した jsonb 列を流用）。
+type AnnualStatementMap = Record<string, import('../types/trend.js').AnnualStatement>;
+
+async function getAnnualStatementMap(tenantId: TenantId): Promise<AnnualStatementMap | null> {
   const { data, error } = await getSupabase()
     .from('tenant_profile')
     .select('sga_breakdown')
@@ -485,28 +482,41 @@ export async function getSgaBreakdown(
     .single();
   if (error) {
     if (error.code === 'PGRST116') return null;
-    throw new Error(`販管費内訳の取得に失敗: ${error.message}`);
+    throw new Error(`年間決算書の取得に失敗: ${error.message}`);
   }
-  const map = (data?.sga_breakdown as Record<string, import('../types/trend.js').SgaBreakdownItem[]>) ?? null;
-  if (!map) return null;
-  if (fiscalYear === undefined) return map;
-  return map[String(fiscalYear)] ?? null;
+  return (data?.sga_breakdown as AnnualStatementMap) ?? null;
 }
 
-/** 販管費の科目別内訳を会計年度単位で保存（他の年度・会社情報は変更しない）。 */
-export async function saveSgaBreakdown(
+/** 年間決算書（期間残高）を会計年度指定で取得。無ければ null。 */
+export async function getAnnualStatement(
   tenantId: TenantId,
   fiscalYear: number,
-  items: import('../types/trend.js').SgaBreakdownItem[],
+): Promise<import('../types/trend.js').AnnualStatement | null> {
+  const map = await getAnnualStatementMap(tenantId);
+  return map?.[String(fiscalYear)] ?? null;
+}
+
+/** 保存済みの全会計年度の年間決算書を返す（前年比較用）。 */
+export async function listAnnualStatements(
+  tenantId: TenantId,
+): Promise<import('../types/trend.js').AnnualStatement[]> {
+  const map = await getAnnualStatementMap(tenantId);
+  if (!map) return [];
+  return Object.values(map).sort((a, b) => a.fiscalYearEndYear - b.fiscalYearEndYear);
+}
+
+/** 年間決算書（期間残高）を会計年度単位で保存（他の年度・会社情報は変更しない）。 */
+export async function saveAnnualStatement(
+  tenantId: TenantId,
+  statement: import('../types/trend.js').AnnualStatement,
 ): Promise<void> {
-  const existing = await getSgaBreakdown(tenantId);
-  const map = (existing && !Array.isArray(existing) ? existing : {}) as Record<string, import('../types/trend.js').SgaBreakdownItem[]>;
-  map[String(fiscalYear)] = items;
+  const map = (await getAnnualStatementMap(tenantId)) ?? {};
+  map[String(statement.fiscalYearEndYear)] = statement;
   const { error } = await getSupabase()
     .from('tenant_profile')
     .upsert({ tenant_id: tenantId, sga_breakdown: map, updated_at: new Date().toISOString() }, { onConflict: 'tenant_id' });
-  if (error) throw new Error(`販管費内訳の保存に失敗: ${error.message}`);
-  logger.info(`販管費内訳を保存: ${fiscalYear}年度 ${items.length}科目`);
+  if (error) throw new Error(`年間決算書の保存に失敗: ${error.message}`);
+  logger.info(`年間決算書を保存: ${statement.fiscalYearEndYear}年度 (販管費内訳${statement.sgaBreakdown.length}科目)`);
 }
 
 /** ロカベン6指標で選んだ業種・規模だけを保存（他の会社情報は変更しない）。 */

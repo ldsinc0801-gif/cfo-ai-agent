@@ -1,4 +1,4 @@
-import type { MonthlySnapshot } from '../../types/trend.js';
+import type { MonthlySnapshot, AnnualStatement } from '../../types/trend.js';
 
 /**
  * 取込データ(monthly_actuals)から「決算書として見せるべき年間値」を組み立てる。
@@ -126,6 +126,60 @@ function periodLabelOf(fig: AnnualFigures, monthly: boolean): string {
     return `${fig.fiscalYearEndYear}年${fig.fiscalYearEndMonth}月期`;
   }
   return `${fig.startYear}年${fig.startMonth}月〜${fig.fiscalYearEndYear}年${fig.fiscalYearEndMonth}月期`;
+}
+
+/** 保存済みの年間決算書(期間残高)を AnnualFigures に変換 */
+function figuresFromStatement(s: AnnualStatement): AnnualFigures {
+  const endOrd = s.fiscalYearEndYear * 12 + s.fiscalYearEndMonth;
+  const startOrd = endOrd - 11; // 12か月前提で開始月を逆算（ラベル用）
+  const startYear = Math.floor((startOrd - 1) / 12);
+  const startMonth = ((startOrd - 1) % 12) + 1;
+  return {
+    fiscalYearEndYear: s.fiscalYearEndYear,
+    fiscalYearEndMonth: s.fiscalYearEndMonth,
+    monthsInPeriod: 12,
+    startYear,
+    startMonth,
+    revenue: s.revenue,
+    costOfSales: s.costOfSales,
+    grossProfit: s.grossProfit,
+    sgaExpenses: s.sgaExpenses,
+    operatingIncome: s.operatingIncome,
+    ordinaryIncome: s.ordinaryIncome,
+    netIncome: s.netIncome,
+    depreciation: s.depreciation,
+    interestExpense: s.interestExpense,
+    cashAndDeposits: s.cashAndDeposits,
+    currentAssets: s.currentAssets,
+    currentLiabilities: s.currentLiabilities,
+    totalAssets: s.totalAssets,
+    netAssets: s.netAssets,
+    accountsReceivable: s.accountsReceivable,
+    inventory: s.inventory,
+    accountsPayable: s.accountsPayable,
+    interestBearingDebt: s.interestBearingDebt,
+  };
+}
+
+/**
+ * 保存済みの年間決算書（期間残高＝決算仕訳を含む確定値）からビューを組み立てる。
+ * これが最も正確。月度合算は決算整理仕訳を取りこぼすため使わない。
+ * @param statements 会計年度昇順
+ */
+export function buildViewFromAnnualStatements(statements: AnnualStatement[]): AnnualStatementView | null {
+  if (!statements || statements.length === 0) return null;
+  const sorted = [...statements].sort((a, b) => a.fiscalYearEndYear - b.fiscalYearEndYear);
+  const cur = sorted[sorted.length - 1];
+  const current = figuresFromStatement(cur);
+  const prevStmt = sorted.find((s) => s.fiscalYearEndYear === cur.fiscalYearEndYear - 1)
+    ?? (sorted.length >= 2 ? sorted[sorted.length - 2] : null);
+  const previous = prevStmt ? figuresFromStatement(prevStmt) : null;
+  return {
+    current,
+    previous,
+    isMonthlyData: false, // 期間残高そのもの（合算ではない）
+    periodLabel: periodLabelOf(current, true),
+  };
 }
 
 /**

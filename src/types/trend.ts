@@ -32,6 +32,39 @@ export interface SgaBreakdownItem {
   amount: number; // 期間残高（年間額）
 }
 
+/**
+ * 年間の決算書（期間残高＝会計期間の確定値）。
+ * 月次推移試算表の「期間残高」列(PL)・「期末残高/期間残高」列(BS)から直接抽出する。
+ * 各月度を合算する方式では決算整理仕訳（減価償却等・決算仕訳合計列）を取りこぼすため、
+ * 期間残高列を正としてこの構造に保存する。
+ */
+export interface AnnualStatement {
+  fiscalYearEndYear: number;   // 期末年
+  fiscalYearEndMonth: number;  // 期末月
+  // PL（期間残高）
+  revenue: number;
+  costOfSales: number;
+  grossProfit: number;
+  sgaExpenses: number;
+  operatingIncome: number;
+  ordinaryIncome: number;
+  netIncome: number;
+  depreciation: number;
+  interestExpense: number;
+  // BS（期末残高）
+  cashAndDeposits: number;
+  currentAssets: number;
+  currentLiabilities: number;
+  totalAssets: number;
+  netAssets: number;
+  accountsReceivable: number | null;
+  inventory: number | null;
+  accountsPayable: number | null;
+  interestBearingDebt: number;
+  // 販管費の科目別内訳（期間残高）
+  sgaBreakdown: SgaBreakdownItem[];
+}
+
 /** 月次目標データ */
 export interface MonthlyTarget {
   year: number;

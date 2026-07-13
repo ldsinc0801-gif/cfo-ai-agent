@@ -19,7 +19,7 @@ import { renderPlanHTML } from './plan-renderer.js';
 import { renderFinanceAgentHTML, renderAccountingAgentHTML, renderFundingAgentHTML } from './agent-pages.js';
 import { computeImportedMetrics } from '../domain/finance/imported-metrics.js';
 import { buildRatingInputFromSnapshots } from '../domain/finance/imported-rating.js';
-import { buildAnnualStatementView } from '../domain/finance/annual-view.js';
+import { buildAnnualStatementView, buildViewFromAnnualStatements } from '../domain/finance/annual-view.js';
 import { applySimParamsToSnapshots } from '../domain/finance/plan-simulation.js';
 import { forecastCashflow } from '../domain/finance/cashflow-forecast.js';
 import { renderFinanceDataEditHTML } from './finance-data-edit-page.js';
@@ -1786,7 +1786,7 @@ app.post('/agent/finance/upload-trend', upload.array('files', 10), async (req, r
     const { text, names } = await readUploadedFilesAsText(files);
     const sourceName = names.join(', ');
 
-    const { snapshots, annualSgaBreakdown, fiscalYearEnd, extractionNotes } = await anthropicService.extractMonthlyTrend(text, sourceName);
+    const { snapshots, annual, extractionNotes } = await anthropicService.extractMonthlyTrend(text, sourceName);
     if (snapshots.length === 0) {
       res.redirect('/?upload_error=' + encodeURIComponent('月次データを抽出できませんでした'));
       return;
@@ -1794,15 +1794,15 @@ app.post('/agent/finance/upload-trend', upload.array('files', 10), async (req, r
     for (const s of snapshots) {
       await repo.upsertMonthlyActual(tenantId, s);
     }
-    // 販管費の科目別内訳（期間残高＝年間値）を会計年度単位で保存
-    if (annualSgaBreakdown.length > 0 && fiscalYearEnd) {
+    // 年間決算書（期間残高＝会計期間の確定値。決算仕訳を含む）を保存
+    if (annual) {
       try {
-        await repo.saveSgaBreakdown(tenantId, fiscalYearEnd.year, annualSgaBreakdown);
+        await repo.saveAnnualStatement(tenantId, annual);
       } catch (e) {
-        logger.warn('販管費内訳の保存に失敗（本体は保存済み）', e);
+        logger.warn('年間決算書の保存に失敗（月次本体は保存済み）', e);
       }
     }
-    logger.info(`月次推移保存: ${snapshots.length}か月分 (${sourceName}), 販管費内訳${annualSgaBreakdown.length}科目`);
+    logger.info(`月次推移保存: ${snapshots.length}か月分 (${sourceName}), 年間決算書=${annual ? `${annual.fiscalYearEndYear}年度(販管費${annual.sgaBreakdown.length}科目)` : 'なし'}`);
 
     clearCache();
     const noteParam = extractionNotes.length > 0 ? '&notes=' + encodeURIComponent(extractionNotes.join('; ')) : '';
@@ -2997,52 +2997,48 @@ async function fetchLatestSgaBreakdown(tenantId?: TenantId): Promise<ExpenseBrea
   }
 }
 
-/**
- * 取込CSV由来の販管費内訳（期間残高＝年間値）を会計年度指定で取得する。
- * migration-025 未適用や未取込なら null。
- */
-async function fetchStoredSgaBreakdown(
-  tenantId: TenantId | undefined,
-  fiscalYear: number,
-): Promise<ExpenseBreakdownItem[] | null> {
-  if (!tenantId || !isSupabaseAvailable()) return null;
-  try {
-    const items = await repo.getSgaBreakdown(tenantId, fiscalYear);
-    if (Array.isArray(items) && items.length > 0) {
-      return items.map((i) => ({ name: i.name, amount: i.amount }));
-    }
-    return null;
-  } catch (e) {
-    logger.warn('販管費内訳(保存済み)の取得に失敗', e);
-    return null;
-  }
-}
-
 // 決算書ビューア（取り込んだPL/BSを見やすく表示 + 販管費内訳 + 推移グラフ）
 app.get('/finance/statements', async (req, res) => {
   try {
     const tid = getActiveTenantId(req);
     const snapshots = tid ? await repo.getAllMonthlyActuals(asTenantId(tid)) : [];
-    if (snapshots.length === 0) {
-      res.send(renderNoDataPage('決算書ビューア', '表示できる決算データがありません。ダッシュボードやfreee連携で決算書・試算表を取り込んでください。'));
-      return;
+
+    // 最優先：取込CSVの「期間残高」列から保存した年間決算書（決算仕訳を含む確定値）
+    let annualStatements: import('../types/trend.js').AnnualStatement[] = [];
+    if (tid && isSupabaseAvailable()) {
+      try { annualStatements = await repo.listAnnualStatements(asTenantId(tid)); } catch (e) { logger.warn('年間決算書の取得に失敗', e); }
     }
-    const fiscalMonth = await fetchFiscalMonth(req);
-    const view = buildAnnualStatementView(snapshots, fiscalMonth);
-    if (!view) {
-      res.send(renderNoDataPage('決算書ビューア', '表示できる決算データがありません。'));
-      return;
-    }
-    // 販管費の科目別内訳：取込CSV由来を最優先、無ければfreeeライブ取得をフォールバック
-    let expenseBreakdown = await fetchStoredSgaBreakdown(tid || undefined, view.current.fiscalYearEndYear);
-    let breakdownSource: 'csv' | 'freee' | null = expenseBreakdown && expenseBreakdown.length > 0 ? 'csv' : null;
-    if (!breakdownSource) {
+
+    let view = buildViewFromAnnualStatements(annualStatements);
+    let breakdownSource: 'csv' | 'freee' | null = null;
+    let expenseBreakdown: ExpenseBreakdownItem[] | null = null;
+
+    if (view) {
+      // 期間残高ベース（正）。販管費内訳も同じ年間決算書から。
+      const cur = annualStatements.find(s => s.fiscalYearEndYear === view!.current.fiscalYearEndYear);
+      if (cur && cur.sgaBreakdown.length > 0) {
+        expenseBreakdown = cur.sgaBreakdown.map(i => ({ name: i.name, amount: i.amount }));
+        breakdownSource = 'csv';
+      }
+    } else {
+      // フォールバック：年間決算書が未保存の旧データは月次合算で近似（決算仕訳は含まれない点に注意）
+      if (snapshots.length === 0) {
+        res.send(renderNoDataPage('決算書ビューア', '表示できる決算データがありません。ダッシュボードで月次推移試算表（CSV）を取り込んでください。'));
+        return;
+      }
+      const fiscalMonth = await fetchFiscalMonth(req);
+      view = buildAnnualStatementView(snapshots, fiscalMonth);
+      if (!view) {
+        res.send(renderNoDataPage('決算書ビューア', '表示できる決算データがありません。'));
+        return;
+      }
       const freeeBreakdown = await fetchLatestSgaBreakdown(tid || undefined);
       if (freeeBreakdown && freeeBreakdown.length > 0) {
         expenseBreakdown = freeeBreakdown;
         breakdownSource = 'freee';
       }
     }
+
     res.send(renderStatementsHTML({
       view,
       snapshots,

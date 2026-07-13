@@ -87,13 +87,16 @@ function renderBody(data: StatementsViewData): string {
   const sorted = [...data.snapshots].sort((a, b) =>
     a.year !== b.year ? a.year - b.year : a.month - b.month);
 
-  // 年間合算した旨のバナー（月次取込のとき）
+  // 表示している年間値の出所バナー
   const annualBanner = view.isMonthlyData
-    ? `<div class="stmt-banner">
-        <strong>期間残高（年間）</strong>で表示しています。取り込んだ月次データ${cur.monthsInPeriod}か月分を合算した会計期間の確定値です（PLは合算、BSは期末残高）。
-        ${prev ? '' : '<br><span class="stmt-banner-sub">前期（前年度）の月次データが揃っていないため、PLの前期比は表示していません。</span>'}
+    ? `<div class="stmt-banner stmt-banner--warn">
+        <strong>年間概算（月次合算）</strong>で表示しています。取り込んだ月次データ${cur.monthsInPeriod}か月分を合算した値のため、<strong>決算整理仕訳（減価償却など）が反映されていません</strong>。正確な決算値を表示するには、月次推移試算表（CSV）を取り込み直してください（「期間残高」列から確定値を保存します）。
+        ${prev ? '' : '<br><span class="stmt-banner-sub">前期（前年度）のデータが無いため、前期比は表示していません。</span>'}
       </div>`
-    : '';
+    : `<div class="stmt-banner">
+        <strong>期間残高（年間確定値）</strong>で表示しています。取り込んだ決算書の「期間残高／期末残高」列（決算整理仕訳を含む会計期間の確定値）です。
+        ${prev ? '' : '<br><span class="stmt-banner-sub">前期（前年度）のデータが無いため、前期比は表示していません。</span>'}
+      </div>`;
 
   // --- 主要指標 ---
   const equityRatio = pct(cur.netAssets, cur.totalAssets);
@@ -305,6 +308,8 @@ const STATEMENTS_CSS = `<style>
 .stmt-wrap{display:flex;flex-direction:column;gap:20px;max-width:1200px}
 .stmt-banner{background:var(--primary-light);border:1px solid var(--primary);border-radius:var(--radius);padding:12px 16px;font-size:13px;color:var(--text)}
 .stmt-banner strong{color:var(--primary)}
+.stmt-banner--warn{background:#fff7ed;border-color:#f59e0b}
+.stmt-banner--warn strong{color:#b45309}
 .stmt-banner-sub{color:var(--text2);font-size:12px}
 .stmt-kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
 .stmt-kpi{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px}
