@@ -41,6 +41,17 @@ export function buildRatingInputFromAnnual(
   const prev = sorted.find((s) => s.fiscalYearEndYear === cur.fiscalYearEndYear - 1)
     ?? (sorted.length >= 2 ? sorted[sorted.length - 2] : null);
 
+  // 集約値(depreciation/interestExpense)が0のとき、明細(sgaBreakdown/plLines)から拾って補完する。
+  // freee抽出で集約フィールドが0になっても、内訳には金額が入っているため。
+  const lineAmt = (kw: string): number => {
+    const fromSga = (cur.sgaBreakdown || []).find((i) => i.name.includes(kw));
+    if (fromSga) return Math.abs(fromSga.amount);
+    const fromPl = (cur.plLines || []).find((l) => l.name.includes(kw));
+    return fromPl ? Math.abs(fromPl.amount) : 0;
+  };
+  const depreciation = cur.depreciation > 0 ? cur.depreciation : lineAmt('減価償却');
+  const interestExpense = cur.interestExpense > 0 ? cur.interestExpense : lineAmt('支払利息');
+
   // 年間BSが未取得(総資産0)なら最新スナップショットのBSにフォールバック
   const latestSnap = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
   const useBs = (cur.totalAssets > 0 || !latestSnap) ? {
@@ -68,9 +79,9 @@ export function buildRatingInputFromAnnual(
     operatingIncome: cur.operatingIncome,
     ordinaryIncome: cur.ordinaryIncome,
     netIncome: cur.netIncome,
-    interestExpense: cur.interestExpense,
+    interestExpense,
     interestIncome: 0,
-    depreciation: cur.depreciation,
+    depreciation,
     // 前期（前年度の年間決算書があれば成長性を採点）
     prevOrdinaryIncome: prev ? prev.ordinaryIncome : null,
     prevTotalAssets: prev ? prev.totalAssets : null,

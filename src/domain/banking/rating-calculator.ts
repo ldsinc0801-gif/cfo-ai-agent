@@ -274,12 +274,21 @@ function calcDebtRepaymentYears(input: RatingInput): RatingMetric {
 
 function calcInterestCoverageRatio(input: RatingInput): RatingMetric {
   const numerator = input.operatingIncome + input.interestIncome;
+  // 有利子負債があるのに支払利息が0＝データ欠落。満点(良好)にせず、算定不可として0点にする。
+  const missingInterest = input.interestExpense <= 0 && input.interestBearingDebt > 0;
   const value = input.interestExpense > 0 ? numerator / input.interestExpense : null;
-  const { score, level } = scoreICR(value);
+  let score: number;
+  let level: MetricLevel;
+  if (missingInterest) {
+    score = 0; level = 'warning';
+  } else {
+    ({ score, level } = scoreICR(value));
+  }
   return {
     id: 'interest_coverage', name: 'インタレストカバレッジレシオ', category: 'repayment',
     value, unit: '倍', score, maxScore: 15, level,
-    comment: value === null ? '支払利息がないため算出不可（良好）' :
+    comment: missingInterest ? '有利子負債があるのに支払利息が未取得のため算定不可（決算書の取込を確認してください）' :
+             value === null ? '有利子負債が無く利息負担なし（良好）' :
              value >= 10 ? '利息支払能力は極めて高い' :
              value >= 3 ? '利息支払に十分な利益を確保している' :
              value >= 1 ? '利息支払がギリギリの水準' :
