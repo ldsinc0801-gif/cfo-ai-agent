@@ -297,7 +297,13 @@ JSONのみ返してください。`;
 - 利益は赤字ならマイナスのまま採用（この会社が赤字/債務超過ならマイナスで正しい）。
 - sgaBreakdown＝販売費及び一般管理費の科目別内訳。**期間残高列**の金額で、役員報酬・法定福利費・外注費・広告宣伝費・地代家賃・減価償却費など各科目を1行ずつ。合計行（販売管理費 計）は含めない。金額0は除外。
 - fiscalYearEndYear/Month＝会計期間の期末年月（最後の月度＝期末月）。
-- **詳細な決算書用**に plLines（PL全明細）・bsLines（BS全明細）も出力する。各行 { category（勘定科目カテゴリー：売上高/売上原価/販売管理費/営業外収益/営業外費用/特別利益/特別損失 や 流動資産/固定資産/繰延資産/流動負債/固定負債/純資産 など）, name（勘定科目名）, amount（PLは期間残高列・BSは期末残高列）, adjustment（**その科目の「決算仕訳合計」列の金額**。減価償却費など期末調整のみの科目はここに入る。無ければ0） }。**小計/合計行（勘定科目名が空、または「〜計」「〜合計」「売上総損益」「営業損益」「経常損益」等）は含めない**（リーフ科目のみ）。金額0（かつadjustmentも0）の科目は除外。補助科目の重複行は入れない。BSが資料に無ければ bsLines は空配列。
+- **詳細な決算書用**に plLines（PL全明細）・bsLines（BS全明細）も出力する。各行 { category, name, amount, beforeAdjustment }。
+  - category＝勘定科目カテゴリー（売上高/売上原価/販売管理費/営業外収益/営業外費用/特別利益/特別損失 や 流動資産/固定資産/繰延資産/流動負債/固定負債/純資産 など）。name＝勘定科目名。
+  - **amount＝一番右の「期間残高」列の金額**（会計期間の確定値）。
+  - **beforeAdjustment＝決算整理仕訳を反映する前の値**。
+    - PL科目：各月度の発生額の合計（＝「期間残高」から「決算仕訳合計」列を引いた値）。減価償却費など期末計上のみの科目は0になる。
+    - BS科目：**期末月（一番右の月度列。例:4月度）の残高**。「決算仕訳残高」列ではない。例：車両運搬具が7月に取得され4月度残高1,799,559なら beforeAdjustment=1,799,559、amount(期間残高)=299,927。
+  - **小計/合計行（勘定科目名が空、または「〜計」「〜合計」「売上総損益」「営業損益」「経常損益」等）は含めない**（リーフ科目のみ）。amountもbeforeAdjustmentも0の科目は除外。補助科目の重複行は入れない。BSが資料に無ければ bsLines は空配列。
 
 【出力JSON】
 {
@@ -317,8 +323,8 @@ JSONのみ返してください。`;
     "totalAssets": 期末の総資産, "netAssets": 期末の純資産, "interestBearingDebt": 期末の有利子負債,
     "accountsReceivable": 期末の売上債権, "inventory": 期末の棚卸資産, "accountsPayable": 期末の仕入債務,
     "sgaBreakdown": [ { "name": "役員報酬", "amount": 220000 }, { "name": "外注費", "amount": 7134216 } ],
-    "plLines": [ { "category": "売上高", "name": "売上高", "amount": 196867630, "adjustment": 0 }, { "category": "販売管理費", "name": "減価償却費", "amount": 1751032, "adjustment": 1751032 } ],
-    "bsLines": [ { "category": "流動資産", "name": "現金預金", "amount": 5903835, "adjustment": 0 }, { "category": "固定負債", "name": "長期借入金", "amount": 32122000, "adjustment": 0 } ]
+    "plLines": [ { "category": "売上高", "name": "売上高", "amount": 196867630, "beforeAdjustment": 196867630 }, { "category": "販売管理費", "name": "減価償却費", "amount": 1751032, "beforeAdjustment": 0 } ],
+    "bsLines": [ { "category": "固定資産", "name": "車両運搬具", "amount": 299927, "beforeAdjustment": 1799559 }, { "category": "固定負債", "name": "長期借入金", "amount": 32122000, "beforeAdjustment": 32122000 } ]
   },
   "extractionNotes": ["注意点"]
 }
@@ -380,8 +386,12 @@ JSONのみ返してください。`;
         : [];
       const toLines = (arr: any): import('../types/trend.js').StatementLine[] => Array.isArray(arr)
         ? arr
-            .map((it: any) => ({ category: String(it?.category ?? '').trim(), name: String(it?.name ?? '').trim(), amount: Number(it?.amount) || 0, adjustment: Number(it?.adjustment) || 0 }))
-            .filter((it: any) => it.name && (it.amount !== 0 || it.adjustment !== 0))
+            .map((it: any) => {
+              const amount = Number(it?.amount) || 0;
+              const before = it?.beforeAdjustment != null ? Number(it.beforeAdjustment) || 0 : amount;
+              return { category: String(it?.category ?? '').trim(), name: String(it?.name ?? '').trim(), amount, beforeAdjustment: before };
+            })
+            .filter((it: any) => it.name && (it.amount !== 0 || it.beforeAdjustment !== 0))
         : [];
       const plLines = toLines(a.plLines);
       const bsLines = toLines(a.bsLines);

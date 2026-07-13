@@ -377,40 +377,40 @@ function adjCell(v: number): string {
 function linesOf(lines: StatementLine[], cats: string[]): StatementLine[] {
   return lines.filter(l => cats.some(c => l.category.includes(c)));
 }
-/** カテゴリ小計（期間残高・決算整理仕訳） */
-function aggOf(lines: StatementLine[], cats: string[]): { amount: number; adj: number } {
+/** カテゴリ小計（決算整理前・期間残高） */
+function aggOf(lines: StatementLine[], cats: string[]): { amount: number; before: number } {
   return linesOf(lines, cats).reduce(
-    (a, l) => ({ amount: a.amount + l.amount, adj: a.adj + (l.adjustment ?? 0) }),
-    { amount: 0, adj: 0 },
+    (a, l) => ({ amount: a.amount + l.amount, before: a.before + (l.beforeAdjustment ?? l.amount) }),
+    { amount: 0, before: 0 },
   );
 }
 
-/** 明細行（3列：月次累計 / 決算整理仕訳 / 期間残高） */
-function detailLine3(i: StatementLine): string {
-  const adj = i.adjustment ?? 0;
-  return `<tr class="dstmt-row">
-    <td class="dstmt-name">${esc(i.name)}</td>
-    <td class="dstmt-amt">${dyen(i.amount - adj)}</td>
+/** 3列行の共通描画（決算整理前 / 決算整理仕訳=amount−before / 期間残高） */
+function row3(label: string, before: number, amount: number, cls: string, nameCls = 'dstmt-name'): string {
+  const adj = amount - before;
+  return `<tr class="${cls}">
+    <td class="${nameCls}">${esc(label)}</td>
+    <td class="dstmt-amt">${dyen(before)}</td>
     ${adjCell(adj)}
-    <td class="dstmt-amt dstmt-period-col">${dyen(i.amount)}</td>
+    <td class="dstmt-amt dstmt-period-col">${dyen(amount)}</td>
   </tr>`;
+}
+function detailLine3(i: StatementLine): string {
+  return row3(i.name, i.beforeAdjustment ?? i.amount, i.amount, 'dstmt-row');
 }
 function catRow3(title: string): string {
   return `<tr class="dstmt-cat"><td colspan="4">${esc(title)}</td></tr>`;
 }
-function subtotalRow3(title: string, amount: number, adj: number): string {
-  return `<tr class="dstmt-subtotal"><td>${esc(title)} 計</td><td class="dstmt-amt">${dyen(amount - adj)}</td>${adjCell(adj)}<td class="dstmt-amt dstmt-period-col">${dyen(amount)}</td></tr>`;
-}
 /** カテゴリ節（見出し＋明細＋小計） */
-function section3(title: string, items: StatementLine[], sub: { amount: number; adj: number }): string {
+function section3(title: string, items: StatementLine[], sub: { amount: number; before: number }): string {
   const rows = items.length
     ? items.map(detailLine3).join('')
     : '<tr class="dstmt-row"><td class="dstmt-name" style="color:#9ca3af">（明細なし）</td><td class="dstmt-amt">—</td><td class="dstmt-adj dstmt-adj--zero">—</td><td class="dstmt-amt dstmt-period-col">—</td></tr>';
-  return `${catRow3(title)}${rows}${subtotalRow3(title, sub.amount, sub.adj)}`;
+  return `${catRow3(title)}${rows}${row3(`${title} 計`, sub.before, sub.amount, 'dstmt-subtotal', '')}`;
 }
-/** 利益・合計行（3列。期間残高は確定値、決算整理仕訳から月次累計を逆算） */
-function profitRow3(label: string, periodAmount: number, adj: number): string {
-  return `<tr class="dstmt-profit"><td>${esc(label)}</td><td class="dstmt-amt">${dyen(periodAmount - adj)}</td>${adjCell(adj)}<td class="dstmt-amt dstmt-period-col">${dyen(periodAmount)}</td></tr>`;
+/** 利益・合計行（期間残高は確定値、決算整理前から差を表示） */
+function profitRow3(label: string, periodAmount: number, before: number): string {
+  return row3(label, before, periodAmount, 'dstmt-profit', '');
 }
 
 export function renderStatementsDetailHTML(s: AnnualStatement, companyName?: string): string {
@@ -427,25 +427,25 @@ export function renderStatementsDetailHTML(s: AnnualStatement, companyName?: str
   const cExI = aggOf(pl, ['特別利益']);
   const cExL = aggOf(pl, ['特別損失']);
   const cTax = aggOf(pl, ['法人税']);
-  // 利益段階の決算整理仕訳（各段の演算をadj列に適用）
-  const grossAdj = cSales.adj - cCogs.adj;
-  const opAdj = grossAdj - cSga.adj;
-  const ordAdj = opAdj + cNoi.adj - cNoe.adj;
-  const niAdj = ordAdj + cExI.adj - cExL.adj - cTax.adj;
+  // 利益段階の決算整理前の値（各段の演算をbefore列に適用）
+  const grossBefore = cSales.before - cCogs.before;
+  const opBefore = grossBefore - cSga.before;
+  const ordBefore = opBefore + cNoi.before - cNoe.before;
+  const niBefore = ordBefore + cExI.before - cExL.before - cTax.before;
 
   const plBody = `
-    ${section3('売上高', linesOf(pl, ['売上高']), { amount: s.revenue, adj: cSales.adj })}
-    ${section3('売上原価', linesOf(pl, ['売上原価', '原価']), { amount: s.costOfSales, adj: cCogs.adj })}
-    ${profitRow3('売上総利益', s.grossProfit, grossAdj)}
-    ${section3('販売費及び一般管理費', linesOf(pl, ['販売管理費', '販売費及び一般管理費']), { amount: s.sgaExpenses, adj: cSga.adj })}
-    ${profitRow3('営業利益', s.operatingIncome, opAdj)}
+    ${section3('売上高', linesOf(pl, ['売上高']), { amount: s.revenue, before: cSales.before })}
+    ${section3('売上原価', linesOf(pl, ['売上原価', '原価']), { amount: s.costOfSales, before: cCogs.before })}
+    ${profitRow3('売上総利益', s.grossProfit, grossBefore)}
+    ${section3('販売費及び一般管理費', linesOf(pl, ['販売管理費', '販売費及び一般管理費']), { amount: s.sgaExpenses, before: cSga.before })}
+    ${profitRow3('営業利益', s.operatingIncome, opBefore)}
     ${cNoi.amount !== 0 ? section3('営業外収益', linesOf(pl, ['営業外収益']), cNoi) : ''}
     ${cNoe.amount !== 0 ? section3('営業外費用', linesOf(pl, ['営業外費用']), cNoe) : ''}
-    ${profitRow3('経常利益', s.ordinaryIncome, ordAdj)}
+    ${profitRow3('経常利益', s.ordinaryIncome, ordBefore)}
     ${cExI.amount !== 0 ? section3('特別利益', linesOf(pl, ['特別利益']), cExI) : ''}
     ${cExL.amount !== 0 ? section3('特別損失', linesOf(pl, ['特別損失']), cExL) : ''}
-    ${cTax.amount !== 0 ? profitRow3('法人税等', cTax.amount, cTax.adj) : ''}
-    ${profitRow3('当期純利益', s.netIncome, niAdj)}
+    ${cTax.amount !== 0 ? profitRow3('法人税等', cTax.amount, cTax.before) : ''}
+    ${profitRow3('当期純利益', s.netIncome, niBefore)}
   `;
 
   // --- BS 各カテゴリ ---
@@ -455,27 +455,27 @@ export function renderStatementsDetailHTML(s: AnnualStatement, companyName?: str
   const bCl = aggOf(bs, ['流動負債']);
   const bFl = aggOf(bs, ['固定負債']);
   const bEq = aggOf(bs, ['純資産', '資本']);
-  const assetAdj = bCa.adj + bFa.adj + bDa.adj;
-  const liabAdj = bCl.adj + bFl.adj;
+  const assetBefore = bCa.before + bFa.before + bDa.before;
+  const liabBefore = bCl.before + bFl.before;
   const totalLiab = s.totalAssets - s.netAssets;
 
   const assetsBody = `
     ${section3('流動資産', linesOf(bs, ['流動資産']), bCa)}
     ${section3('固定資産', linesOf(bs, ['固定資産']), bFa)}
     ${linesOf(bs, ['繰延資産']).length ? section3('繰延資産', linesOf(bs, ['繰延資産']), bDa) : ''}
-    ${profitRow3('資産合計', s.totalAssets, assetAdj)}
+    ${profitRow3('資産合計', s.totalAssets, assetBefore)}
   `;
   const liabBody = `
     ${section3('流動負債', linesOf(bs, ['流動負債']), bCl)}
     ${section3('固定負債', linesOf(bs, ['固定負債']), bFl)}
-    ${profitRow3('負債合計', totalLiab, liabAdj)}
-    ${section3('純資産', linesOf(bs, ['純資産', '資本']), { amount: s.netAssets, adj: bEq.adj })}
-    ${profitRow3('負債・純資産合計', s.totalAssets, assetAdj)}
+    ${profitRow3('負債合計', totalLiab, liabBefore)}
+    ${section3('純資産', linesOf(bs, ['純資産', '資本']), { amount: s.netAssets, before: bEq.before })}
+    ${profitRow3('負債・純資産合計', s.totalAssets, liabBefore + bEq.before)}
   `;
 
   const noPl = pl.length === 0;
   const noBs = bs.length === 0;
-  const thead = `<thead><tr><th>科目</th><th class="dstmt-amt">月次累計</th><th class="dstmt-adj">決算整理仕訳</th><th class="dstmt-amt dstmt-period-col">期間残高</th></tr></thead>`;
+  const thead = `<thead><tr><th>科目</th><th class="dstmt-amt">決算整理前</th><th class="dstmt-adj">決算整理仕訳</th><th class="dstmt-amt dstmt-period-col">期間残高</th></tr></thead>`;
 
   const body = `
   <div class="dstmt-wrap">
@@ -484,8 +484,8 @@ export function renderStatementsDetailHTML(s: AnnualStatement, companyName?: str
       <span class="dstmt-period">${esc(period)}</span>
     </div>
     <div class="dstmt-legend">
-      <strong>月次累計</strong>（各月度の合計）＋<strong>決算整理仕訳</strong>（減価償却など期末調整）＝<strong>期間残高</strong>（会計期間の確定値）。
-      決算整理仕訳は月度には現れないため、この列で差を明示しています。
+      <strong>決算整理前</strong>（PLは各月度の合計、BSは期末月の残高）＋<strong>決算整理仕訳</strong>（減価償却など期末調整）＝<strong>期間残高</strong>（会計期間の確定値）。
+      例：車両運搬具は期末月残高（取得価額）→減価償却の決算整理→期間残高（帳簿価額）と表示されます。
     </div>
     ${(noPl && noBs)
       ? `<div class="dstmt-card"><div class="dstmt-empty">詳細明細がまだ取り込まれていません。月次推移試算表（損益計算書・貸借対照表のCSV）を取り込み直すと、全科目の詳細な決算書が表示されます。</div></div>`

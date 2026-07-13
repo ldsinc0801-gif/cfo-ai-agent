@@ -34,10 +34,11 @@ export interface SgaBreakdownItem {
 
 /** 決算書の明細1行（詳細な決算書ビュー用）。カテゴリ別のリーフ科目のみ。 */
 export interface StatementLine {
-  category: string;    // 勘定科目カテゴリー（例: 売上高 / 販売管理費 / 流動資産 / 固定負債 / 純資産）
-  name: string;        // 勘定科目名（例: 売掛金）
-  amount: number;      // PLは期間残高、BSは期末残高（＝月次累計＋決算整理仕訳）
-  adjustment?: number; // 決算整理仕訳（「決算仕訳合計」列）。月次累計 = amount − adjustment。無ければ0
+  category: string;         // 勘定科目カテゴリー（例: 売上高 / 販売管理費 / 流動資産 / 固定負債 / 純資産）
+  name: string;             // 勘定科目名（例: 売掛金 / 車両運搬具）
+  amount: number;           // 期間残高（会計期間の確定値）。PLは年間発生額、BSは期末残高
+  beforeAdjustment?: number; // 決算整理仕訳を反映する前の値。PLは各月度の合計、BSは期末月(最終月度)の残高。
+                             // 決算整理仕訳による増減 = amount − beforeAdjustment。無ければ amount と同じ。
 }
 
 /**
