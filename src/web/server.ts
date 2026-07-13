@@ -18,7 +18,7 @@ import { renderReportHTML } from './html-renderer.js';
 import { renderPlanHTML } from './plan-renderer.js';
 import { renderFinanceAgentHTML, renderAccountingAgentHTML, renderFundingAgentHTML } from './agent-pages.js';
 import { computeImportedMetrics } from '../domain/finance/imported-metrics.js';
-import { buildRatingInputFromSnapshots } from '../domain/finance/imported-rating.js';
+import { buildRatingInputFromSnapshots, buildRatingInputFromAnnual } from '../domain/finance/imported-rating.js';
 import { buildAnnualStatementView, buildViewFromAnnualStatements } from '../domain/finance/annual-view.js';
 import { applySimParamsToSnapshots } from '../domain/finance/plan-simulation.js';
 import { forecastCashflow } from '../domain/finance/cashflow-forecast.js';
@@ -1151,7 +1151,10 @@ app.get('/', async (req, res) => {
         try {
           const snapshots = await repo.getAllMonthlyActuals(tenantIdForDash);
           if (snapshots.length > 0) {
-            res.send(renderUploadedDashboard(snapshots, req));
+            let annualStmts: import('../types/trend.js').AnnualStatement[] = [];
+            try { annualStmts = await repo.listAnnualStatements(tenantIdForDash); } catch { /* 未取込なら空 */ }
+            const latestAnnual = annualStmts.length > 0 ? annualStmts[annualStmts.length - 1] : null;
+            res.send(renderUploadedDashboard(snapshots, req, latestAnnual));
             return;
           }
         } catch (e) {
@@ -1644,7 +1647,14 @@ app.get('/agent/finance', async (req, res) => {
     const finTid = getActiveTenantId(req);
     if (finTid) {
       const snapshots = await repo.getAllMonthlyActuals(asTenantId(finTid));
-      const input = buildRatingInputFromSnapshots(snapshots);
+      // 期間残高(年間確定値)があれば正として採用。無ければ月次合算にフォールバック。
+      let annualStmts: import('../types/trend.js').AnnualStatement[] = [];
+      if (isSupabaseAvailable()) {
+        try { annualStmts = await repo.listAnnualStatements(asTenantId(finTid)); } catch { /* 未取込なら空 */ }
+      }
+      const input = annualStmts.length > 0
+        ? buildRatingInputFromAnnual(annualStmts, snapshots)
+        : buildRatingInputFromSnapshots(snapshots);
       if (input) {
         const rating = calculateBankRating(input);
         const additional = calculateAdditionalMetrics(input);
@@ -2875,7 +2885,10 @@ async function getDeepDiveContext(req: express.Request): Promise<{ industry: str
     try {
       const profile = await repo.getTenantProfile(asTenantId(tid));
       industry = profile.industry || '';
-      const m = computeImportedMetrics(await repo.getAllMonthlyActuals(asTenantId(tid)));
+      const ddSnaps = await repo.getAllMonthlyActuals(asTenantId(tid));
+      let ddAnnual: import('../types/trend.js').AnnualStatement | null = null;
+      try { const l = await repo.listAnnualStatements(asTenantId(tid)); ddAnnual = l.length > 0 ? l[l.length - 1] : null; } catch { /* 未取込 */ }
+      const m = computeImportedMetrics(ddSnaps, ddAnnual);
       if (m) {
         context = `自己資本比率 ${m.equityRatio ?? '-'}% / 経常利益率 ${m.ordinaryMargin ?? '-'}% / 現預金月商倍率 ${m.cashMonthsRatio ?? '-'}か月 / 債務償還年数 ${m.debtRepaymentYears ?? '-'}年 / 借入依存度 ${m.interestDependency ?? '-'}%`;
       }
@@ -2958,7 +2971,18 @@ app.get('/agent/funding', async (req, res) => {
         loanDetails = await repo.listLoanDetails(asTenantId(tid));
       }
     }
-    metrics = computeImportedMetrics(snapshots);
+    // 期間残高(年間確定値)があれば指標の年間項目はそれを正とする
+    let fundingAnnual: import('../types/trend.js').AnnualStatement | null = null;
+    if (!demo && isSupabaseAvailable()) {
+      const tid = getActiveTenantId(req);
+      if (tid) {
+        try {
+          const list = await repo.listAnnualStatements(asTenantId(tid));
+          fundingAnnual = list.length > 0 ? list[list.length - 1] : null;
+        } catch { /* 未取込なら null */ }
+      }
+    }
+    metrics = computeImportedMetrics(snapshots, fundingAnnual);
     forecast = forecastCashflow(snapshots);
   } catch (e) {
     logger.error('資金調達: 取込指標/資金繰り予測の計算に失敗', e);
@@ -4447,11 +4471,38 @@ document.querySelectorAll('.upload-dropzone').forEach(function(dz){
  * - 1件のみ → 単月スナップショット表示（推移グラフは出ない）
  * - 複数月 → トレンドグラフ + 最新月の主要KPI
  */
-function renderUploadedDashboard(snapshots: import('../types/trend.js').MonthlySnapshot[], req: express.Request): string {
+function renderUploadedDashboard(
+  snapshots: import('../types/trend.js').MonthlySnapshot[],
+  req: express.Request,
+  annual?: import('../types/trend.js').AnnualStatement | null,
+): string {
   const csrf = req.session.csrfToken || '';
   const fmt = (n: number) => new Intl.NumberFormat('ja-JP').format(Math.round(n));
   const latest = snapshots[snapshots.length - 1];
   const isSingle = snapshots.length === 1;
+
+  // 年間決算書（期間残高）があれば、KPIは単月ではなく年間確定値を表示する
+  const kpi = annual ? {
+    revenueLabel: `${annual.fiscalYearEndYear}年${annual.fiscalYearEndMonth}月期 売上高（年間）`,
+    revenue: annual.revenue,
+    operatingIncome: annual.operatingIncome,
+    ordinaryIncome: annual.ordinaryIncome,
+    cashAndDeposits: annual.cashAndDeposits,
+    totalAssets: annual.totalAssets,
+    netAssets: annual.netAssets,
+    currentAssets: annual.currentAssets,
+    currentLiabilities: annual.currentLiabilities,
+  } : {
+    revenueLabel: `${latest.year}年${latest.month}月 売上高`,
+    revenue: latest.revenue || 0,
+    operatingIncome: latest.operatingIncome || 0,
+    ordinaryIncome: latest.ordinaryIncome || 0,
+    cashAndDeposits: latest.cashAndDeposits || 0,
+    totalAssets: latest.totalAssets || 0,
+    netAssets: latest.netAssets || 0,
+    currentAssets: latest.currentAssets || 0,
+    currentLiabilities: latest.currentLiabilities || 0,
+  };
   const uploaded = req.query.uploaded as string | undefined;
   const period = req.query.period as string | undefined;
   const count = req.query.count as string | undefined;
@@ -4516,17 +4567,18 @@ ${renderSidebar('dashboard')}
   </header>
   <div class="content">
     ${successBanner}
+    ${annual ? `<div style="background:#ecf6f8;border:1px solid #a8d8e0;color:#1b7f8e;border-radius:10px;padding:10px 16px;margin-bottom:16px;font-size:13px">下のKPIは<strong>期間残高（年間確定値・決算整理仕訳を含む）</strong>です。月次の推移は下のグラフをご覧ください。<a href="/finance/statements" style="color:#1b7f8e;font-weight:700">決算書ビューアで詳細を見る →</a></div>` : ''}
     <div class="kpi-grid">
-      <div class="kpi-card"><div class="kpi-label">${latest.year}年${latest.month}月 売上高</div><div class="kpi-value">${fmt(latest.revenue || 0)}<span class="kpi-unit">円</span></div></div>
-      <div class="kpi-card"><div class="kpi-label">営業利益</div><div class="kpi-value">${fmt(latest.operatingIncome || 0)}<span class="kpi-unit">円</span></div></div>
-      <div class="kpi-card"><div class="kpi-label">経常利益</div><div class="kpi-value">${fmt(latest.ordinaryIncome || 0)}<span class="kpi-unit">円</span></div></div>
-      <div class="kpi-card"><div class="kpi-label">現金・預金</div><div class="kpi-value">${fmt(latest.cashAndDeposits || 0)}<span class="kpi-unit">円</span></div></div>
+      <div class="kpi-card"><div class="kpi-label">${kpi.revenueLabel}</div><div class="kpi-value">${fmt(kpi.revenue)}<span class="kpi-unit">円</span></div></div>
+      <div class="kpi-card"><div class="kpi-label">営業利益</div><div class="kpi-value">${fmt(kpi.operatingIncome)}<span class="kpi-unit">円</span></div></div>
+      <div class="kpi-card"><div class="kpi-label">経常利益</div><div class="kpi-value">${fmt(kpi.ordinaryIncome)}<span class="kpi-unit">円</span></div></div>
+      <div class="kpi-card"><div class="kpi-label">現金・預金</div><div class="kpi-value">${fmt(kpi.cashAndDeposits)}<span class="kpi-unit">円</span></div></div>
     </div>
     <div class="kpi-grid">
-      <div class="kpi-card"><div class="kpi-label">総資産</div><div class="kpi-value">${fmt(latest.totalAssets || 0)}<span class="kpi-unit">円</span></div></div>
-      <div class="kpi-card"><div class="kpi-label">純資産</div><div class="kpi-value">${fmt(latest.netAssets || 0)}<span class="kpi-unit">円</span></div></div>
-      <div class="kpi-card"><div class="kpi-label">流動資産</div><div class="kpi-value">${fmt(latest.currentAssets || 0)}<span class="kpi-unit">円</span></div></div>
-      <div class="kpi-card"><div class="kpi-label">流動負債</div><div class="kpi-value">${fmt(latest.currentLiabilities || 0)}<span class="kpi-unit">円</span></div></div>
+      <div class="kpi-card"><div class="kpi-label">総資産</div><div class="kpi-value">${fmt(kpi.totalAssets)}<span class="kpi-unit">円</span></div></div>
+      <div class="kpi-card"><div class="kpi-label">純資産</div><div class="kpi-value">${fmt(kpi.netAssets)}<span class="kpi-unit">円</span></div></div>
+      <div class="kpi-card"><div class="kpi-label">流動資産</div><div class="kpi-value">${fmt(kpi.currentAssets)}<span class="kpi-unit">円</span></div></div>
+      <div class="kpi-card"><div class="kpi-label">流動負債</div><div class="kpi-value">${fmt(kpi.currentLiabilities)}<span class="kpi-unit">円</span></div></div>
     </div>
     ${trendChart}
     ${upgradeNotice}

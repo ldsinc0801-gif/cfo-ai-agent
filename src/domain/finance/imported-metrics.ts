@@ -1,4 +1,4 @@
-import type { MonthlySnapshot } from '../../types/trend.js';
+import type { MonthlySnapshot, AnnualStatement } from '../../types/trend.js';
 
 /**
  * ダッシュボードで取り込んだ月次データ(monthly_actuals)から、
@@ -66,34 +66,46 @@ export function annualDebtRepaymentSource(snapshots: MonthlySnapshot[]): 'actual
   return 'none';
 }
 
-export function computeImportedMetrics(snapshots: MonthlySnapshot[]): ImportedMetrics | null {
+/**
+ * @param snapshots monthly_actuals（推移・月商・返済推定に使用）
+ * @param annual 年間決算書（期間残高＝確定値）。あれば年間指標はこちらを正とする。
+ */
+export function computeImportedMetrics(
+  snapshots: MonthlySnapshot[],
+  annual?: AnnualStatement | null,
+): ImportedMetrics | null {
   if (!snapshots || snapshots.length === 0) return null;
   const latest = snapshots[snapshots.length - 1];
   const monthlyRevenue = latest.revenue; // 月商（現預金月商倍率に使用。単月でよい）
-  const interestBearingDebt = latest.interestBearingDebt ?? 0; // 期末残高（ストック）
 
-  // 債務償還年数の簡易CFは「年間」で見る必要がある。月次取込なら直近最大12か月を合算、
-  // 年次決算書ならそのまま（＝latest）を採用する。単月CFのままだと年数が約12倍に膨らむ。
+  // BS(ストック)・PL(年間フロー)は、期間残高(annual)があればそれを正とする。
+  // 無ければ月次から近似（PLは直近12か月合算。ただし決算仕訳は含まれない点に注意）。
   const monthly = snapshots.length >= 2
     && (snapshots[snapshots.length - 1].year * 12 + snapshots[snapshots.length - 1].month)
        - (snapshots[snapshots.length - 2].year * 12 + snapshots[snapshots.length - 2].month) === 1;
   const cfWindow = monthly ? snapshots.slice(-12) : [latest];
-  const annualOrdinary = cfWindow.reduce((s, m) => s + (m.ordinaryIncome || 0), 0);
-  const annualDepreciation = cfWindow.reduce((s, m) => s + (m.depreciation ?? 0), 0);
+  const sumSnap = (k: keyof MonthlySnapshot) => cfWindow.reduce((s, m) => s + (Number(m[k]) || 0), 0);
+
+  const bs = annual ?? latest;
+  const interestBearingDebt = annual ? annual.interestBearingDebt : (latest.interestBearingDebt ?? 0);
+  const annualRevenue = annual ? annual.revenue : sumSnap('revenue');
+  const annualOperating = annual ? annual.operatingIncome : sumSnap('operatingIncome');
+  const annualOrdinary = annual ? annual.ordinaryIncome : sumSnap('ordinaryIncome');
+  const annualDepreciation = annual ? annual.depreciation : sumSnap('depreciation');
   const simpleCashFlow = annualOrdinary + annualDepreciation;
 
   return {
     latest,
     monthsCount: snapshots.length,
-    equityRatio: pct(latest.netAssets, latest.totalAssets),
-    currentRatio: pct(latest.currentAssets, latest.currentLiabilities),
+    equityRatio: pct(bs.netAssets, bs.totalAssets),
+    currentRatio: pct(bs.currentAssets, bs.currentLiabilities),
     cashMonthsRatio:
-      monthlyRevenue > 0 ? Math.round((latest.cashAndDeposits / monthlyRevenue) * 10) / 10 : null,
-    operatingMargin: pct(latest.operatingIncome, latest.revenue),
-    ordinaryMargin: pct(latest.ordinaryIncome, latest.revenue),
+      monthlyRevenue > 0 ? Math.round((bs.cashAndDeposits / monthlyRevenue) * 10) / 10 : null,
+    operatingMargin: pct(annualOperating, annualRevenue),
+    ordinaryMargin: pct(annualOrdinary, annualRevenue),
     debtRepaymentYears:
       interestBearingDebt <= 0 ? 0 : simpleCashFlow > 0 ? Math.round((interestBearingDebt / simpleCashFlow) * 10) / 10 : null,
-    interestDependency: pct(interestBearingDebt, latest.totalAssets),
+    interestDependency: pct(interestBearingDebt, bs.totalAssets),
     interestBearingDebt,
     monthlyRevenue,
     trend: snapshots.slice(-12).map((s) => ({
