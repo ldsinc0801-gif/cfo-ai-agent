@@ -807,6 +807,33 @@ export async function clearChatHistory(tenantId: TenantId, userId?: string): Pro
   if (error) throw new Error(`チャット履歴の削除に失敗: ${error.message}`);
 }
 
+/**
+ * チャット履歴をユーザー単位で直近 keep 件だけ残して古いものを削除する（ストレージ肥大対策）。
+ * keep 件目より古い created_at の行を削除。テナント・ユーザーのスコープ必須。
+ */
+export async function pruneChatHistory(tenantId: TenantId, userId: string | undefined, keep: number = 100): Promise<void> {
+  // keep 件目（0始まりで index=keep）の created_at を境界にする。存在しなければ削除不要。
+  let boundaryQ = getSupabase()
+    .from('chat_messages')
+    .select('created_at')
+    .eq('tenant_id', tenantId);
+  if (userId) boundaryQ = boundaryQ.eq('user_id', userId);
+  const { data, error } = await boundaryQ
+    .order('created_at', { ascending: false })
+    .range(keep, keep);
+  if (error || !data || data.length === 0) return; // keep件以下なら何もしない
+  const boundary = (data[0] as { created_at: string }).created_at;
+
+  let delQ = getSupabase()
+    .from('chat_messages')
+    .delete()
+    .eq('tenant_id', tenantId)
+    .lte('created_at', boundary);
+  if (userId) delQ = delQ.eq('user_id', userId);
+  const { error: delErr } = await delQ;
+  if (delErr) throw new Error(`チャット履歴の刈り込みに失敗: ${delErr.message}`);
+}
+
 // ========== 会社メモリ ==========
 
 export async function getCompanyMemory(tenantId: TenantId): Promise<CompanyMemory> {

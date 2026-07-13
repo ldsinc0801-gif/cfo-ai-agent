@@ -14,6 +14,25 @@ const CHAT_DIR = path.resolve('data/chat');
 const MEMORY_FILE = path.join(CHAT_DIR, 'company-memory.json');
 const HISTORY_FILE = path.join(CHAT_DIR, 'conversation-history.json');
 
+// 履歴のコスト対策：モデルに文脈として渡す件数と、1件あたりの最大文字数。
+// これは「渡す文脈」の抑制であり、画面表示・DB保存はフル文のまま（回答は切れない）。
+const CHAT_HISTORY_TURNS = 10;       // 直近何件を文脈として送るか
+const CHAT_HISTORY_CHAR_CAP = 1500;  // 1件あたりの最大文字数（超過分は境界でカット）
+const CHAT_HISTORY_KEEP = 100;       // DBにユーザー単位で残す件数（古いものは刈り込み）
+
+/**
+ * 過去メッセージを文脈用に短くする。文末（。！？改行）で切って「…（省略）」を付す。
+ * 現在の質問とAIの新規回答には適用しない（表示・保存はフル文）。
+ */
+function truncateForContext(text: string, max: number): string {
+  if (!text || text.length <= max) return text;
+  const head = text.slice(0, max);
+  // なるべく自然な区切り（句点・改行）でカット
+  const cut = Math.max(head.lastIndexOf('。'), head.lastIndexOf('\n'), head.lastIndexOf('！'), head.lastIndexOf('？'));
+  const body = cut > max * 0.5 ? head.slice(0, cut + 1) : head;
+  return `${body}…（長いため履歴では一部省略）`;
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -147,6 +166,9 @@ export class ChatService {
         for (const m of latest) {
           await repo.saveChatMessage(tenantId, m.role, m.content, userId);
         }
+        // 古い履歴の刈り込み（ストレージ肥大対策）。応答をブロックしないfire-and-forget。
+        repo.pruneChatHistory(tenantId, userId, CHAT_HISTORY_KEEP)
+          .catch(() => { /* 刈り込み失敗は無視（本体は保存済み） */ });
         return;
       } catch (e) { logger.warn('Supabase履歴保存失敗'); }
     }
@@ -181,15 +203,17 @@ export class ChatService {
     // - OpenAI system → Gemini systemInstruction
     // - OpenAI user → Gemini { role: 'user', parts: [{ text }] }
     // - OpenAI assistant → Gemini { role: 'model', parts: [{ text }] }
+    // 履歴は「モデルに渡す文脈」としてのみ長さを抑える（保存・画面表示はフル文のまま。
+    // ここで切っても回答が途切れることはない）。直近CHAT_HISTORY_TURNS件だけ送る。
     const contents = [
-      ...history.slice(-20).map(m => ({
+      ...history.slice(-CHAT_HISTORY_TURNS).map(m => ({
         role: m.role === 'assistant' ? 'model' as const : 'user' as const,
-        parts: [{ text: m.content }],
+        parts: [{ text: truncateForContext(m.content, CHAT_HISTORY_CHAR_CAP) }],
       })),
-      { role: 'user' as const, parts: [{ text: userMessage }] },
+      { role: 'user' as const, parts: [{ text: userMessage }] }, // 今の質問はそのまま
     ];
 
-    logger.info(`チャット送信: freeeContext=${this.freeeContext ? 'あり' : 'なし'}, memory=${memory.companyName || 'なし'}, history=${history.length}件`);
+    logger.info(`チャット送信: freeeContext=${this.freeeContext ? 'あり' : 'なし'}, memory=${memory.companyName || 'なし'}, history=${history.length}件(直近${Math.min(history.length, CHAT_HISTORY_TURNS)}件を文脈送信)`);
 
     // @google/genai では systemInstruction は config の中に入れる必要がある
     // （トップレベルに置くとSDKに無視され、AI CFOの役割・財務データが渡らない）
