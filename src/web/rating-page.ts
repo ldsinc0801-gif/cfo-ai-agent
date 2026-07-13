@@ -77,6 +77,8 @@ export interface RatingPageOptions {
   ratingInput?: import('../types/bank-rating.js').RatingInput;
   /** 使用データの出所（例: 「取込決算書（期間残高・2026年4月期）」「月次合算」）。 */
   dataSource?: string;
+  /** 月次合算による概算（決算整理仕訳を含まない）で算定したか。trueなら警告を出す。 */
+  approximate?: boolean;
 }
 
 /** 固定資産明細カード（簿価の大きい順）。担保余力・設備実態の把握用。 */
@@ -729,6 +731,12 @@ ${options.fixedAssets ? renderFixedAssetsCard(options.fixedAssets) : ''}
   </div>
   <div class="banner-score">${rating.totalScore}<span> / ${rating.maxScore} 点</span></div>
 </div>
+${options.approximate ? `
+<div style="background:#fff7ed;border:1px solid #f59e0b;border-radius:12px;padding:14px 18px;margin-bottom:20px;font-size:13px;line-height:1.7;color:#7c2d12">
+  <strong style="color:#b45309">⚠ この格付は「月次合算」による概算です（決算整理仕訳を含みません）</strong><br>
+  各月度の合計で算定しているため、<strong>減価償却など期末の決算整理仕訳が反映されていません</strong>。経常利益・キャッシュフロー・債務償還年数などが実態とズレ、点数が実際より甘く出ることがあります。<br>
+  正確な格付には、<strong>月次推移試算表（損益計算書＋貸借対照表）を取り込み直して「期間残高」で算定</strong>してください。
+</div>` : ''}
 
 <!-- Section 2: 総合評価スコア -->
 <div class="card">

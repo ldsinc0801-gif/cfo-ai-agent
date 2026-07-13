@@ -1675,6 +1675,7 @@ app.get('/agent/finance', async (req, res) => {
           fixedAssets,
           ratingInput: input,
           dataSource,
+          approximate: !usingAnnual,
         }));
         return;
       }
