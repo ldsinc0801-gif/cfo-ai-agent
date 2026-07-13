@@ -373,6 +373,31 @@ function adjCell(v: number): string {
   return `<td class="dstmt-adj">${dyen(v)}</td>`;
 }
 
+/**
+ * BSの勘定科目カテゴリー（freeeは「現金･預金」「有形固定資産」「投資その他の資産」等の
+ * 中分類で入る）を、決算書のトップレベル区分に正規化する。
+ * これをしないと現預金や投資その他の資産が「流動資産/固定資産」フィルタから漏れる。
+ */
+function normalizeBsCategory(cat: string): string {
+  const c = cat;
+  // 先に純資産・負債（「純資産」は「資産」を含むため資産判定より前に）
+  if (/純資産|株主資本|資本金|資本剰余|利益剰余|自己株式|評価・?換算|評価差額|繰延ヘッジ|新株予約権/.test(c)) return '純資産';
+  if (/固定負債/.test(c)) return '固定負債';
+  if (/流動負債/.test(c)) return '流動負債';
+  if (/買掛|支払手形|未払|前受|預り|賞与引当|借入金|社債|リース債務/.test(c)) {
+    return /長期|固定|社債/.test(c) ? '固定負債' : '流動負債';
+  }
+  if (/繰延資産|創立費|開業費|株式交付費|社債発行費/.test(c)) return '繰延資産';
+  if (/固定資産|有形固定|無形固定|投資その他/.test(c)) return '固定資産';
+  if (/流動資産|現金|預金|売掛|受取手形|売上債権|棚卸|商品|製品|原材料|仕掛|貯蔵|前払|前渡|未収|立替|仮払|有価証券|短期貸付/.test(c)) return '流動資産';
+  return c;
+}
+
+/** BS明細のカテゴリを正規化したコピーを返す */
+function normalizeBsLines(lines: StatementLine[]): StatementLine[] {
+  return lines.map(l => ({ ...l, category: normalizeBsCategory(l.category) }));
+}
+
 /** 指定カテゴリ群に属する明細行を集める（カテゴリ名の表記ゆれを含める） */
 function linesOf(lines: StatementLine[], cats: string[]): StatementLine[] {
   return lines.filter(l => cats.some(c => l.category.includes(c)));
@@ -415,7 +440,7 @@ function profitRow3(label: string, periodAmount: number, before: number): string
 
 export function renderStatementsDetailHTML(s: AnnualStatement, companyName?: string): string {
   const pl = s.plLines ?? [];
-  const bs = s.bsLines ?? [];
+  const bs = normalizeBsLines(s.bsLines ?? []); // 中分類カテゴリをトップレベル区分に正規化
   const period = `${s.fiscalYearEndYear}年${s.fiscalYearEndMonth}月期`;
 
   // --- PL 各カテゴリの (期間残高, 決算整理仕訳) ---
