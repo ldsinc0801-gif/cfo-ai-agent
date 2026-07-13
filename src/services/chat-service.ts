@@ -160,7 +160,7 @@ export class ChatService {
 
   // ========== チャット送信 ==========
 
-  async sendMessage(userMessage: string, tenantId?: TenantId, freeeContext?: FreeeContextData | null, trendMonths?: any[], userId?: string): Promise<ChatResponse> {
+  async sendMessage(userMessage: string, tenantId?: TenantId, freeeContext?: FreeeContextData | null, trendMonths?: any[], userId?: string, annual?: import('../types/trend.js').AnnualStatement | null): Promise<ChatResponse> {
     if (!this.ai) throw new Error('GOOGLE_CLOUD_PROJECTが未設定です');
 
     const memory = await this.getMemory(tenantId);
@@ -172,7 +172,10 @@ export class ChatService {
     // freeeContextは引数で受け取る（シングルトン状態廃止）
     if (freeeContext !== undefined) this.freeeContext = freeeContext;
 
-    const systemPrompt = await this.buildSystemPrompt(memory, latestAnalysis, tenantId, trendMonths);
+    // freeeContextはローカルに固定してから渡す（シングルトンのthis.freeeContextを
+    // await後に読むと、並行する他テナントのリクエストで上書きされ漏洩する恐れがあるため）
+    const localFreee = freeeContext !== undefined ? freeeContext : this.freeeContext;
+    const systemPrompt = await this.buildSystemPrompt(memory, latestAnalysis, tenantId, trendMonths, annual, localFreee);
 
     // OpenAI messages → Gemini contents 変換マッピング:
     // - OpenAI system → Gemini systemInstruction
@@ -214,17 +217,18 @@ export class ChatService {
     return { reply: assistantMessage, proposals: [] };
   }
 
-  private async buildSystemPrompt(memory: CompanyMemory, latestAnalysis: any, tenantId?: TenantId, trendMonths?: any[]): Promise<string> {
+  private async buildSystemPrompt(memory: CompanyMemory, latestAnalysis: any, tenantId?: TenantId, trendMonths?: any[], annual?: import('../types/trend.js').AnnualStatement | null, freeeCtx?: FreeeContextData | null): Promise<string> {
     let osContext = '';
     try { osContext = await buildOSContext(tenantId); } catch { /* ignore */ }
 
     let prompt = `あなたは「AI CFO」です。中小企業の経営者のための財務・経営アドバイザーとして会話してください。
 
 【最重要ルール】
-- このプロンプトには、freee会計システムから取得した実際の財務データが含まれています
+- このプロンプトには、この会社の実際の財務データ（取り込んだ決算書＝期間残高、月次推移、freee会計データ）が含まれています
 - 質問に対しては、必ずこの実データを元に具体的な数値で回答してください
 - 「データにアクセスできない」「未来のデータは分からない」等の回答は禁止です
-- データが提供されている場合は、それが実際の会計データであることを前提に分析してください
+- **年間の数値は「取り込んだ決算書（年間確定値＝期間残高）」を最優先で使う**。各月度の合計は決算整理仕訳を含まないため年間値としては使わない
+- ここにあるのは今表示中の会社のデータのみです。他社の情報は一切含まれておらず、推測で他社に言及してはいけません
 - 今日の日付は ${new Date().toISOString().split('T')[0]} です
 
 【あなたの役割】
@@ -267,8 +271,34 @@ export class ChatService {
 
     if (osContext) prompt += `\n${osContext}\n`;
 
-    if (this.freeeContext) {
-      const ctx = this.freeeContext;
+    // 取り込んだ年間決算書（期間残高＝決算整理仕訳を含む会計期間の確定値）。最優先の正データ。
+    if (annual) {
+      const fmt = (n: number) => new Intl.NumberFormat('ja-JP').format(Math.round(n));
+      const ratio = (a: number, b: number) => (b > 0 ? `${(a / b * 100).toFixed(1)}%` : '—');
+      const totalLiab = annual.totalAssets - annual.netAssets;
+      prompt += `\n【取り込んだ決算書（${annual.fiscalYearEndYear}年${annual.fiscalYearEndMonth}月期・年間確定値＝期間残高）】\n`;
+      prompt += `※これは決算整理仕訳（減価償却など）を含む会計期間の確定値です。年間の数値を聞かれたら必ずこれを使ってください（各月度の合計ではなく期間残高が正）。\n`;
+      prompt += `- 売上高: ${fmt(annual.revenue)}円\n`;
+      prompt += `- 売上原価: ${fmt(annual.costOfSales)}円\n`;
+      prompt += `- 売上総利益: ${fmt(annual.grossProfit)}円（粗利率 ${ratio(annual.grossProfit, annual.revenue)}）\n`;
+      prompt += `- 販管費: ${fmt(annual.sgaExpenses)}円\n`;
+      prompt += `- 営業利益: ${fmt(annual.operatingIncome)}円（営業利益率 ${ratio(annual.operatingIncome, annual.revenue)}）\n`;
+      prompt += `- 経常利益: ${fmt(annual.ordinaryIncome)}円（経常利益率 ${ratio(annual.ordinaryIncome, annual.revenue)}）\n`;
+      prompt += `- 当期純利益: ${fmt(annual.netIncome)}円\n`;
+      prompt += `- 減価償却費: ${fmt(annual.depreciation)}円 / 支払利息: ${fmt(annual.interestExpense)}円\n`;
+      prompt += `- 現預金: ${fmt(annual.cashAndDeposits)}円 / 総資産: ${fmt(annual.totalAssets)}円 / 純資産: ${fmt(annual.netAssets)}円\n`;
+      prompt += `- 流動資産: ${fmt(annual.currentAssets)}円 / 流動負債: ${fmt(annual.currentLiabilities)}円 / 有利子負債: ${fmt(annual.interestBearingDebt)}円\n`;
+      prompt += `- 負債合計: ${fmt(totalLiab)}円\n`;
+      if (annual.totalAssets > 0) prompt += `- 自己資本比率: ${ratio(annual.netAssets, annual.totalAssets)} / 流動比率: ${ratio(annual.currentAssets, annual.currentLiabilities)}\n`;
+      if (annual.sgaBreakdown && annual.sgaBreakdown.length > 0) {
+        prompt += `【販管費の内訳（年間）】\n`;
+        for (const it of annual.sgaBreakdown.slice(0, 20)) prompt += `- ${it.name}: ${fmt(it.amount)}円\n`;
+      }
+      if (annual.netAssets < 0) prompt += `※純資産がマイナス＝債務超過の状態です。\n`;
+    }
+
+    if (freeeCtx) {
+      const ctx = freeeCtx;
       const fmt = (n: number) => new Intl.NumberFormat('ja-JP').format(n);
       prompt += `\n【freee会計データ（${ctx.currentMonth.year}年${ctx.currentMonth.month}月時点）】\n`;
       prompt += `- 事業所: ${ctx.companyName}\n`;

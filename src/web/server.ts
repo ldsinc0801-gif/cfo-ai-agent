@@ -3940,17 +3940,28 @@ app.post('/chat/send', express.json(), async (req, res) => {
     await loadFreeeContextForChat(tid);
     const freeeCtx = chatService.getFreeeContext();
 
-    // 月次トレンドデータも取得してAIに渡す
+    // 月次トレンドデータも取得してAIに渡す（直近12ヶ月）
     let trendMonths: any[] = [];
     try {
-      const trend = await buildTrendData(undefined, undefined, 6, false, tid);
+      const trend = await buildTrendData(undefined, undefined, 12, false, tid);
       trendMonths = trend.months || [];
       logger.info(`チャット: トレンドデータ取得 ${trendMonths.length}ヶ月分`);
     } catch (e) {
       logger.warn('チャット: トレンドデータ取得失敗:', e instanceof Error ? e.message : e);
     }
 
-    const result = await chatService.sendMessage(message, tid, freeeCtx, trendMonths, req.session.user?.id);
+    // 取り込んだ年間決算書（期間残高＝決算仕訳を含む確定値）をテナントスコープで渡す
+    let annual: import('../types/trend.js').AnnualStatement | null = null;
+    if (tid && isSupabaseAvailable()) {
+      try {
+        const list = await repo.listAnnualStatements(asTenantId(tid));
+        annual = list.length > 0 ? list[list.length - 1] : null;
+      } catch (e) {
+        logger.warn('チャット: 年間決算書の取得失敗:', e instanceof Error ? e.message : e);
+      }
+    }
+
+    const result = await chatService.sendMessage(message, tid, freeeCtx, trendMonths, req.session.user?.id, annual);
     res.json(result);
   } catch (error) {
     logger.error('チャットエラー', error);
