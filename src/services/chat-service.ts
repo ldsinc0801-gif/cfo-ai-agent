@@ -196,7 +196,7 @@ export class ChatService {
     const response = await this.ai.models.generateContent({
       model: config.ai.geminiModel,
       contents,
-      config: { systemInstruction: systemPrompt, maxOutputTokens: 2048 },
+      config: { systemInstruction: systemPrompt, maxOutputTokens: 8192 },
     });
 
     const usage = response.usageMetadata;
