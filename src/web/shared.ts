@@ -62,6 +62,7 @@ export function renderSidebar(active: string, companyName?: string, user?: Sideb
     { id: 'dashboard', href: '/', icon: ICONS.home, label: 'ダッシュボード' },
     { id: 'chat', href: '/chat', icon: ICONS.chat, label: 'AIチャット' },
     { id: 'tasks', href: '/tasks', icon: ICONS.tasks, label: 'タスクボード' },
+    { id: 'statements', href: '/finance/statements', icon: ICONS.calculator, label: '決算書ビューア' },
     { id: 'history', href: '/agent/finance/history', icon: ICONS.clock, label: '分析履歴' },
   ];
 

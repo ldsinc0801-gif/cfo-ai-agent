@@ -32,6 +32,7 @@ import { chatService } from '../services/chat-service.js';
 import { taskService } from '../services/task-service.js';
 import { generateMonthlyTasks } from '../config/task-templates.js';
 import { renderRatingHTML, renderAnalysisLoadingHTML } from './rating-page.js';
+import { renderStatementsHTML, type ExpenseBreakdownItem } from './statements-page.js';
 import { calculateBankRating, calculateAdditionalMetrics } from '../domain/banking/rating-calculator.js';
 import { createMockRatingInput } from '../../tests/fixtures/mock-rating-input.js';
 import { AnthropicAnalysisService } from '../services/anthropic-service.js';
@@ -2957,6 +2958,58 @@ app.get('/agent/funding', async (req, res) => {
 });
 
 // 財務データの確認・修正（取込値の手修正 + 年間返済元本の手入力）
+/**
+ * 販管費（販売費及び一般管理費）の科目別内訳を freee から最新月分だけ取得する。
+ * freee 未連携・失敗時は null を返す（決算書ビューアは内訳なしで描画される）。
+ */
+async function fetchLatestSgaBreakdown(tenantId?: TenantId): Promise<ExpenseBreakdownItem[] | null> {
+  try {
+    const token = await getFreeeToken(tenantId);
+    if (!token) return null;
+    const companyId = await getSelectedCompanyId(tenantId);
+    if (!companyId) return null;
+
+    const now = new Date();
+    const targetYear = now.getFullYear();
+    const targetMonth = now.getMonth() === 0 ? 12 : now.getMonth(); // 前月
+
+    const auth = makeFreeeAuth(tenantId, token);
+    const freeeService = new FreeeService(auth);
+    const rawData = await freeeService.fetchMonthlyData(companyId, targetYear, targetMonth);
+    const { parsePLResponse } = await import('../domain/accounting/pl-parser.js');
+    const pl = parsePLResponse(rawData.currentMonthPL, targetYear, targetMonth);
+    const sgaCategories = ['販売費及び一般管理費', '販売管理費'];
+    return (pl.expenseBreakdown || [])
+      .filter((e) => sgaCategories.includes(e.categoryName) && e.amount !== 0)
+      .map((e) => ({ name: e.accountName, amount: e.amount }));
+  } catch (e) {
+    logger.warn('販管費内訳の取得に失敗', e);
+    return null;
+  }
+}
+
+// 決算書ビューア（取り込んだPL/BSを見やすく表示 + 販管費内訳 + 推移グラフ）
+app.get('/finance/statements', async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    const snapshots = tid ? await repo.getAllMonthlyActuals(asTenantId(tid)) : [];
+    if (snapshots.length === 0) {
+      res.send(renderNoDataPage('決算書ビューア', '表示できる決算データがありません。ダッシュボードやfreee連携で決算書・試算表を取り込んでください。'));
+      return;
+    }
+    const token = await getFreeeToken(tid || undefined);
+    const expenseBreakdown = await fetchLatestSgaBreakdown(tid || undefined);
+    res.send(renderStatementsHTML({
+      snapshots,
+      expenseBreakdown,
+      freeeConnected: !!token,
+    }));
+  } catch (e) {
+    logger.error('決算書ビューア表示エラー', e);
+    res.send(renderNoDataPage('決算書ビューア', '決算データの読み込み中にエラーが発生しました。'));
+  }
+});
+
 app.get('/finance/data-edit', async (req, res) => {
   const tid = getActiveTenantId(req);
   const snapshots = tid ? await repo.getAllMonthlyActuals(asTenantId(tid)) : [];
