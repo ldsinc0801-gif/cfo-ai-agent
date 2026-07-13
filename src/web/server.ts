@@ -1656,18 +1656,25 @@ app.get('/agent/finance', async (req, res) => {
       if (isSupabaseAvailable()) {
         try { annualStmts = await repo.listAnnualStatements(asTenantId(finTid)); } catch { /* 未取込なら空 */ }
       }
-      const input = annualStmts.length > 0
+      const usingAnnual = annualStmts.length > 0;
+      const input = usingAnnual
         ? buildRatingInputFromAnnual(annualStmts, snapshots)
         : buildRatingInputFromSnapshots(snapshots);
       if (input) {
         const rating = calculateBankRating(input);
         const additional = calculateAdditionalMetrics(input);
         const fixedAssets = await repo.listFixedAssetDetails(asTenantId(finTid));
+        const dataSource = usingAnnual
+          ? `取込決算書（期間残高・${annualStmts[annualStmts.length - 1].fiscalYearEndYear}年${annualStmts[annualStmts.length - 1].fiscalYearEndMonth}月期）`
+          : '取込月次データの合算（決算整理仕訳を含まない概算。正確には決算書の再取込を推奨）';
+        logger.info(`格付算定: tenant=${finTid} 源=${usingAnnual ? 'annual' : 'monthly'} 売上=${input.revenue} 経常=${input.ordinaryIncome} 純資産=${input.netAssets} 有利子負債=${input.interestBearingDebt} → ${rating.totalScore}点(${rating.rank})`);
         res.send(renderRatingHTML(rating, additional, {
           aiAvailable: anthropicService.isAvailable(),
           aiCommentary: null,
           source: 'upload',
           fixedAssets,
+          ratingInput: input,
+          dataSource,
         }));
         return;
       }
@@ -1908,6 +1915,8 @@ app.post('/agent/finance/analyze', upload.array('files', 10), async (req, res) =
       fileName,
       extractionNotes,
       analysisId,
+      ratingInput,
+      dataSource: `アップロードした決算書（${fileName}）`,
     }));
   } catch (error) {
     logger.error('決算書分析エラー', error);
@@ -2067,6 +2076,8 @@ app.get('/agent/finance/history/:id', async (req, res) => {
     extractionNotes: analysis.extractionNotes,
     analysisId: analysis.id,
     savedAt: analysis.createdAt,
+    ratingInput: analysis.ratingInput,
+    dataSource: `保存済み分析（${new Date(analysis.createdAt).toLocaleString('ja-JP')}時点）`,
   }));
 });
 

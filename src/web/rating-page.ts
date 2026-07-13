@@ -73,6 +73,10 @@ export interface RatingPageOptions {
   savedAt?: string;
   /** 固定資産明細（資産名・簿価・当期償却）。担保余力の把握用に一覧表示する。 */
   fixedAssets?: { id: string; name: string; acquisitionCost: number | null; depreciation: number | null; bookValue: number | null }[];
+  /** 格付の算定に使用した財務数値（実額）。透明性のため表示する。 */
+  ratingInput?: import('../types/bank-rating.js').RatingInput;
+  /** 使用データの出所（例: 「取込決算書（期間残高・2026年4月期）」「月次合算」）。 */
+  dataSource?: string;
 }
 
 /** 固定資産明細カード（簿価の大きい順）。担保余力・設備実態の把握用。 */
@@ -299,6 +303,46 @@ canvas#particleCanvas {
 </script>`;
 
   return agentPageShell({ active: 'finance', title: '分析中...', bodyHTML });
+}
+
+/**
+ * 格付の算定に使った実数値を表示するパネル（透明性）。
+ * 「なぜこの点数か」を元データまで遡って確認できるようにする。
+ */
+function renderRatingInputPanel(
+  input?: import('../types/bank-rating.js').RatingInput,
+  dataSource?: string,
+): string {
+  if (!input) return '';
+  const yen = (v: number | null | undefined) =>
+    v === null || v === undefined ? '—' : `${new Intl.NumberFormat('ja-JP').format(Math.round(v))}円`;
+  const items: Array<[string, string]> = [
+    ['売上高', yen(input.revenue)],
+    ['営業利益', yen(input.operatingIncome)],
+    ['経常利益', yen(input.ordinaryIncome)],
+    ['当期純利益', yen(input.netIncome)],
+    ['純資産', yen(input.netAssets)],
+    ['総資産', yen(input.totalAssets)],
+    ['有利子負債', yen(input.interestBearingDebt)],
+    ['現預金', yen(input.cashAndDeposits)],
+    ['減価償却費', yen(input.depreciation)],
+    ['支払利息', yen(input.interestExpense)],
+    ['前期経常利益', input.prevOrdinaryIncome == null ? '（データなし）' : yen(input.prevOrdinaryIncome)],
+    ['年間返済元本', input.annualDebtRepayment == null ? '（未入力）' : yen(input.annualDebtRepayment)],
+  ];
+  const debtExcess = input.netAssets < 0;
+  return `
+<div class="card">
+  <div class="card-header"><h3>算定に使用した財務数値（実額）</h3>
+    ${dataSource ? `<span class="card-sub">データ源: ${esc(dataSource)}</span>` : ''}</div>
+  <div class="card-body">
+    <p style="font-size:13px;color:var(--text2);margin:0 0 12px">この格付は下記の数値をもとに算定しています。取り込んだ決算書と一致するかご確認ください（一致しない場合は取込データを見直してください）。</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">
+      ${items.map(([k, v]) => `<div style="display:flex;justify-content:space-between;gap:8px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:13px"><span style="color:var(--text2)">${esc(k)}</span><span style="font-weight:600;font-variant-numeric:tabular-nums">${v}</span></div>`).join('')}
+    </div>
+    ${debtExcess ? `<p style="font-size:13px;color:#b45309;margin:12px 0 0">純資産がマイナス＝<strong>債務超過</strong>です。銀行の実態評価では債務超過先は原則「要注意先」以下（直近も経常赤字なら「破綻懸念先」相当）に区分されます。</p>` : ''}
+  </div>
+</div>`;
 }
 
 export function renderRatingHTML(
@@ -725,6 +769,9 @@ ${categories.map(c => {
     </div>
   </div>
 </div>
+
+<!-- 算定に使用した財務数値（透明性） -->
+${renderRatingInputPanel(options.ratingInput, options.dataSource)}
 
 <!-- Section 3: 指標算出一覧 -->
 <div class="card">
