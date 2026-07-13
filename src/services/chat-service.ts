@@ -191,11 +191,12 @@ export class ChatService {
 
     logger.info(`チャット送信: freeeContext=${this.freeeContext ? 'あり' : 'なし'}, memory=${memory.companyName || 'なし'}, history=${history.length}件`);
 
+    // @google/genai では systemInstruction は config の中に入れる必要がある
+    // （トップレベルに置くとSDKに無視され、AI CFOの役割・財務データが渡らない）
     const response = await this.ai.models.generateContent({
       model: config.ai.geminiModel,
-      systemInstruction: systemPrompt,
       contents,
-      config: { maxOutputTokens: 2048 },
+      config: { systemInstruction: systemPrompt, maxOutputTokens: 2048 },
     });
 
     const usage = response.usageMetadata;
