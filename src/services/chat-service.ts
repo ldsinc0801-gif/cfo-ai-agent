@@ -315,7 +315,7 @@ export class ChatService {
     }
 
     // 学習済み知見
-    const insights = await learningService.getInsightsText();
+    const insights = await learningService.getInsightsText(tenantId);
     if (insights) {
       prompt += `\n【過去の分析から学習した知見】\n${insights}\n`;
     }

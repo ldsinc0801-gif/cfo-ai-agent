@@ -77,8 +77,8 @@ class LearningService {
     // 2. 過去の分析履歴を取得
     const pastAnalyses = await this.getPastAnalyses(tenantId);
 
-    // 3. 既存の知見を取得
-    const existingInsights = await this.getInsights();
+    // 3. 既存の知見を取得（テナント分離）
+    const existingInsights = await this.getInsights(tenantId);
 
     // 4. Gemini 2.5 Pro でパターン分析
     const analysisPrompt = this.buildAnalysisPrompt(actuals, pastAnalyses, existingInsights);
@@ -99,8 +99,8 @@ class LearningService {
     // 5. 応答をパースして知見を抽出
     const result = this.parseAnalysisResponse(analysisText, existingInsights);
 
-    // 6. 知見を保存
-    await this.saveInsights([...existingInsights, ...result.newInsights]);
+    // 6. 知見を保存（テナント分離）
+    await this.saveInsights([...existingInsights, ...result.newInsights], tenantId);
 
     logger.info(`学習サイクル完了: 新規知見${result.newInsights.length}件, 更新${result.updatedInsights.length}件`);
 
@@ -110,12 +110,15 @@ class LearningService {
   /**
    * 保存済みの知見を取得
    */
-  async getInsights(): Promise<LearningInsight[]> {
+  async getInsights(tenantId?: TenantId): Promise<LearningInsight[]> {
+    // テナント分離必須：tenantId が無い場合は他テナントの知見を漏らさないよう空配列を返す
+    if (!tenantId) return [];
     if (isSupabaseAvailable()) {
       try {
         const { data, error } = await getSupabase()
           .from('learning_insights')
           .select('*')
+          .eq('tenant_id', tenantId)
           .order('confidence', { ascending: false });
 
         if (!error && data) {
@@ -139,8 +142,8 @@ class LearningService {
   /**
    * 知見をプロンプト挿入用テキストとして取得
    */
-  async getInsightsText(): Promise<string> {
-    const insights = await this.getInsights();
+  async getInsightsText(tenantId?: TenantId): Promise<string> {
+    const insights = await this.getInsights(tenantId);
     if (insights.length === 0) return '';
 
     return insights
@@ -157,7 +160,7 @@ class LearningService {
     if (!this.ai || !tenantId) return;
 
     try {
-      const insights = await this.getInsights();
+      const insights = await this.getInsights(tenantId);
       const lastUpdate = insights.length > 0
         ? Math.max(...insights.map(i => new Date(i.updated_at || i.created_at || 0).getTime()))
         : 0;
@@ -320,12 +323,14 @@ ${existingText ? `【既存の学習済み知見】\n${existingText}\n` : ''}
     return normalize(a) === normalize(b);
   }
 
-  private async saveInsights(insights: LearningInsight[]): Promise<void> {
+  private async saveInsights(insights: LearningInsight[], tenantId?: TenantId): Promise<void> {
+    // テナント分離必須：tenantId が無ければ保存しない（他テナントに紐づく事故を防ぐ）
+    if (!tenantId) { logger.warn('学習知見の保存にtenantIdが無いためスキップ'); return; }
     if (isSupabaseAvailable()) {
       try {
         for (const insight of insights) {
           if (insight.id) {
-            // 既存の更新
+            // 既存の更新（テナントスコープ必須）
             await getSupabase()
               .from('learning_insights')
               .update({
@@ -334,12 +339,14 @@ ${existingText ? `【既存の学習済み知見】\n${existingText}\n` : ''}
                 evidence: insight.evidence,
                 updated_at: new Date().toISOString(),
               })
-              .eq('id', insight.id);
+              .eq('id', insight.id)
+              .eq('tenant_id', tenantId);
           } else {
-            // 新規挿入
+            // 新規挿入（tenant_id を必ず付与）
             await getSupabase()
               .from('learning_insights')
               .insert({
+                tenant_id: tenantId,
                 category: insight.category,
                 insight: insight.insight,
                 confidence: insight.confidence,
@@ -347,7 +354,7 @@ ${existingText ? `【既存の学習済み知見】\n${existingText}\n` : ''}
               });
           }
         }
-        logger.info(`学習知見をSupabaseに保存: ${insights.length}件`);
+        logger.info(`学習知見をSupabaseに保存: ${insights.length}件 (tenant: ${tenantId})`);
         return;
       } catch (e) {
         logger.warn('Supabase知見保存失敗');

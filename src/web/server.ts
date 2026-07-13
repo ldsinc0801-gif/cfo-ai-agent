@@ -1604,21 +1604,25 @@ app.get('/api/plan/history', async (req, res) => {
 // === 学習ループAPI ===
 
 // 学習実行
-app.post('/api/learn', async (_req, res) => {
+app.post('/api/learn', async (req, res) => {
   try {
     if (!learningService.isAvailable()) {
       res.status(400).json({ error: 'Vertex AI の認証が未設定です' });
       return;
     }
-    const result = await learningService.runLearningCycle();
+    const tid = getActiveTenantId(req);
+    if (!tid) { res.status(401).json({ error: 'テナントが選択されていません' }); return; }
+    const result = await learningService.runLearningCycle(asTenantId(tid));
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : '学習に失敗しました' });
   }
 });
 
-app.get('/api/learn/insights', async (_req, res) => {
-  const insights = await learningService.getInsights();
+app.get('/api/learn/insights', async (req, res) => {
+  const tid = getActiveTenantId(req);
+  if (!tid) { res.status(401).json({ error: 'テナントが選択されていません' }); return; }
+  const insights = await learningService.getInsights(asTenantId(tid));
   res.json(insights);
 });
 
