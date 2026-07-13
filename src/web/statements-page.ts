@@ -1,4 +1,4 @@
-import type { MonthlySnapshot } from '../types/trend.js';
+import type { MonthlySnapshot, AnnualStatement, StatementLine } from '../types/trend.js';
 import type { AnnualStatementView, AnnualFigures } from '../domain/finance/annual-view.js';
 import { agentPageShell, esc } from './shared.js';
 import { formatNumber } from '../utils/format.js';
@@ -19,6 +19,8 @@ export interface StatementsViewData {
   expenseBreakdown?: ExpenseBreakdownItem[] | null;
   /** 内訳の出所（'csv' | 'freee' | null） */
   breakdownSource?: 'csv' | 'freee' | null;
+  /** 詳細な決算書（全明細）が利用可能か（詳細ページへの導線表示に使う） */
+  hasDetail?: boolean;
 }
 
 // ---- 表示ヘルパ ----------------------------------------------------------
@@ -182,9 +184,14 @@ function renderBody(data: StatementsViewData): string {
   const sgaCard = renderSgaBreakdown(cur, data);
   const trendCard = renderTrendCharts(sorted);
 
+  const detailLink = data.hasDetail
+    ? `<div class="stmt-toolbar"><a class="stmt-detail-btn" href="/finance/statements/detail">📄 詳細な決算書（全科目）を表示 →</a></div>`
+    : '';
+
   return `
   <div class="stmt-wrap">
     ${annualBanner}
+    ${detailLink}
     ${kpiCards}
     <div class="stmt-two-col">
       ${plTable}
@@ -350,4 +357,139 @@ const STATEMENTS_CSS = `<style>
 .stmt-charts{display:grid;grid-template-columns:1fr 1fr;gap:20px}
 .stmt-chart-box{position:relative;height:280px}
 @media(max-width:860px){.stmt-two-col,.stmt-bs-cols,.stmt-charts{grid-template-columns:1fr}}
+</style>`;
+
+// ==========================================================================
+// 詳細な決算書ビュー（全科目・期間残高/期末残高）
+// ==========================================================================
+
+function dyen(v: number): string {
+  const neg = v < 0;
+  return `${neg ? '△' : ''}${formatNumber(Math.abs(v))}`;
+}
+
+/** 指定カテゴリ群に属する明細行を集める（カテゴリ名の表記ゆれを含める） */
+function linesOf(lines: StatementLine[], cats: string[]): StatementLine[] {
+  return lines.filter(l => cats.some(c => l.category.includes(c)));
+}
+
+function detailSection(title: string, items: StatementLine[], subtotal: number | null): string {
+  const rows = items.map(i => `<tr class="dstmt-row">
+      <td class="dstmt-name">${esc(i.name)}</td>
+      <td class="dstmt-amt">${dyen(i.amount)}</td>
+    </tr>`).join('');
+  const sub = subtotal !== null
+    ? `<tr class="dstmt-subtotal"><td>${esc(title)} 計</td><td class="dstmt-amt">${dyen(subtotal)}</td></tr>`
+    : '';
+  return `<tr class="dstmt-cat"><td colspan="2">${esc(title)}</td></tr>${rows || '<tr class="dstmt-row"><td class="dstmt-name" style="color:#9ca3af">（明細なし）</td><td class="dstmt-amt">—</td></tr>'}${sub}`;
+}
+
+function profitRow(label: string, amount: number): string {
+  return `<tr class="dstmt-profit"><td>${esc(label)}</td><td class="dstmt-amt">${dyen(amount)}</td></tr>`;
+}
+
+export function renderStatementsDetailHTML(s: AnnualStatement, companyName?: string): string {
+  const pl = s.plLines ?? [];
+  const bs = s.bsLines ?? [];
+  const period = s.plLines || s.bsLines
+    ? `${s.fiscalYearEndYear}年${s.fiscalYearEndMonth}月期（期間残高）`
+    : `${s.fiscalYearEndYear}年${s.fiscalYearEndMonth}月期`;
+
+  const sumOf = (cats: string[]) => linesOf(pl, cats).reduce((a, l) => a + l.amount, 0);
+  const bsSumOf = (cats: string[]) => linesOf(bs, cats).reduce((a, l) => a + l.amount, 0);
+
+  // --- PL ---
+  const nonOpIncome = sumOf(['営業外収益']);
+  const nonOpExpense = sumOf(['営業外費用']);
+  const extraIncome = sumOf(['特別利益']);
+  const extraLoss = sumOf(['特別損失']);
+  const tax = sumOf(['法人税']);
+  const plBody = `
+    ${detailSection('売上高', linesOf(pl, ['売上高']), s.revenue)}
+    ${detailSection('売上原価', linesOf(pl, ['売上原価', '原価']), s.costOfSales)}
+    ${profitRow('売上総利益', s.grossProfit)}
+    ${detailSection('販売費及び一般管理費', linesOf(pl, ['販売管理費', '販売費及び一般管理費']), s.sgaExpenses)}
+    ${profitRow('営業利益', s.operatingIncome)}
+    ${detailSection('営業外収益', linesOf(pl, ['営業外収益']), nonOpIncome)}
+    ${detailSection('営業外費用', linesOf(pl, ['営業外費用']), nonOpExpense)}
+    ${profitRow('経常利益', s.ordinaryIncome)}
+    ${extraIncome !== 0 ? detailSection('特別利益', linesOf(pl, ['特別利益']), extraIncome) : ''}
+    ${extraLoss !== 0 ? detailSection('特別損失', linesOf(pl, ['特別損失']), extraLoss) : ''}
+    ${tax !== 0 ? profitRow('法人税等', tax) : ''}
+    ${profitRow('当期純利益', s.netIncome)}
+  `;
+
+  // --- BS ---
+  const currentAssetsSub = bsSumOf(['流動資産']);
+  const fixedAssetsSub = bsSumOf(['固定資産']);
+  const deferredAssetsSub = bsSumOf(['繰延資産']);
+  const currentLiabSub = bsSumOf(['流動負債']);
+  const fixedLiabSub = bsSumOf(['固定負債']);
+  const totalLiab = s.totalAssets - s.netAssets;
+  const assetsBody = `
+    ${detailSection('流動資産', linesOf(bs, ['流動資産']), currentAssetsSub || null)}
+    ${detailSection('固定資産', linesOf(bs, ['固定資産']), fixedAssetsSub || null)}
+    ${linesOf(bs, ['繰延資産']).length ? detailSection('繰延資産', linesOf(bs, ['繰延資産']), deferredAssetsSub) : ''}
+    ${profitRow('資産合計', s.totalAssets)}
+  `;
+  const liabBody = `
+    ${detailSection('流動負債', linesOf(bs, ['流動負債']), currentLiabSub || null)}
+    ${detailSection('固定負債', linesOf(bs, ['固定負債']), fixedLiabSub || null)}
+    ${profitRow('負債合計', totalLiab)}
+    ${detailSection('純資産', linesOf(bs, ['純資産', '資本']), s.netAssets)}
+    ${profitRow('負債・純資産合計', s.totalAssets)}
+  `;
+
+  const noPl = pl.length === 0;
+  const noBs = bs.length === 0;
+
+  const body = `
+  <div class="dstmt-wrap">
+    <div class="dstmt-toolbar">
+      <a class="dstmt-back" href="/finance/statements">← 決算書ビューア（要約）に戻る</a>
+      <span class="dstmt-period">${esc(period)}</span>
+    </div>
+    ${(noPl && noBs)
+      ? `<div class="dstmt-card"><div class="dstmt-empty">詳細明細がまだ取り込まれていません。月次推移試算表（損益計算書・貸借対照表のCSV）を取り込み直すと、全科目の詳細な決算書が表示されます。</div></div>`
+      : ''}
+    <div class="dstmt-cols">
+      <div class="dstmt-card">
+        <h2>損益計算書（PL）</h2>
+        ${noPl ? '<div class="dstmt-empty">PL明細が未取込です。</div>' : `<table class="dstmt-table"><tbody>${plBody}</tbody></table>`}
+      </div>
+      <div class="dstmt-card">
+        <h2>貸借対照表（BS）</h2>
+        ${noBs ? '<div class="dstmt-empty">BS明細が未取込です。損益計算書と一緒に貸借対照表のCSVも取り込んでください。</div>' : `
+        <div class="dstmt-bs-head">資産の部</div>
+        <table class="dstmt-table"><tbody>${assetsBody}</tbody></table>
+        <div class="dstmt-bs-head" style="margin-top:14px">負債・純資産の部</div>
+        <table class="dstmt-table"><tbody>${liabBody}</tbody></table>`}
+      </div>
+    </div>
+  </div>
+  ${DETAIL_CSS}
+  `;
+
+  return agentPageShell({ active: 'statements', title: '詳細な決算書', companyName, bodyHTML: body });
+}
+
+const DETAIL_CSS = `<style>
+.dstmt-wrap{display:flex;flex-direction:column;gap:16px;max-width:1100px}
+.dstmt-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.dstmt-back{color:var(--primary);font-size:13px;font-weight:600;text-decoration:none}
+.dstmt-period{font-size:13px;color:var(--text2);font-weight:600}
+.dstmt-cols{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}
+.dstmt-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;overflow-x:auto}
+.dstmt-card h2{font-size:15px;font-weight:700;margin:0 0 12px}
+.dstmt-bs-head{font-size:12px;font-weight:700;color:var(--primary);border-bottom:2px solid var(--primary);padding-bottom:4px;margin-bottom:4px}
+.dstmt-table{width:100%;border-collapse:collapse;font-size:13px}
+.dstmt-table td{padding:5px 8px}
+.dstmt-cat td{font-weight:700;color:var(--text);background:var(--primary-light);border-top:1px solid var(--border)}
+.dstmt-row td{border-bottom:1px solid #f1f3f5}
+.dstmt-name{padding-left:18px!important;color:var(--text)}
+.dstmt-amt{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dstmt-subtotal td{font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)}
+.dstmt-profit td{font-weight:800;color:var(--text);background:#f8fafc;border-top:1px solid var(--border);border-bottom:2px solid var(--border)}
+.dstmt-empty{padding:24px;text-align:center;color:var(--text2);font-size:13px}
+@media(max-width:860px){.dstmt-cols{grid-template-columns:1fr}}
 </style>`;

@@ -33,7 +33,7 @@ import { chatService } from '../services/chat-service.js';
 import { taskService } from '../services/task-service.js';
 import { generateMonthlyTasks } from '../config/task-templates.js';
 import { renderRatingHTML, renderAnalysisLoadingHTML } from './rating-page.js';
-import { renderStatementsHTML, type ExpenseBreakdownItem } from './statements-page.js';
+import { renderStatementsHTML, renderStatementsDetailHTML, type ExpenseBreakdownItem } from './statements-page.js';
 import { calculateBankRating, calculateAdditionalMetrics } from '../domain/banking/rating-calculator.js';
 import { createMockRatingInput } from '../../tests/fixtures/mock-rating-input.js';
 import { AnthropicAnalysisService } from '../services/anthropic-service.js';
@@ -3036,6 +3036,7 @@ app.get('/finance/statements', async (req, res) => {
     let view = buildViewFromAnnualStatements(annualStatements);
     let breakdownSource: 'csv' | 'freee' | null = null;
     let expenseBreakdown: ExpenseBreakdownItem[] | null = null;
+    let hasDetail = false;
 
     if (view) {
       // 期間残高ベース（正）。販管費内訳も同じ年間決算書から。
@@ -3044,6 +3045,7 @@ app.get('/finance/statements', async (req, res) => {
         expenseBreakdown = cur.sgaBreakdown.map(i => ({ name: i.name, amount: i.amount }));
         breakdownSource = 'csv';
       }
+      hasDetail = !!(cur && ((cur.plLines && cur.plLines.length > 0) || (cur.bsLines && cur.bsLines.length > 0)));
     } else {
       // フォールバック：年間決算書が未保存の旧データは月次合算で近似（決算仕訳は含まれない点に注意）
       if (snapshots.length === 0) {
@@ -3068,10 +3070,32 @@ app.get('/finance/statements', async (req, res) => {
       snapshots,
       expenseBreakdown,
       breakdownSource,
+      hasDetail,
     }));
   } catch (e) {
     logger.error('決算書ビューア表示エラー', e);
     res.send(renderNoDataPage('決算書ビューア', '決算データの読み込み中にエラーが発生しました。'));
+  }
+});
+
+// 詳細な決算書（全科目・期間残高/期末残高）
+app.get('/finance/statements/detail', async (req, res) => {
+  try {
+    const tid = getActiveTenantId(req);
+    if (!tid || !isSupabaseAvailable()) {
+      res.send(renderNoDataPage('詳細な決算書', '表示できる決算データがありません。'));
+      return;
+    }
+    const list = await repo.listAnnualStatements(asTenantId(tid));
+    const cur = list.length > 0 ? list[list.length - 1] : null;
+    if (!cur) {
+      res.send(renderNoDataPage('詳細な決算書', '詳細な決算書がまだ取り込まれていません。月次推移試算表（損益計算書・貸借対照表のCSV）を取り込み直してください。'));
+      return;
+    }
+    res.send(renderStatementsDetailHTML(cur));
+  } catch (e) {
+    logger.error('詳細決算書表示エラー', e);
+    res.send(renderNoDataPage('詳細な決算書', '決算データの読み込み中にエラーが発生しました。'));
   }
 });
 
@@ -4481,17 +4505,19 @@ function renderUploadedDashboard(
   const latest = snapshots[snapshots.length - 1];
   const isSingle = snapshots.length === 1;
 
-  // 年間決算書（期間残高）があれば、KPIは単月ではなく年間確定値を表示する
+  // 年間決算書（期間残高）があれば、KPIは単月ではなく年間確定値を表示する。
+  // 年間BSが未取得(総資産0)なら最新スナップショットのBSにフォールバック。
+  const annualBs = (annual && annual.totalAssets > 0) ? annual : latest;
   const kpi = annual ? {
     revenueLabel: `${annual.fiscalYearEndYear}年${annual.fiscalYearEndMonth}月期 売上高（年間）`,
     revenue: annual.revenue,
     operatingIncome: annual.operatingIncome,
     ordinaryIncome: annual.ordinaryIncome,
-    cashAndDeposits: annual.cashAndDeposits,
-    totalAssets: annual.totalAssets,
-    netAssets: annual.netAssets,
-    currentAssets: annual.currentAssets,
-    currentLiabilities: annual.currentLiabilities,
+    cashAndDeposits: annualBs.cashAndDeposits,
+    totalAssets: annualBs.totalAssets,
+    netAssets: annualBs.netAssets,
+    currentAssets: annualBs.currentAssets,
+    currentLiabilities: annualBs.currentLiabilities,
   } : {
     revenueLabel: `${latest.year}年${latest.month}月 売上高`,
     revenue: latest.revenue || 0,

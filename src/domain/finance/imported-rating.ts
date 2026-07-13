@@ -41,18 +41,28 @@ export function buildRatingInputFromAnnual(
   const prev = sorted.find((s) => s.fiscalYearEndYear === cur.fiscalYearEndYear - 1)
     ?? (sorted.length >= 2 ? sorted[sorted.length - 2] : null);
 
-  const fixedAssets = Math.max(0, cur.totalAssets - cur.currentAssets);
-  const fixedLiabilities = Math.max(0, cur.totalAssets - cur.netAssets - cur.currentLiabilities);
+  // 年間BSが未取得(総資産0)なら最新スナップショットのBSにフォールバック
+  const latestSnap = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
+  const useBs = (cur.totalAssets > 0 || !latestSnap) ? {
+    totalAssets: cur.totalAssets, currentAssets: cur.currentAssets, currentLiabilities: cur.currentLiabilities,
+    netAssets: cur.netAssets, interestBearingDebt: cur.interestBearingDebt, cashAndDeposits: cur.cashAndDeposits,
+  } : {
+    totalAssets: latestSnap.totalAssets || 0, currentAssets: latestSnap.currentAssets || 0,
+    currentLiabilities: latestSnap.currentLiabilities || 0, netAssets: latestSnap.netAssets || 0,
+    interestBearingDebt: latestSnap.interestBearingDebt ?? 0, cashAndDeposits: latestSnap.cashAndDeposits || 0,
+  };
+  const fixedAssets = Math.max(0, useBs.totalAssets - useBs.currentAssets);
+  const fixedLiabilities = Math.max(0, useBs.totalAssets - useBs.netAssets - useBs.currentLiabilities);
 
   return {
-    totalAssets: cur.totalAssets,
-    currentAssets: cur.currentAssets,
+    totalAssets: useBs.totalAssets,
+    currentAssets: useBs.currentAssets,
     fixedAssets,
-    currentLiabilities: cur.currentLiabilities,
+    currentLiabilities: useBs.currentLiabilities,
     fixedLiabilities,
-    netAssets: cur.netAssets,
-    interestBearingDebt: cur.interestBearingDebt,
-    cashAndDeposits: cur.cashAndDeposits,
+    netAssets: useBs.netAssets,
+    interestBearingDebt: useBs.interestBearingDebt,
+    cashAndDeposits: useBs.cashAndDeposits,
     // PL(フロー)は期間残高(年間確定値)
     revenue: cur.revenue,
     operatingIncome: cur.operatingIncome,

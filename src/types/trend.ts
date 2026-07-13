@@ -32,6 +32,13 @@ export interface SgaBreakdownItem {
   amount: number; // 期間残高（年間額）
 }
 
+/** 決算書の明細1行（詳細な決算書ビュー用）。カテゴリ別のリーフ科目のみ。 */
+export interface StatementLine {
+  category: string; // 勘定科目カテゴリー（例: 売上高 / 販売管理費 / 流動資産 / 固定負債 / 純資産）
+  name: string;     // 勘定科目名（例: 売掛金）
+  amount: number;   // PLは期間残高、BSは期末残高
+}
+
 /**
  * 年間の決算書（期間残高＝会計期間の確定値）。
  * 月次推移試算表の「期間残高」列(PL)・「期末残高/期間残高」列(BS)から直接抽出する。
@@ -63,6 +70,9 @@ export interface AnnualStatement {
   interestBearingDebt: number;
   // 販管費の科目別内訳（期間残高）
   sgaBreakdown: SgaBreakdownItem[];
+  // 詳細な決算書ビュー用の全明細（期間残高/期末残高）。未取込の旧データでは undefined。
+  plLines?: StatementLine[];
+  bsLines?: StatementLine[];
 }
 
 /** 月次目標データ */

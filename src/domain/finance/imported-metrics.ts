@@ -76,7 +76,6 @@ export function computeImportedMetrics(
 ): ImportedMetrics | null {
   if (!snapshots || snapshots.length === 0) return null;
   const latest = snapshots[snapshots.length - 1];
-  const monthlyRevenue = latest.revenue; // 月商（現預金月商倍率に使用。単月でよい）
 
   // BS(ストック)・PL(年間フロー)は、期間残高(annual)があればそれを正とする。
   // 無ければ月次から近似（PLは直近12か月合算。ただし決算仕訳は含まれない点に注意）。
@@ -86,9 +85,13 @@ export function computeImportedMetrics(
   const cfWindow = monthly ? snapshots.slice(-12) : [latest];
   const sumSnap = (k: keyof MonthlySnapshot) => cfWindow.reduce((s, m) => s + (Number(m[k]) || 0), 0);
 
-  const bs = annual ?? latest;
-  const interestBearingDebt = annual ? annual.interestBearingDebt : (latest.interestBearingDebt ?? 0);
+  // 年間BSが未取得(総資産0)なら最新スナップショットのBSにフォールバック
+  const bs = (annual && annual.totalAssets > 0) ? annual : latest;
+  const interestBearingDebt = (annual && annual.totalAssets > 0)
+    ? annual.interestBearingDebt : (latest.interestBearingDebt ?? 0);
   const annualRevenue = annual ? annual.revenue : sumSnap('revenue');
+  // 月商＝平均月商（年商/12）。単月(latest)は季節変動で歪むため使わない。
+  const monthlyRevenue = annualRevenue > 0 ? annualRevenue / 12 : latest.revenue;
   const annualOperating = annual ? annual.operatingIncome : sumSnap('operatingIncome');
   const annualOrdinary = annual ? annual.ordinaryIncome : sumSnap('ordinaryIncome');
   const annualDepreciation = annual ? annual.depreciation : sumSnap('depreciation');
