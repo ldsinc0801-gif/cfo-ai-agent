@@ -470,6 +470,45 @@ export async function saveTenantAnnualKpi(tenantId: TenantId, kpi: Record<string
   if (error) throw new Error(`年間KPIの保存に失敗: ${error.message}`);
 }
 
+/**
+ * 販管費の科目別内訳（会計年度→内訳配列）を取得。無ければ null。
+ * fiscalYear を渡すとその年度分のみ、省略すると全年度マップを返す。
+ */
+export async function getSgaBreakdown(
+  tenantId: TenantId,
+  fiscalYear?: number,
+): Promise<import('../types/trend.js').SgaBreakdownItem[] | Record<string, import('../types/trend.js').SgaBreakdownItem[]> | null> {
+  const { data, error } = await getSupabase()
+    .from('tenant_profile')
+    .select('sga_breakdown')
+    .eq('tenant_id', tenantId)
+    .single();
+  if (error) {
+    if (error.code === 'PGRST116') return null;
+    throw new Error(`販管費内訳の取得に失敗: ${error.message}`);
+  }
+  const map = (data?.sga_breakdown as Record<string, import('../types/trend.js').SgaBreakdownItem[]>) ?? null;
+  if (!map) return null;
+  if (fiscalYear === undefined) return map;
+  return map[String(fiscalYear)] ?? null;
+}
+
+/** 販管費の科目別内訳を会計年度単位で保存（他の年度・会社情報は変更しない）。 */
+export async function saveSgaBreakdown(
+  tenantId: TenantId,
+  fiscalYear: number,
+  items: import('../types/trend.js').SgaBreakdownItem[],
+): Promise<void> {
+  const existing = await getSgaBreakdown(tenantId);
+  const map = (existing && !Array.isArray(existing) ? existing : {}) as Record<string, import('../types/trend.js').SgaBreakdownItem[]>;
+  map[String(fiscalYear)] = items;
+  const { error } = await getSupabase()
+    .from('tenant_profile')
+    .upsert({ tenant_id: tenantId, sga_breakdown: map, updated_at: new Date().toISOString() }, { onConflict: 'tenant_id' });
+  if (error) throw new Error(`販管費内訳の保存に失敗: ${error.message}`);
+  logger.info(`販管費内訳を保存: ${fiscalYear}年度 ${items.length}科目`);
+}
+
 /** ロカベン6指標で選んだ業種・規模だけを保存（他の会社情報は変更しない）。 */
 export async function updateLocabenSelection(
   tenantId: TenantId,

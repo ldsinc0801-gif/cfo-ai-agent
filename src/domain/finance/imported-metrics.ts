@@ -69,9 +69,18 @@ export function annualDebtRepaymentSource(snapshots: MonthlySnapshot[]): 'actual
 export function computeImportedMetrics(snapshots: MonthlySnapshot[]): ImportedMetrics | null {
   if (!snapshots || snapshots.length === 0) return null;
   const latest = snapshots[snapshots.length - 1];
-  const monthlyRevenue = latest.revenue;
-  const interestBearingDebt = latest.interestBearingDebt ?? 0;
-  const simpleCashFlow = (latest.ordinaryIncome || 0) + (latest.depreciation ?? 0);
+  const monthlyRevenue = latest.revenue; // 月商（現預金月商倍率に使用。単月でよい）
+  const interestBearingDebt = latest.interestBearingDebt ?? 0; // 期末残高（ストック）
+
+  // 債務償還年数の簡易CFは「年間」で見る必要がある。月次取込なら直近最大12か月を合算、
+  // 年次決算書ならそのまま（＝latest）を採用する。単月CFのままだと年数が約12倍に膨らむ。
+  const monthly = snapshots.length >= 2
+    && (snapshots[snapshots.length - 1].year * 12 + snapshots[snapshots.length - 1].month)
+       - (snapshots[snapshots.length - 2].year * 12 + snapshots[snapshots.length - 2].month) === 1;
+  const cfWindow = monthly ? snapshots.slice(-12) : [latest];
+  const annualOrdinary = cfWindow.reduce((s, m) => s + (m.ordinaryIncome || 0), 0);
+  const annualDepreciation = cfWindow.reduce((s, m) => s + (m.depreciation ?? 0), 0);
+  const simpleCashFlow = annualOrdinary + annualDepreciation;
 
   return {
     latest,

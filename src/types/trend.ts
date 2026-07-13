@@ -26,6 +26,12 @@ export interface MonthlySnapshot {
   accountsPayable?: number | null;    // 仕入債務（支払手形＋買掛金＋電子記録債務）
 }
 
+/** 販管費（販売費及び一般管理費）の科目別内訳の1行（期間残高＝年間値） */
+export interface SgaBreakdownItem {
+  name: string;   // 勘定科目名（例: 役員報酬）
+  amount: number; // 期間残高（年間額）
+}
+
 /** 月次目標データ */
 export interface MonthlyTarget {
   year: number;
