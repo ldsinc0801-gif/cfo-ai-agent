@@ -19,7 +19,7 @@ import { renderPlanHTML } from './plan-renderer.js';
 import { renderFinanceAgentHTML, renderAccountingAgentHTML, renderFundingAgentHTML } from './agent-pages.js';
 import { computeImportedMetrics } from '../domain/finance/imported-metrics.js';
 import { buildRatingInputFromSnapshots, buildRatingInputFromAnnual } from '../domain/finance/imported-rating.js';
-import { buildAnnualStatementView, buildViewFromAnnualStatements } from '../domain/finance/annual-view.js';
+import { buildAnnualStatementView, buildViewFromAnnualStatements, backfillAnnualBs } from '../domain/finance/annual-view.js';
 import { applySimParamsToSnapshots } from '../domain/finance/plan-simulation.js';
 import { forecastCashflow } from '../domain/finance/cashflow-forecast.js';
 import { renderFinanceDataEditHTML } from './finance-data-edit-page.js';
@@ -1805,13 +1805,33 @@ app.post('/agent/finance/upload-trend', upload.array('files', 10), async (req, r
       res.redirect('/?upload_error=' + encodeURIComponent('月次データを抽出できませんでした'));
       return;
     }
+    // このファイルにBS(貸借対照表)が含まれるか。含まれない(PL単独)なら既存BSを0上書きしない。
+    const hasBs = snapshots.some((s) => (s.totalAssets || 0) > 0) || (annual != null && annual.totalAssets > 0);
     for (const s of snapshots) {
-      await repo.upsertMonthlyActual(tenantId, s);
+      await repo.upsertMonthlyActual(tenantId, s, { skipBs: !hasBs });
     }
     // 年間決算書（期間残高＝会計期間の確定値。決算仕訳を含む）を保存
     if (annual) {
       try {
-        await repo.saveAnnualStatement(tenantId, annual);
+        // PL単独取込でBSが空なら、既存の年間決算書のBS/BS明細を保持してマージ（0で潰さない）
+        let toSave = annual;
+        if (!hasBs) {
+          try {
+            const existing = await repo.getAnnualStatement(tenantId, annual.fiscalYearEndYear);
+            if (existing && existing.totalAssets > 0) {
+              toSave = {
+                ...annual,
+                cashAndDeposits: existing.cashAndDeposits, currentAssets: existing.currentAssets,
+                currentLiabilities: existing.currentLiabilities, totalAssets: existing.totalAssets,
+                netAssets: existing.netAssets, accountsReceivable: existing.accountsReceivable,
+                inventory: existing.inventory, accountsPayable: existing.accountsPayable,
+                interestBearingDebt: existing.interestBearingDebt,
+                bsLines: (existing.bsLines && existing.bsLines.length > 0) ? existing.bsLines : annual.bsLines,
+              };
+            }
+          } catch { /* 既存なしなら annual のまま */ }
+        }
+        await repo.saveAnnualStatement(tenantId, toSave);
       } catch (e) {
         logger.warn('年間決算書の保存に失敗（月次本体は保存済み）', e);
       }
@@ -3037,7 +3057,7 @@ app.get('/finance/statements', async (req, res) => {
       try { annualStatements = await repo.listAnnualStatements(asTenantId(tid)); } catch (e) { logger.warn('年間決算書の取得に失敗', e); }
     }
 
-    let view = buildViewFromAnnualStatements(annualStatements);
+    let view = buildViewFromAnnualStatements(annualStatements, snapshots);
     let breakdownSource: 'csv' | 'freee' | null = null;
     let expenseBreakdown: ExpenseBreakdownItem[] | null = null;
     let hasDetail = false;
@@ -3956,6 +3976,8 @@ app.post('/chat/send', express.json(), async (req, res) => {
       try {
         const list = await repo.listAnnualStatements(asTenantId(tid));
         annual = list.length > 0 ? list[list.length - 1] : null;
+        // 年間決算書のBSが空（BS未取込）なら月次実績の期末BSで補完
+        if (annual) annual = backfillAnnualBs(annual, trendMonths as any);
       } catch (e) {
         logger.warn('チャット: 年間決算書の取得失敗:', e instanceof Error ? e.message : e);
       }

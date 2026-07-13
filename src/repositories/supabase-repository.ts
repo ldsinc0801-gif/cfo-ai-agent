@@ -13,7 +13,11 @@ import type { TenantId } from '../types/auth.js';
 
 // ========== 月次実績 ==========
 
-export async function upsertMonthlyActual(tenantId: TenantId, data: MonthlySnapshot): Promise<void> {
+export async function upsertMonthlyActual(
+  tenantId: TenantId,
+  data: MonthlySnapshot,
+  opts?: { skipBs?: boolean },
+): Promise<void> {
   const row: Record<string, unknown> = {
     tenant_id: tenantId,
     year: data.year,
@@ -24,20 +28,24 @@ export async function upsertMonthlyActual(tenantId: TenantId, data: MonthlySnaps
     sga_expenses: data.sgaExpenses,
     operating_income: data.operatingIncome,
     ordinary_income: data.ordinaryIncome,
-    cash_and_deposits: data.cashAndDeposits,
-    current_assets: data.currentAssets,
-    current_liabilities: data.currentLiabilities,
-    total_assets: data.totalAssets,
-    net_assets: data.netAssets,
-    interest_bearing_debt: data.interestBearingDebt ?? 0,
-    opening_interest_bearing_debt: data.openingInterestBearingDebt ?? null,
-    accounts_receivable: data.accountsReceivable ?? null,
-    inventory: data.inventory ?? null,
-    accounts_payable: data.accountsPayable ?? null,
     net_income: data.netIncome ?? 0,
     depreciation: data.depreciation ?? 0,
     interest_expense: data.interestExpense ?? 0,
   };
+  // BS(貸借対照表)の列は、取込データにBSが含まれる場合のみ書き込む。
+  // PL単独のCSVを再取込したときに既存のBS残高を0で上書きしないための保全措置。
+  if (!opts?.skipBs) {
+    row.cash_and_deposits = data.cashAndDeposits;
+    row.current_assets = data.currentAssets;
+    row.current_liabilities = data.currentLiabilities;
+    row.total_assets = data.totalAssets;
+    row.net_assets = data.netAssets;
+    row.interest_bearing_debt = data.interestBearingDebt ?? 0;
+    row.opening_interest_bearing_debt = data.openingInterestBearingDebt ?? null;
+    row.accounts_receivable = data.accountsReceivable ?? null;
+    row.inventory = data.inventory ?? null;
+    row.accounts_payable = data.accountsPayable ?? null;
+  }
   // 年間返済元本は「明示的に指定された時だけ」書き込む。未指定(決算書の再取込等)は
   // 既存値を保持し、返済計画表で入れた手入力値が消えないようにする。
   if (data.annualDebtRepayment !== undefined) row.annual_debt_repayment = data.annualDebtRepayment;
