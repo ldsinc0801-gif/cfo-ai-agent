@@ -1641,13 +1641,9 @@ app.get('/agent/finance', async (req, res) => {
       return;
     }
 
-    // freee接続時は自動的にfreeeデータで表示
-    const token = await getFreeeToken(getActiveTenantId(req) || undefined);
-    if (token && await getSelectedCompanyId(getActiveTenantId(req) || undefined)) {
-      res.redirect('/agent/finance/freee');
-      return;
-    }
-    // freee未接続 → ダッシュボード取込データがあれば、それで129点満点の格付を表示
+    // 取込データ（決算書/試算表）を最優先。ユーザーが明示的に取り込んだ期間残高/月次を
+    // 正として129点満点の格付を算出する。freee連携済みでも、二重取込等で不安定なfreeeより
+    // 取り込んだデータを優先する（無ければ下でfreeeにフォールバック）。
     const finTid = getActiveTenantId(req);
     if (finTid) {
       const snapshots = await repo.getAllMonthlyActuals(asTenantId(finTid));
@@ -1680,7 +1676,13 @@ app.get('/agent/finance', async (req, res) => {
         return;
       }
     }
-    // 取込データも無い → データなしメッセージ
+    // 取込データが無いときだけ freee のライブデータにフォールバック
+    const token = await getFreeeToken(getActiveTenantId(req) || undefined);
+    if (token && await getSelectedCompanyId(getActiveTenantId(req) || undefined)) {
+      res.redirect('/agent/finance/freee');
+      return;
+    }
+    // 取込データも freee も無い → データなしメッセージ
     res.send(renderNoDataPage('財務分析AI', '財務分析を行うには、freee APIとの連携、またはダッシュボードでの決算書・試算表の取込が必要です。'));
   } catch (error) {
     logger.error('財務分析ページエラー', error);
